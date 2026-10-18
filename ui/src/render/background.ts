@@ -53,6 +53,36 @@ vec3 fillColor(float kind, float n, float angle, vec3 a, vec3 b, vec3 c, vec3 d,
   if (n > 3.5) col = mix(col, d, blob(q, C, vec2(0.22, 0.24)) * 0.7);
   return col;
 }
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+  vec2 pa = p - a, ba = b - a;
+  return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
+}
+/** Hand-drawn doodles scattered one per cell: squiggles, crosses, dots, rings, arcs and pluses. */
+float doodleAt(vec2 q, float s, float w, float aa) {
+  vec2 cell = floor(q / s);
+  float h = hash12(cell * 1.37 + 0.5), h2 = hash12(cell * 2.11 + 7.3), h3 = hash12(cell * 3.7 + 1.9);
+  vec2 c = (cell + 0.5 + (vec2(h2, h3) - 0.5) * 0.3) * s;
+  float ang = h2 * 6.2832;
+  vec2 p = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * (q - c);
+  float r = s * 0.24;
+  float f;
+  if (h < 0.24) {
+    float x = clamp(p.x, -r * 1.3, r * 1.3);
+    f = length(vec2(p.x - x, (p.y - sin(x / r * 3.14159) * r * 0.42) * 0.8));
+  } else if (h < 0.4) {
+    f = min(sdSeg(p, vec2(-r, -r) * 0.6, vec2(r, r) * 0.6), sdSeg(p, vec2(-r, r) * 0.6, vec2(r, -r) * 0.6));
+  } else if (h < 0.62) {
+    f = length(p) - r * 0.32 + w;
+  } else if (h < 0.76) {
+    f = abs(length(p) - r * 0.55);
+  } else if (h < 0.9) {
+    float a = atan(p.y, p.x);
+    f = abs(a) < 2.0 ? abs(length(p) - r * 0.7) : min(length(p - r * 0.7 * vec2(cos(2.0), sin(2.0))), length(p - r * 0.7 * vec2(cos(2.0), -sin(2.0))));
+  } else {
+    f = min(sdSeg(p, vec2(-r, 0.0) * 0.6, vec2(r, 0.0) * 0.6), sdSeg(p, vec2(0.0, -r) * 0.6, vec2(0.0, r) * 0.6));
+  }
+  return 1.0 - smoothstep(w - aa, w + aa, f);
+}
 /** Coverage of the page pattern at artboard pixel px (centred on the artboard). */
 float patternAt(vec2 px) {
   if (u_patKind < 0.5) return 0.0;
@@ -76,8 +106,11 @@ float patternAt(vec2 px) {
     float g = abs(fract(dot(q, vec2(0.70711)) / s + 0.5) - 0.5) * s;
     return 1.0 - smoothstep(w - aa, w + aa, g);
   }
-  vec2 c = floor(q / s);
-  return mod(c.x + c.y, 2.0) < 1.0 ? 1.0 : 0.0;
+  if (u_patKind < 5.5) {
+    vec2 c = floor(q / s);
+    return mod(c.x + c.y, 2.0) < 1.0 ? 1.0 : 0.0;
+  }
+  return doodleAt(q, s, w, aa);
 }
 float tileSd(vec2 c, float r) {
   if (u_tShape < 0.5) {
@@ -133,7 +166,7 @@ void main() {
 }`;
 
 const KIND = { none: 0, solid: 1, linear: 2, radial: 3, aura: 4 } as const;
-const PATTERN = { grid: 1, dots: 2, lines: 3, diagonal: 4, checker: 5 } as const;
+const PATTERN = { grid: 1, dots: 2, lines: 3, diagonal: 4, checker: 5, doodles: 6 } as const;
 
 function fillUniforms(prefix: 'p' | 't', f: Fill): Record<string, UniformValue> {
   const cs = f.colors.length ? f.colors : ['#000000'];
@@ -202,6 +235,9 @@ export function patternCss(pt: Pattern | null | undefined, scale = 0.12): string
       return `repeating-linear-gradient(45deg, ${c} 0 ${w}px, transparent ${w}px ${s}px)`;
     case 'checker':
       return `repeating-conic-gradient(${c} 0 25%, transparent 0 50%) 0 0 / ${s * 2}px ${s * 2}px`;
+    case 'doodles':
+      // A light stand-in for previews; the canvas draws the real doodles.
+      return `radial-gradient(circle, ${c} ${w * 1.5}px, transparent ${w * 1.5 + 0.5}px) 0 0 / ${s}px ${s}px, radial-gradient(circle, transparent ${s * 0.12}px, ${c} ${s * 0.12}px, ${c} ${s * 0.12 + w}px, transparent ${s * 0.12 + w + 0.5}px) ${s / 2}px ${s / 2}px / ${s}px ${s}px`;
   }
 }
 

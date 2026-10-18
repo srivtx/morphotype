@@ -53,6 +53,8 @@ const SAMPLE_MOD: Partial<Record<ModifierKind, object>> = {
   fuse: { amount: 0.16 },
   echo: { count: 2, spacing: 0.08, width: 0.03 },
   pixelate: { size: 0.07, shape: 'square', gap: 0.12, dissolve: 0.7 },
+  foam: { amount: 0.8, size: 0.2, wall: 0.015 },
+  isometric: { face: 'left' },
 };
 
 function ModThumb({ kind, font }: { kind: ModifierKind; font: string }) {

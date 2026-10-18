@@ -1,12 +1,12 @@
 import { useRef, useState } from 'react';
-import { alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
+import { addIconGrid, alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
 import type { Content, ModEntry, ModifierKind, SymbolKind } from '../engine/types';
 import { backgroundCss, fillCss } from '../render/background';
 import { effectById } from '../render/effects';
 import { luminance, QUICK_COLORS, recolor } from '../render/palette';
 import { useShape, viewBoxOf } from '../render/thumbs';
-import { CANVAS_PRESETS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
+import { CANVAS_PRESETS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Depth, depth, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
 import { BG_PRESETS, lookOf, SHAPE_RECIPES, type Recipe } from '../state/recipes';
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
@@ -179,6 +179,7 @@ function Appearance({ nodes }: { nodes: Node[] }) {
         ))}
       </div>
       <StrokeEditor ids={ids} value={st.stroke ?? null} />
+      <DepthEditor ids={ids} value={st.depth ?? null} />
       <div className="blend-row">
         <Slider label="Opacity" value={st.opacity ?? 1} min={0} max={1} step={0.01} reset={1} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.opacity = v; }), `op:${ids.join()}`)} />
         <div className="field">
@@ -230,6 +231,35 @@ function StrokeEditor({ ids, value }: { ids: string[]; value: Stroke | null }) {
       </div>
       <Segmented size="sm" value={value.align} options={ALIGNS.map((a) => ({ value: a.value, label: a.label, title: a.title }))} onChange={(v) => set((s) => s.stroke && (s.stroke.align = v))} />
       {value.opacity < 1 || value.width > 0 ? <Slider label="Opacity" value={value.opacity} min={0} max={1} step={0.01} reset={1} onChange={(v) => set((s) => s.stroke && (s.stroke.opacity = v), 'o')} /> : null}
+    </div>
+  );
+}
+
+/** Solid 3D sides behind the layer, for any material. */
+function DepthEditor({ ids, value }: { ids: string[]; value: Depth | null }) {
+  const set = (fn: (s: Style) => void, key = '') =>
+    edit((p) => {
+      for (const id of ids) {
+        const n = findNode(p.layers, id);
+        if (n) fn(n.style);
+      }
+    }, key && `depth:${ids.join()}:${key}`);
+  if (!value)
+    return (
+      <button className="link-btn stroke-add" onClick={() => set((s) => (s.depth = depth()))} data-tip="Give the layer thick 3D sides, like letters cut from card">
+        <Icon name="plus" size={12} /> Add depth
+      </button>
+    );
+  return (
+    <div className="stroke-editor">
+      <div className="stroke-head">
+        <span>Depth</span>
+        <ColorChip label="Side colour" value={value.color} onChange={(v) => set((s) => s.depth && (s.depth.color = v), 'c')} />
+        <NumberBox label="D" value={value.amount} min={0} max={400} title="How far the sides reach, in px" onChange={(v) => set((s) => s.depth && (s.depth.amount = Math.max(0, v)), 'a')} />
+        <IconButton icon="minus" title="Remove depth" size={13} className="tiny" onClick={() => set((s) => (s.depth = null))} />
+      </div>
+      <Slider label="Direction" value={value.angle} min={0} max={360} step={1} suffix="°" reset={150} onChange={(v) => set((s) => s.depth && (s.depth.angle = v), 'ang')} />
+      <Slider label="Shade" value={value.shade} min={0} max={1} step={0.01} reset={0.35} onChange={(v) => set((s) => s.depth && (s.depth.shade = v), 'sh')} />
     </div>
   );
 }
@@ -817,6 +847,7 @@ const PATTERNS: { value: PatternKind | 'none'; label: string; title: string }[] 
   { value: 'lines', label: 'Lines', title: 'Ruled lines' },
   { value: 'diagonal', label: 'Stripes', title: 'Diagonal stripes' },
   { value: 'checker', label: 'Checks', title: 'Checkerboard' },
+  { value: 'doodles', label: 'Doodles', title: 'Hand-drawn squiggles, crosses, dots and rings, like packaging' },
 ];
 
 /** Grid paper, dot grid, stripes or checks over the page fill. */
@@ -918,7 +949,11 @@ function CanvasPanel() {
       </Section>
       <Section title="App icon tile" id="canvas-tile" defaultOpen={!!bg.tile || p.canvas.width === p.canvas.height}>
         <Toggle label="Show a tile behind the artwork" checked={!!bg.tile} onChange={(v) => setBackground((b) => (b.tile = v ? (b.tile ?? tile({ ...{ kind: 'linear', colors: ['#c9b8ff', '#8a63f5'], angle: 180 } })) : null))} />
-        <div className="field">
+        <Toggle label="Show the icon grid" checked={settings.iconGrid} onChange={(v) => setSettings({ iconGrid: v })} hint="Apple-style keylines over the artboard while you design" />
+        <button className="link-btn" onClick={addIconGrid} data-tip="Add the grid as locked line layers under your artwork, for presentation shots">
+          Add the grid as layers
+        </button>
+        <div className="field-stack">
           <span>Made for</span>
           <Segmented
             size="sm"

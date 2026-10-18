@@ -3,7 +3,7 @@ import { addSystemFont } from '../app/actions';
 import { newFont, startTemplate } from '../app/projects';
 import { platform, type SystemFont } from '../platform';
 import { projectScene } from '../render/thumbs';
-import { useThumb } from '../render/thumbs';
+import { useSeen, useThumb } from '../render/thumbs';
 import { recipeOf, TEMPLATES, type Template } from '../state/templates';
 import { replaceProject, store, toast, useStore } from '../state/store';
 import { CommandPalette } from './CommandPalette';
@@ -55,11 +55,13 @@ export function startIntent(i: (typeof INTENTS)[number]) {
 }
 
 export function TemplateCard({ t, onPick }: { t: Template; onPick: () => void }) {
-  const url = useThumb(`tpl:${t.name}`, () => projectScene(t.make(), 300));
+  // Only render previews of cards that have been on screen.
+  const [ref, seen] = useSeen<HTMLButtonElement>();
+  const url = useThumb(seen ? `tpl:${t.name}` : null, () => projectScene(t.make(), 300));
   const p = useMemo(() => t.make(), [t]);
   const aspect = p.canvas.width / p.canvas.height;
   return (
-    <button className="template" onClick={onPick}>
+    <button className="template" onClick={onPick} ref={ref}>
       <span className="template-img">
         {url ? <img src={url} alt="" style={{ aspectRatio: String(aspect) }} draggable={false} /> : <span className="shimmer" />}
       </span>

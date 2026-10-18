@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ContextMenu } from '../components/ContextMenu';
 import { Dialogs } from '../components/Dialogs';
 import { Icon } from '../components/icons';
@@ -15,11 +15,13 @@ import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
 import { buildScene } from '../state/tree';
 import { setSettings, store, toast, useStore } from '../state/store';
-import { importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
-import { allCommands, matchKey } from './commands';
+import { addShape, importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
+import { Popover } from '../components/ui';
+import { ShapePicker } from '../components/pickers';
+import { emptyProject, symbolLayer } from '../state/model';
+import { allCommands, matchKey, run } from './commands';
 import { startAutosave } from './autosave';
 import { newDesign, openLast } from './projects';
-import { emptyProject } from '../state/model';
 import { openDocument } from '../state/store';
 
 function Toasts() {
@@ -162,8 +164,47 @@ function useDropFiles() {
   return over;
 }
 
+/** Starting points on an empty artboard. */
+function EmptyStart() {
+  const [shapes, setShapes] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  return (
+    <div className="empty-start" role="group" aria-label="Start your design">
+      <h3>Start with</h3>
+      <div className="empty-start-row">
+        <button onClick={() => run('tool-text')}>
+          <Icon name="text" size={18} /> Text <kbd>T</kbd>
+        </button>
+        <button ref={btn} onClick={() => setShapes(!shapes)}>
+          <Icon name="shapes" size={18} /> Shape <kbd>O</kbd>
+        </button>
+        <button onClick={() => run('tool-draw')}>
+          <Icon name="brush" size={18} /> Draw <kbd>B</kbd>
+        </button>
+        <button onClick={() => void importImage()}>
+          <Icon name="image" size={18} /> Image <kbd>⇧⌘I</kbd>
+        </button>
+        <button onClick={() => store.set({ dialog: { kind: 'templates' } })}>
+          <Icon name="sparkle" size={18} /> Template
+        </button>
+      </div>
+      {shapes && (
+        <Popover anchor={btn.current} onClose={() => setShapes(false)} width={340} placement="bottom-start">
+          <ShapePicker
+            onPick={(k) => {
+              setShapes(false);
+              addShape(symbolLayer(k));
+            }}
+          />
+        </Popover>
+      )}
+    </div>
+  );
+}
+
 function DesignMode() {
   const tab = useStore((s) => s.tab);
+  const empty = useStore((s) => s.project.layers.length === 0);
   const editing = useStore((s) => s.editing);
   const tool = useStore((s) => s.tool);
   return (
@@ -173,6 +214,7 @@ function DesignMode() {
       </aside>
       <section className="center">
         <Viewport />
+        {empty && tool === 'select' && !editing && <EmptyStart />}
         {tool === 'text' && !editing && (
           <div className="edit-pill" role="status">
             <Icon name="text" size={14} />

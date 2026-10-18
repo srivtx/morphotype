@@ -1,10 +1,10 @@
-## Morphotype 0.4
+## Morphotype 0.5
 
-Draw by hand, put photos in anything, and build the looks people are making right now from real, editable tools: sliced stamps, type all the way round a circle, pixel dissolves, dithering, echo lines, construction sheets and neo-brutalist stickers.
+A home for your work, glass that sees what's behind it, 3D depth on anything, and glyphs you can build from layers.
 
 ### Install on a Mac
 
-1. Download `Morphotype_0.4.0_universal.dmg` below (it runs on Apple silicon and Intel).
+1. Download `Morphotype_0.5.0_universal.dmg` below (it runs on Apple silicon and Intel).
 2. Open it and drag **Morphotype** into **Applications**.
 3. The app isn't notarised yet, so macOS blocks it the first time. Either go to **System Settings → Privacy & Security** and click **Open Anyway** next to Morphotype, or run this once in Terminal (it also fixes a "damaged" message):
    `xattr -dr com.apple.quarantine /Applications/Morphotype.app && open /Applications/Morphotype.app`
@@ -13,52 +13,38 @@ Draw by hand, put photos in anything, and build the looks people are making righ
 
 ### What's new
 
-**Draw**
-- Press B to draw. Pen, Marker, Pencil and Highlighter brushes, with pen pressure, tapered ends and smoothing. `[` and `]` change the size.
-- Drawings stay editable: change their width or smoothing later, recolour them, or add any modifier.
-- Two handwriting fonts to go with them: Caveat and Caveat Brush.
+**Home and your projects**
+- Morphotype opens on Home: start a design in a common size, a new font or a template, and pick up any design or font you've made, with previews and search.
+- Projects save on this device as you work. There's nothing to save, and "Saved" in the top bar confirms it. Rename, duplicate or delete (with Undo) from each card. ⌥⌘H goes Home.
+- A new design starts on a white page with a "Start with" panel: text, shape, draw, image or template.
+- Settings → At launch: show Home, or reopen the last project.
 
-**Photos**
-- Drop in a picture and choose Photo, Trace or Pixel art.
-- Photo puts the picture inside a shape. Swap the shape for a circle, a star or your text and the photo stays inside. Zoom, pan, duotone, contrast, saturation and grain are in the Style tab.
-- Pixel art turns a picture into a few inks (picked from the image or from a ready palette), with optional dithering, as squares or dots. Each colour becomes its own layer.
+**Glass and light**
+- **Frosted glass** blurs whatever is behind it, with a tint (or a tint gradient), a lit edge, grain and a shadow.
+- **Lens glass** bends, magnifies and splits what's behind it into colour, with an iridescent rim. Put it over type.
+- **Thermal** paints heat-camera colours that glow out into the canvas. **Prism light** throws spectral streaks out from the shapes. **Colour dots** prints a colour field as an LED dot screen. **Plush** is soft fuzzy fabric.
 
 **Every layer**
-- A stroke on any material, outside, centred or inside the outline.
-- Opacity and blend modes: Multiply for overprinted inks and highlighters, Screen for light.
+- **Depth** (in Appearance, next to Stroke) gives any layer solid 3D sides in any direction and colour, over any material.
 
-**New modifiers**
-- **Slice** cuts rays or pie wedges out from a centre you can move, with a ring, a hole and soft piece corners.
-- **Repeat** places copies around a circle, in a grid, or as a trail that steps, scales and turns.
-- **Fuse** melts nearby letters into one solid form.
-- **Fit in circle** squeezes anything into a round badge or an ellipse.
-- **Echo lines** draws concentric outline rings.
-- Arc now goes all the way round (bend 2).
-- Pixels can dissolve toward one side.
+**Shapes and modifiers**
+- New shapes: wavy and scalloped badges, globe, asterisk, lens and cloud.
+- **Foam** eats bubbles through a shape. **Isometric** lays it on a face of a 3D cube. Pixels can now be crosses, pluses and diamonds.
+- New quick looks: Foam, Sponge, Cross stitch, Diamonds, Iso left and Iso top.
+- A **Doodles** background pattern, like packaging print.
+- App icons: show Apple-style keylines while you design, or add the grid as layers for a presentation shot.
 
-**New materials and backgrounds**
-- **Dither**: one-bit Bayer or noise dithering of light and gradients.
-- **Halftone** now follows 3D light, can print on its own paper colour and can be misregistered.
-- **Distressed** has a rubber-stamp grain.
-- Flat shadows can be hard-edged and any colour, for neo-brutalist graphics.
-- Backgrounds take patterns: grid paper, dot grid, ruled lines, stripes and checks.
-- New presets include Rubber stamp, Lino black, Neo-brutal, Cream label, Pop offset, Printed 3D, Voxel blue, Pixel pop and three dithers.
+**Type mode**
+- **Glyph layers**: build a glyph from shapes, cut ink traps and counters with them, or reuse another glyph as a component that follows its edits (draw the dot once, use it on i, j and !). Drag and resize layers on the glyph canvas.
+- A glyph can skip the font look, and **Bake into points** turns the finished glyph, look and all, into an outline you can reshape point by point.
+- Previews rebuild only the glyphs you change, and the engine caches finished glyphs, so editing big fonts stays quick.
 
-**Construction sheets**
-- Right-click a logo or lettering and choose Draw construction. It adds a tinted outline, a marker on every corner and curve extreme, and guide lines at the edges and the font's baseline, x-height, cap height and ascender, ready for a presentation.
-
-**Shapes, fonts and templates**
-- New shapes: Folder, Pill, Quarter circle, Half circle and Cove, for modular logos.
-- New fonts: Young Serif, Bricolage Grotesque (variable), Caveat and Caveat Brush.
-- 13 new templates, built from the tools above rather than pictures: Printed shapes, Night notes, Echo rings, Sun stamp, Ring seal, Voxel cursor, Dot type, Folder sticker, Pixel wordmark, Pixel poster, Dither signal, Fused band and Pixel garden. Each card shows what it's made with.
-- ⇧⌘' snaps to the grid, and turns the grid on.
-
-**Faster**
-- Big distance-field operations run in linear time: wide Echo, Weight and Fuse values are up to 30× faster.
-- A 2000-point scribble builds in about 5 ms.
-- Photos stay out of the undo history, so editing a design with photos is as quick as one without.
+**Templates**
+- 15 new templates built from these tools: Glass lens, Crystal word, Frosted 404, Thermal wings, Prism grid, Heat dots, Foam letter, Cross-stitch wall, Badge set, Pixel office, Plush box, Wavy badge icon, Iso bunny, Flame icon and Weather icon. Related layers in templates are grouped.
 
 **Fixes**
-- On the Mac, the window buttons now sit on the centre line of the top bar.
+- In Type mode, picking a look highlighted every look that used the same modifier (Bitmap, Tiles and Dot matrix lit up together). Looks now match their exact settings, and the Design tab shows the active look too.
+- The type tester no longer keeps every compiled font in memory.
+- Segmented controls no longer overflow narrow panels.
 
 Projects from earlier versions open as before.

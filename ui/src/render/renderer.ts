@@ -1,7 +1,7 @@
-import { BLUR_FS, FULLSCREEN_VS, HEIGHT_FS, JFA_FS, RECT_VS, SDF_FS, SEED_FS } from './passes';
-import { COMMON_GLSL, type EffectDef, type HeightSpec, type ParamValues } from './effects';
+import { BLUR_FS, BLUR_RGBA_FS, FULLSCREEN_VS, HEIGHT_FS, JFA_FS, RECT_VS, SDF_FS, SEED_FS } from './passes';
+import { COMMON_GLSL, effectById, type EffectDef, type HeightSpec, type ParamValues } from './effects';
 import { ambientOf, backgroundUniforms, BG_FS } from './background';
-import type { Background, BlendMode, Stroke } from '../state/model';
+import type { Background, BlendMode, Depth, Stroke, Style } from '../state/model';
 import { imageAsset, imageElement, onImagesReady } from '../state/assets';
 import { bindTextures, formats, freeTarget, GLError, hexToRgb, program, setUniforms, target, texture, type Program, type Target, type UniformValue } from './gl';
 
@@ -13,6 +13,26 @@ out vec4 o;
 ${body}
 uniform float u_strokeW, u_strokeAlign, u_strokeOpacity, u_opacity;
 uniform vec3 u_strokeColor;
+uniform float u_sideDepth, u_sideAngle, u_sideShade;
+uniform vec3 u_sideColor;
+/** Solid extrusion: the outline swept back along a direction, darker toward the back. */
+vec4 depthSide(vec2 uv) {
+  vec2 dir = vec2(sin(u_sideAngle), -cos(u_sideAngle));
+  float steps = clamp(ceil(u_sideDepth * u_k / 1.25), 4.0, 96.0);
+  float best = 1e9;
+  float bt = 0.0;
+  for (int i = 1; i <= 96; i++) {
+    if (float(i) > steps) break;
+    float t = u_sideDepth * float(i) / steps;
+    float d = sdfPx(uv - offsetUv(dir * t));
+    if (d < best) { best = d; bt = t; }
+    // The nearest slice covering this pixel decides its shade.
+    if (d < -1.5) break;
+  }
+  float a = clamp(0.5 - best, 0.0, 1.0);
+  float k = 1.0 - u_sideShade * bt / u_sideDepth;
+  return vec4(u_sideColor * k * a, a);
+}
 void main() {
   o = effect(v_uv);
   if (u_strokeW > 0.0) {
@@ -23,6 +43,7 @@ void main() {
     float a = (cover(d - lo - w) - cover(d - lo)) * u_strokeOpacity;
     o = over(vec4(u_strokeColor * a, a), o);
   }
+  if (u_sideDepth > 0.0) o = over(o, depthSide(v_uv));
   o *= u_opacity;
 }`;
 
@@ -46,6 +67,12 @@ export interface SceneItem {
   stroke?: Stroke | null;
   opacity?: number;
   blend?: BlendMode;
+  depth?: Depth | null;
+}
+
+/** The scene item for one built object and its style. */
+export function sceneItem(id: string, out: { d: string; bbox: Box | null }, st: Style): SceneItem {
+  return { id, d: out.d, bbox: out.bbox, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth };
 }
 
 interface Field {
@@ -84,7 +111,9 @@ interface Obj {
 export class Renderer {
   readonly gl: WebGL2RenderingContext;
   private canvas: HTMLCanvasElement;
-  private progs: Record<'seed' | 'jfa' | 'sdf' | 'height' | 'blur' | 'bg', Program>;
+  private progs: Record<'seed' | 'jfa' | 'sdf' | 'height' | 'blur' | 'blurRgba' | 'bg', Program>;
+  /** What's behind a glass object: sharp copy and two blur targets (half size). */
+  private bd: { sharp: WebGLTexture; w: number; h: number; a: Target; b: Target } | null = null;
   private effects = new Map<string, Program>();
   private objs: Obj[] = [];
   private seeds: { a: Target; b: Target; w: number; h: number } | null = null;
@@ -116,6 +145,7 @@ export class Renderer {
       sdf: program(gl, FULLSCREEN_VS, SDF_FS),
       height: program(gl, FULLSCREEN_VS, HEIGHT_FS),
       blur: program(gl, FULLSCREEN_VS, BLUR_FS),
+      blurRgba: program(gl, FULLSCREEN_VS, BLUR_RGBA_FS),
       bg: program(gl, RECT_VS, BG_FS),
     };
     gl.bindVertexArray(gl.createVertexArray());
@@ -219,7 +249,65 @@ export class Renderer {
       freeTarget(this.gl, this.seeds.b);
       this.seeds = null;
     }
+    this.freeBackdrop();
   }
+
+  private freeBackdrop() {
+    if (!this.bd) return;
+    this.gl.deleteTexture(this.bd.sharp);
+    freeTarget(this.gl, this.bd.a);
+    freeTarget(this.gl, this.bd.b);
+    this.bd = null;
+  }
+
+  /**
+   * Copy what's drawn so far under a backdrop object's quad (clip rect `r`)
+   * and blur it by `blurPx` framebuffer pixels. Returns the uniforms that
+   * map the object's uv onto the copy.
+   */
+  private captureBackdrop(r: [number, number, number, number], fb: { fbo: WebGLFramebuffer | null; w: number; h: number }, blurPx: number): Record<string, UniformValue> | null {
+    const gl = this.gl;
+    const px = (c: number, size: number) => ((c + 1) / 2) * size;
+    const rx0 = px(Math.min(r[0], r[2]), fb.w);
+    const rx1 = px(Math.max(r[0], r[2]), fb.w);
+    const ryb = px(Math.min(r[1], r[3]), fb.h);
+    const ryt = px(Math.max(r[1], r[3]), fb.h);
+    const x0 = Math.max(0, Math.floor(rx0));
+    const x1 = Math.min(fb.w, Math.ceil(rx1));
+    const y0 = Math.max(0, Math.floor(ryb));
+    const y1 = Math.min(fb.h, Math.ceil(ryt));
+    const cw = x1 - x0;
+    const ch = y1 - y0;
+    if (cw < 1 || ch < 1) return null;
+    if (!this.bd || this.bd.w !== cw || this.bd.h !== ch) {
+      this.freeBackdrop();
+      const F = formats(gl);
+      const hw = Math.max(1, Math.ceil(cw / 2));
+      const hh = Math.max(1, Math.ceil(ch / 2));
+      this.bd = { sharp: texture(gl, cw, ch, F.rgb8), w: cw, h: ch, a: target(gl, hw, hh, F.rgba8), b: target(gl, hw, hh, F.rgba8) };
+    }
+    const bd = this.bd;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, bd.sharp);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, x0, y0, cw, ch);
+    let blurred: WebGLTexture = bd.sharp;
+    if (blurPx >= 0.5) {
+      gl.disable(gl.BLEND);
+      const p = this.progs.blurRgba;
+      const out = [bd.a.w, bd.a.h];
+      this.pass(p, bd.a, bd.a.w, bd.a.h, { u_src: bd.sharp }, { u_dir: [1, 0], u_radius: blurPx, u_outSize: out });
+      this.pass(p, bd.b, bd.b.w, bd.b.h, { u_src: bd.a.tex }, { u_dir: [0, 1], u_radius: blurPx / 2, u_outSize: out });
+      this.pass(p, bd.a, bd.a.w, bd.a.h, { u_src: bd.b.tex }, { u_dir: [1, 0], u_radius: blurPx / 2, u_outSize: out });
+      this.pass(p, bd.b, bd.b.w, bd.b.h, { u_src: bd.a.tex }, { u_dir: [0, 1], u_radius: blurPx / 2, u_outSize: out });
+      blurred = bd.b.tex;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb.fbo);
+      gl.viewport(0, 0, fb.w, fb.h);
+      gl.enable(gl.BLEND);
+    }
+    this.bdBlur = blurred;
+    return { u_hasBackdrop: 1, u_bdMap: [(rx1 - rx0) / cw, -(ryt - ryb) / ch, (rx0 - x0) / cw, (ryt - y0) / ch] };
+  }
+  private bdBlur: WebGLTexture | null = null;
 
   private freeField(o: Obj) {
     const f = o.field;
@@ -263,7 +351,8 @@ export class Renderer {
     const size = { w: b[2] - b[0], h: b[3] - b[1] };
     const st = o.item.stroke;
     const stroke = st && st.width > 0 ? st.width * (st.align === 'outside' ? 1 : st.align === 'center' ? 0.5 : 0) : 0;
-    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + 3;
+    const dp = o.item.depth && o.item.depth.amount > 0 ? o.item.depth.amount : 0;
+    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + dp + 3;
     const x0 = Math.max(0, Math.floor(b[0] + W / 2 - m));
     const y0 = Math.max(0, Math.floor(b[1] + H / 2 - m));
     const x1 = Math.min(W, Math.ceil(b[2] + W / 2 + m));
@@ -386,6 +475,11 @@ export class Renderer {
     u.u_strokeOpacity = st?.opacity ?? 1;
     u.u_strokeColor = hexToRgb(st?.color ?? '#000000');
     u.u_opacity = Math.max(0, Math.min(1, o.item.opacity ?? 1));
+    const dp = o.item.depth;
+    u.u_sideDepth = dp && dp.amount > 0 ? dp.amount : 0;
+    u.u_sideAngle = ((dp?.angle ?? 135) * Math.PI) / 180;
+    u.u_sideShade = Math.max(0, Math.min(1, dp?.shade ?? 0.3));
+    u.u_sideColor = hexToRgb(dp?.color ?? '#000000');
     return u;
   }
 
@@ -418,7 +512,7 @@ export class Renderer {
   }
 
   /** Draw background then objects into the bound framebuffer. `rect` maps the artboard to clip space. */
-  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean) {
+  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean, fb: { fbo: WebGLFramebuffer | null; w: number; h: number; pxPerArt: number }) {
     const gl = this.gl;
     for (const o of this.objs) {
       this.buildField(o, k);
@@ -436,13 +530,26 @@ export class Renderer {
       }
       for (const o of this.objs) {
         if (!o.field || !o.region) continue;
+        // Glass and lenses see what's drawn so far.
+        const bdu = o.item.effect.backdrop ? this.captureBackdrop(rectOf(o.region), fb, Number(o.item.params.blur ?? 0) * fb.pxPerArt) : null;
         const p = this.effectProgram(o.item.effect);
         gl.useProgram(p.prog);
         const pic = o.item.effect.photo ? String(o.item.params.image ?? '') : '';
         const photo = pic ? this.photoTexture(pic) : null;
-        bindTextures(gl, p, { u_mask: o.field.mask, u_sdf: o.field.sdf.tex, u_height: o.field.heightA.tex, ...(o.item.effect.photo ? { u_photo: photo } : {}) });
+        bindTextures(gl, p, {
+          u_mask: o.field.mask,
+          u_sdf: o.field.sdf.tex,
+          u_height: o.field.heightA.tex,
+          ...(o.item.effect.photo ? { u_photo: photo } : {}),
+          ...(o.item.effect.backdrop ? { u_backdrop: bdu ? this.bd!.sharp : null, u_backdropBlur: bdu ? this.bdBlur : null } : {}),
+        });
         const meta = imageAsset(pic);
-        setUniforms(gl, p, { ...this.effectUniforms(o), u_rect: rectOf(o.region), ...(o.item.effect.photo ? { u_hasPhoto: photo ? 1 : 0, u_imgAspect: meta ? meta.w / meta.h : 1 } : {}) });
+        setUniforms(gl, p, {
+          ...this.effectUniforms(o),
+          u_rect: rectOf(o.region),
+          ...(o.item.effect.photo ? { u_hasPhoto: photo ? 1 : 0, u_imgAspect: meta ? meta.w / meta.h : 1 } : {}),
+          ...(o.item.effect.backdrop ? (bdu ?? { u_hasBackdrop: 0 }) : {}),
+        });
         // Premultiplied blending; multiply and screen keep alpha "over" so transparent exports work.
         const b = o.item.blend ?? 'normal';
         if (b === 'multiply') gl.blendFuncSeparate(gl.DST_COLOR, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -473,7 +580,7 @@ export class Renderer {
       const [x1, y0] = toClip(ar.x + (r.x + r.w) * z, ar.y + r.y * z);
       return [x0, y1, x1, y0];
     };
-    const paint = this.composite(k, rectOf, false, this.checker);
+    const paint = this.composite(k, rectOf, false, this.checker, { fbo: null, w: cw, h: ch, pxPerArt: z * dpr });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, cw, ch);
     gl.clearColor(0.043, 0.043, 0.051, 1);
@@ -495,7 +602,7 @@ export class Renderer {
     const { w: AW, h: AH } = this.art;
     const rectOf = (r: Region): [number, number, number, number] => [(r.x / AW) * 2 - 1, 1 - ((r.y + r.h) / AH) * 2, ((r.x + r.w) / AW) * 2 - 1, 1 - (r.y / AH) * 2];
     try {
-      const paint = this.composite(k, rectOf, transparent, false);
+      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k });
       gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
       gl.viewport(0, 0, W, Hh);
       gl.clearColor(0, 0, 0, 0);

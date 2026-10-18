@@ -1,3 +1,4 @@
+import { iconGridLines } from '../../state/icon';
 import { nodeBox } from '../../app/actions';
 import type { Box } from '../../engine/types';
 import type { Renderer } from '../../render/renderer';
@@ -157,9 +158,17 @@ export function Overlay({
           <rect x={ar.x} y={ar.y} width={ar.w} height={ar.h} fill="url(#mt-grid)" />
         </g>
       )}
+      <rect className="artboard-edge" x={ar.x - 0.5} y={ar.y - 0.5} width={ar.w + 1} height={ar.h + 1} />
       <text className="artboard-label" x={ar.x} y={ar.y - 8}>
         {project.name} <tspan>{W} × {H}</tspan>
       </text>
+      {settings.iconGrid && (
+        <g className="icon-grid" transform={`matrix(${z},0,0,${z},${tx},${ty})`}>
+          {iconGridLines(Math.min(W, H)).map((l, i) => (
+            <path key={i} d={`M${l.pts.map((p) => p.join(',')).join('L')}${l.closed ? 'Z' : ''}`} vectorEffect="non-scaling-stroke" />
+          ))}
+        </g>
+      )}
       <g transform={`matrix(${z},0,0,${z},${tx},${ty})`}>
         {hover && !selection.includes(hover) && !editing && outline(findNode(project.layers, hover), 'hover-outline')}
         {!editing && nodes.map((n) => outline(n, 'sel-outline'))}

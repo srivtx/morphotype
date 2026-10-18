@@ -24,6 +24,8 @@ export interface Settings {
   iconMask: boolean;
   /** Seen the first-run welcome. */
   welcomed: boolean;
+  /** Draw the app-icon design grid over the artboard. */
+  iconGrid: boolean;
   /** What opens at launch: Home, or the last project. */
   launch: 'home' | 'last';
   /** Seen the Type mode tour. */
@@ -55,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   iconMask: false,
   welcomed: false,
   launch: 'home',
+  iconGrid: false,
   brush: 'marker',
   brushWidth: 18,
   brushColor: '#ff6fb5',

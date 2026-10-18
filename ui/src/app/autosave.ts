@@ -66,6 +66,7 @@ export function flushSave(fresh = false): Promise<void> {
       };
       await saveProject(id, p, { kind: mode === 'type' && p.type ? 'font' : 'design', mode, bg: backgroundCss(p.background, 0.2), ...extra }, fonts);
       saved = { id, project: p };
+      if (store.get().projectId === id) store.set({ savedProject: p });
     } catch (e) {
       console.warn('autosave failed', e);
     }

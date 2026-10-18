@@ -11,6 +11,7 @@ import { parsePath, serializePath } from '../state/geometry';
 import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
 import { group, isGroup, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
+import { iconGridLayers } from '../state/icon';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
 import { allLayers, ancestors, buildScene, childrenOf, find, findNode, layersOf, removeNodes, topmost, walk } from '../state/tree';
 
@@ -163,6 +164,16 @@ function artPathLayer(d: string, name: string, st: Style): ShapeLayer | null {
  * and guide lines across the artboard at its edges and (for text) at the
  * font's baseline, x-height, cap height and ascender.
  */
+/** Add the app-icon grid as locked line layers at the bottom, for presentation shots. */
+export function addIconGrid() {
+  const { width: W, height: H } = store.get().project.canvas;
+  const g = group(iconGridLayers(Math.min(W, H)), { name: 'Icon grid', locked: true, open: false });
+  edit((p) => {
+    p.layers.unshift(g);
+  });
+  toast('Added the icon grid under your artwork (locked)', 'info', { label: 'Undo', run: undo });
+}
+
 export async function constructionSheet() {
   const s = store.get();
   const ids = topmost(s.project.layers, s.selection);
@@ -593,6 +604,7 @@ export function applyStyle(st: Style, ids = store.get().selection) {
     if (!('stroke' in st) && prev?.stroke) n.style.stroke = prev.stroke;
     if (!('opacity' in st) && prev?.opacity !== undefined) n.style.opacity = prev.opacity;
     if (!('blend' in st) && prev?.blend) n.style.blend = prev.blend;
+    if (!('depth' in st) && prev?.depth) n.style.depth = prev.depth;
   };
   edit((p) => {
     for (const id of ids) {
@@ -627,7 +639,7 @@ export function copyStyle() {
   const st = n && styleOf(n);
   if (st) {
     // Carry the stroke explicitly so pasting also copies (or clears) it.
-    styleClipboard = { ...structuredClone(st), stroke: st.stroke ? structuredClone(st.stroke) : null, opacity: st.opacity ?? 1, blend: st.blend ?? 'normal' };
+    styleClipboard = { ...structuredClone(st), stroke: st.stroke ? structuredClone(st.stroke) : null, opacity: st.opacity ?? 1, blend: st.blend ?? 'normal', depth: st.depth ? structuredClone(st.depth) : null };
     toast('Style copied');
   }
 }
@@ -1117,11 +1129,16 @@ export async function buildSvg(transparent = store.get().settings.exportTranspar
             : pat.kind === 'checker'
               ? `<rect width="${s}" height="${s}" ${attrs}/><rect x="${s}" y="${s}" width="${s}" height="${s}" ${attrs}/>`
               : `<rect x="0" y="${-w / 2}" width="${s * 1.5}" height="${w}" ${attrs}/>`;
-    const size = pat.kind === 'checker' ? s * 2 : s;
+    const size = pat.kind === 'checker' ? s * 2 : pat.kind === 'doodles' ? s * 4 : s;
     const rot = pat.kind === 'diagonal' ? ` patternTransform="rotate(-45)"` : '';
+    if (pat.kind === 'doodles') {
+      defs.push(`<pattern id="pat" patternUnits="userSpaceOnUse" width="${size}" height="${size}">${doodleTile(s, w, pat.color, pat.opacity)}</pattern>`);
+      body.push(`<rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="url(#pat)"/>`);
+    } else {
     // The pattern's origin is the artboard centre, as on the canvas.
-    defs.push(`<pattern id="pat" patternUnits="userSpaceOnUse" width="${size}" height="${size}"${rot}>${cell}</pattern>`);
-    body.push(`<rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="url(#pat)"/>`);
+      defs.push(`<pattern id="pat" patternUnits="userSpaceOnUse" width="${size}" height="${size}"${rot}>${cell}</pattern>`);
+      body.push(`<rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="url(#pat)"/>`);
+    }
   }
   const t = p.background.tile;
   if (t) {
@@ -1138,6 +1155,18 @@ export async function buildSvg(transparent = store.get().settings.exportTranspar
     if (mix) body.push('</g>');
   }
   function emitObject(path: { id: string; d: string }, st: Style) {
+    const dp = st.depth;
+    if (dp && dp.amount > 0) {
+      // Extrusion: copies of the outline stepping back, darkening toward the back.
+      const a = (dp.angle * Math.PI) / 180;
+      const steps = Math.min(64, Math.max(2, Math.ceil(dp.amount / 1.5)));
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(dp.color.slice(i, i + 2), 16));
+      for (let i = steps; i >= 1; i--) {
+        const t = (i / steps) * dp.amount;
+        const k = 1 - dp.shade * (i / steps);
+        body.push(`<path d="${path.d}" transform="translate(${(Math.sin(a) * t).toFixed(2)} ${(-Math.cos(a) * t).toFixed(2)})" fill="rgb(${Math.round(r * k)},${Math.round(g * k)},${Math.round(b * k)})"/>`);
+      }
+    }
     const paint = svgPaint(st);
     if (paint.defs) defs.push(paint.defs);
     const pic = st.effect === 'photo' ? imageAsset(String(st.params.image ?? '')) : undefined;
@@ -1183,6 +1212,38 @@ export async function buildSvg(transparent = store.get().settings.exportTranspar
     body.push(`<path d="${path.d}" fill="${paint.fill}" fill-rule="nonzero"${paint.extra}/>`);
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" width="${W}" height="${H}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${body.join('')}</svg>`;
+}
+
+/** A 4×4 tile of doodles (cell `s`, line `w`) for SVG patterns, mirroring the canvas doodle set. */
+function doodleTile(s: number, w: number, color: string, opacity: number) {
+  const out: string[] = [];
+  const line = `fill="none" stroke="${color}" stroke-opacity="${opacity}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"`;
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let j = 0; j < 4; j++) {
+    for (let i = 0; i < 4; i++) {
+      const h = rnd();
+      const cx = (i + 0.5 + (rnd() - 0.5) * 0.3) * s;
+      const cy = (j + 0.5 + (rnd() - 0.5) * 0.3) * s;
+      const ang = rnd() * 360;
+      const r = s * 0.24;
+      const f = (v: number) => v.toFixed(1);
+      let d: string;
+      if (h < 0.24) {
+        const pts = Array.from({ length: 13 }, (_, k) => {
+          const x = -r * 1.3 + (k / 12) * r * 2.6;
+          return `${f(x)} ${f(Math.sin((x / r) * Math.PI) * r * 0.42)}`;
+        });
+        d = `<path d="M${pts.join(' L')}" ${line}/>`;
+      } else if (h < 0.4) d = `<path d="M${f(-r * 0.6)} ${f(-r * 0.6)}L${f(r * 0.6)} ${f(r * 0.6)}M${f(-r * 0.6)} ${f(r * 0.6)}L${f(r * 0.6)} ${f(-r * 0.6)}" ${line}/>`;
+      else if (h < 0.62) d = `<circle r="${f(r * 0.32)}" fill="${color}" fill-opacity="${opacity}"/>`;
+      else if (h < 0.76) d = `<circle r="${f(r * 0.55)}" ${line}/>`;
+      else if (h < 0.9) d = `<path d="M${f(r * 0.7 * Math.cos(2))} ${f(-r * 0.7 * Math.sin(2))}A${f(r * 0.7)} ${f(r * 0.7)} 0 1 1 ${f(r * 0.7 * Math.cos(2))} ${f(r * 0.7 * Math.sin(2))}" ${line}/>`;
+      else d = `<path d="M${f(-r * 0.6)} 0H${f(r * 0.6)}M0 ${f(-r * 0.6)}V${f(r * 0.6)}" ${line}/>`;
+      out.push(`<g transform="translate(${f(cx)} ${f(cy)}) rotate(${f(ang)})">${d}</g>`);
+    }
+  }
+  return out.join('');
 }
 
 export async function exportSVG() {

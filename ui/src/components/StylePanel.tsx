@@ -6,7 +6,7 @@ import { engine } from '../engine/client';
 import { defaultParams, EFFECTS, effectById, PRESETS, type EffectDef, type ParamValues, type Preset } from '../render/effects';
 import { renderThumb, useThumb } from '../render/thumbs';
 import type { SceneItem } from '../render/renderer';
-import { background, fill, isGroup, textLayer, type Style } from '../state/model';
+import { background, fill, isGroup, pattern, textLayer, type Style } from '../state/model';
 import { edit, setSettings, useStore } from '../state/store';
 import { findNode } from '../state/tree';
 import { ColorField } from './ColorPicker';
@@ -27,7 +27,11 @@ function sampleShape() {
 async function styleScene(effect: EffectDef, params: ParamValues, bg: string) {
   const s = await sampleShape();
   const items: SceneItem[] = [{ id: 's', d: s.d, bbox: s.bbox, effect, params }];
-  return { items, background: background(fill('solid', bg)), w: 460, h: 460, px: 132 };
+  // Glass shows what's behind it, so give it stripes to bend and blur.
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(bg.slice(i, i + 2), 16) || 0);
+  const ink = r * 0.3 + g * 0.59 + b * 0.11 > 128 ? '#151515' : '#f2f2f2';
+  const page = effect.backdrop ? background(fill('solid', bg), { pattern: pattern('diagonal', ink, { size: 70, weight: 24, opacity: 1 }) }) : background(fill('solid', bg));
+  return { items, background: page, w: 460, h: 460, px: 132 };
 }
 
 export function presetThumb(p: Preset) {
@@ -37,7 +41,7 @@ export function presetThumb(p: Preset) {
 
 function PresetCard({ p, active, onApply }: { p: Preset; active: boolean; onApply: (alt: boolean) => void }) {
   const e = effectById(p.effect);
-  const url = useThumb(`preset:${p.name}`, () => styleScene(e, { ...defaultParams(e), ...p.params }, p.bg));
+  const url = useThumb(`preset:${p.name}`, () => styleScene(e, { ...defaultParams(e), ...p.params }, p.bg), 1);
   return (
     <button className={`preset-card ${active ? 'on' : ''}`} onClick={(ev) => onApply(ev.altKey)} data-tip={`${p.name} · ${e.name} · ⌥-click to also set the background`}>
       <span className="preset-img" style={{ background: p.bg }}>
@@ -52,13 +56,13 @@ function PresetCard({ p, active, onApply }: { p: Preset; active: boolean; onAppl
 export function EffectThumb({ id }: { id: string }) {
   const e = effectById(id);
   const preset = PRESETS.find((p) => p.effect === e.id);
-  const url = useThumb(`effect:${e.id}`, () => styleScene(e, defaultParams(e), preset?.bg ?? '#111114'));
+  const url = useThumb(`effect:${e.id}`, () => styleScene(e, defaultParams(e), preset?.bg ?? '#111114'), 1);
   return url ? <img src={url} alt="" draggable={false} /> : <span className="shimmer" />;
 }
 
 function EffectCard({ e, active, onPick }: { e: EffectDef; active: boolean; onPick: () => void }) {
   const preset = PRESETS.find((p) => p.effect === e.id);
-  const url = useThumb(`effect:${e.id}`, () => styleScene(e, defaultParams(e), preset?.bg ?? '#111114'));
+  const url = useThumb(`effect:${e.id}`, () => styleScene(e, defaultParams(e), preset?.bg ?? '#111114'), 1);
   return (
     <button className={`effect-card ${active ? 'on' : ''}`} onClick={onPick} data-tip={e.description}>
       <span className="effect-img">{url ? <img src={url} alt="" draggable={false} /> : <span className="shimmer" />}</span>

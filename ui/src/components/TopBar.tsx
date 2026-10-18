@@ -10,6 +10,8 @@ export function TopBar() {
   const name = useStore((s) => s.project.name);
   const mode = useStore((s) => s.mode);
   const canUndo = useStore((s) => s.past.length > 0);
+  const saved = useStore((s) => s.savedProject === s.project);
+  const worth = useStore((s) => s.project.layers.length > 0 || !!s.project.type);
   const canRedo = useStore((s) => s.future.length > 0);
   const pngScale = useStore((s) => s.settings.pngScale);
   const p = platform();
@@ -55,6 +57,11 @@ export function TopBar() {
       />
       <div className="spacer" data-tauri-drag-region />
       <input className="doc-name" value={name} aria-label="Project name" spellCheck={false} onChange={(e) => edit((d) => (d.name = e.target.value), 'name')} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+      {worth && (
+        <span className="save-state" data-tip="Projects save on this device as you work. Find them on Home.">
+          {saved ? 'Saved' : 'Saving…'}
+        </span>
+      )}
       <div className="spacer" data-tauri-drag-region />
       <button className="search-btn" onClick={() => run('palette')} aria-label="Search commands">
         <Icon name="search" size={14} />

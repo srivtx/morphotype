@@ -39,6 +39,8 @@ export interface State {
   projectId: string | null;
   /** Home lists projects; the editor works on one. */
   screen: 'home' | 'editor';
+  /** The project as last saved to the library (same object when up to date). */
+  savedProject: Project | null;
   /** Selected node ids (layers or groups). */
   selection: string[];
   hover: string | null;
@@ -72,6 +74,7 @@ function initial(): State {
     project,
     projectId: null,
     screen: 'home',
+    savedProject: null,
     selection: project.layers[0] ? [project.layers[0].id] : [],
     hover: null,
     mode: 'design',

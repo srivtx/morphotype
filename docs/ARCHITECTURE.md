@@ -22,7 +22,7 @@ The engine runs as WebAssembly **inside the web view** rather than behind Tauri 
 ```
 text ─► shape (rustybuzz) ─► glyph outlines (em units, cached per font/axes/glyph)
                          └─► morph? glyph pairs (cached correspondence) at t
-symbol params ─► polylines
+symbol params ─► polylines (line symbols: constant-width strokes merged in a distance field)
 traced/imported path ─► parse SVG path data
 brush stroke points ─► swept-circle distance field ─► outline
             │
@@ -31,7 +31,9 @@ brush stroke points ─► swept-circle distance field ─► outline
             │   affine (slant, stretch): curves stay exact
             │   point maps (wave, arc, warp, wobble, melt, perspective): densify, then displace
             │   field ops (weight, round, outline, ink, fuse, slice, echo): SDF → iso-contour
-            │   pixels: nonzero raster → block outlines, dots or rounded tiles (dissolve drops cells)
+            │   pixels: nonzero raster → block outlines, dots, tiles, crosses, pluses or diamonds (dissolve drops cells)
+            │   foam: bubbles packed largest-first through a spatial hash, carved from the shape's field
+            │   isometric: an affine onto a cube face (top, left or right), so curves stay exact
             │   repeat (radial, grid, trail): affine copies, so curves stay exact
             ▼
       layer transform (translate · rotate · scale · stretch)
@@ -51,6 +53,9 @@ Key algorithms:
 - **Narrow-band signed distance.** Exact segment distances are computed only within the band an operation needs; the sign comes from a nonzero scanline raster. Iso-contours come from oriented marching squares (inside on the right, with saddle cells resolved by the cell average), so output loops come out correctly wound with no post-processing. Bands wider than 8 cells (big Weight, Fuse or Echo values) switch to a dead-reckoning distance transform: exact nearest points within 2.5 cells of the outline, then two raster passes that hand each neighbour's nearest point on, which is linear in the grid size instead of sweeping the band once per edge (Echo rings went from ~320 ms to ~11 ms). Marching squares keeps dense per-edge links but stores crossing points compactly.
 - **Slice and Echo.** Slice subtracts a cut field: distance to rays from a movable centre (plus an optional ring and hole) minus half the gap, then an opening (shrink, grow) softens the pieces' corners without closing the gaps, which a plain Round would. Echo keeps the inside and adds rings where the outside distance is near a multiple of the spacing, sampled at a resolution set by the ring width rather than the shape's size.
 - **Brush strokes.** A stroke is a polyline with a radius per point (pen pressure, tapered ends). Input is smoothed with Chaikin corner cutting, resampled to the field spacing, and each segment stamps the distance to its tapered capsule into a grid, comparing squared distances first. The zero level is the outline, so self-crossing scribbles stay filled with round ends. A 2000-point scribble builds in about 5 ms. While drawing, the UI only updates one SVG path; the engine runs once on release.
+- **Line symbols.** Globes, asterisks and line icons are many strokes that overlap. Instead of joining polygons (whose winding breaks where they cross), each segment stamps its distance into one grid and the zero level becomes the outline, so every overlap merges and line weight stays exact.
+- **Foam.** Bubble radii step down from the largest; at each size, random centres inside the shape (sampled from its signed distance) are kept if a spatial hash finds no bubble closer than the wall thickness, and an optional fade thins them toward one side. Kept bubbles are carved into the distance field by stamping only the cells they cover, so a letter full of foam builds in about 20 ms.
+- **Glyph layers.** A glyph is its base or redrawn outline plus parts: library shapes, paths, or other glyphs as components (resolved recursively, at most three deep). Parts add by concatenation and cut or mask through the same SDF boolean as layers, then the font look runs unless the glyph opts out. Finished glyphs are cached by their spec, character and quality, so editing one glyph, or recompiling the live tester, rebuilds only what changed.
 - **Morph correspondence.** Contours are paired solid-to-solid and hole-to-hole by minimum cost (exact search up to 7 contours, greedy above). Unpaired contours grow from or shrink to their own centroid. Pairs are aligned with a rigid start-point shift, then refined with banded dynamic time warping on position and tangent. Both contours are sampled at a shared parameter set that includes every original vertex of either contour, so t = 0 and t = 1 are exact.
 - **Curve fitting.** Schneider's algorithm, with corners detected on an RDP-simplified copy and nearly straight fits emitted as lines.
 - **Warp.** A bicubic Bezier patch over the input's bounding box. With evenly spaced control points it reproduces the identity, so a preset (Arch, Flag, Bulge…) is just a table of control-point offsets scaled by `bend`, and hand-dragged points add to it. The UI mirrors the same table to draw the net.
@@ -67,6 +72,8 @@ A project is a tree of **layers** (text, symbol, outline, morph, drawing) and **
 
 UI-only fields (names, locks, styles) are stripped before the document reaches the engine, so a style edit never triggers a geometry rebuild. The background (page fill, pattern, app-icon tile, grain) belongs to the project, not to an effect. A style can also carry a stroke (outside, centre or inside, drawn by the renderer over any material), an opacity and a blend mode.
 
+Projects save to an on-device library as you work (`library.ts`, IndexedDB): small metadata records (name, size, kind, preview) for Home, documents, pictures and imported fonts each in their own store, so Home reads only metadata and a picture shared by several projects is stored once. Saves wait for edits to settle and run in idle time; previews are re-rendered at most every few seconds. Opening a project gives it its own undo history, and every way of replacing the open project goes through one function that flushes the save first.
+
 Pictures for the Photo material live in an asset store (`assets.ts`) outside the project, keyed by a hash of their data. Edits deep-copy the project for undo, so keeping megabytes of image data out of it keeps every edit and every undo step cheap; `.morpho` files embed the pictures in use when saved and restore them on open. Version 1 files, which had one effect for the whole document, are migrated into a merged group that keeps that effect, with the backdrop moved to the canvas.
 
 ## Renderer (`ui/src/render`)
@@ -82,7 +89,9 @@ Each object gets its own field, cropped to its bounding box plus how far its eff
 
 Preview cards and template thumbnails use a second, off-screen renderer with the same shaders, so they always match the canvas.
 
-Every effect shader is wrapped with the same epilogue: an optional stroke from the SDF (so strokes work on chrome, puffy or halftone alike) and the style's opacity. Blend modes are fixed-function: Multiply uses `DST_COLOR, ONE_MINUS_SRC_ALPHA` and Screen `ONE, ONE_MINUS_SRC_COLOR` on premultiplied colour, with alpha kept "over" so transparent exports still work. Photo binds the picture as a mipmapped texture, uploaded once per renderer and redrawn when it finishes decoding.
+Every effect shader is wrapped with the same epilogue: an optional stroke from the SDF (so strokes work on chrome, puffy or halftone alike), optional **depth** (the outline swept back along a direction, sampled up to 96 times and shaded toward the back, drawn under the face) and the style's opacity. Renderer uniforms use names a unit test reserves, so no material parameter can shadow them.
+
+**Backdrop materials** (Frosted glass, Lens glass) see what is drawn before them. Just before such an object composites, the renderer copies the framebuffer under its quad into a texture (RGB, since the screen has no alpha), and blurs it with two separable Gaussian passes at half resolution when the material asks for blur. The shader reads it through a uv map, so the same code works on screen, in exports and in thumbnails. Cost: one copy and four small blur passes per glass object, only while it is visible. Blend modes are fixed-function: Multiply uses `DST_COLOR, ONE_MINUS_SRC_ALPHA` and Screen `ONE, ONE_MINUS_SRC_COLOR` on premultiplied colour, with alpha kept "over" so transparent exports still work. Photo binds the picture as a mipmapped texture, uploaded once per renderer and redrawn when it finishes decoding.
 
 Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI generates its controls from the schema, and a unit test checks that every parameter is consumed by either the shader or the height pass.
 
@@ -101,6 +110,6 @@ Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI gen
 1. **Kerning carry-over**: interpolate pair kerning from GPOS/kern of both sources; add a class-based kerning editor.
 2. **Variable font export**: export the morph axis (and weight/round) as a real `fvar`/`gvar` variable font. The morph correspondence is already point-compatible, which is the hard part.
 3. **WOFF2 import** via a pure-Rust Brotli decoder.
-4. **More effects**: video loop export for animated chrome and neon; refractive "liquid glass" and ASCII materials, which need the renderer to sample what is behind an object.
+4. **More effects**: video loop export for animated chrome and neon; an ASCII material, now possible with the backdrop pass.
 5. **Metal path**: if profiling on Apple silicon shows WebGL overhead, move the SDF and effects to `wgpu`, which the Rust core can call directly.
 6. **Signing and notarisation** for the `.dmg` in CI once an Apple Developer ID is available.

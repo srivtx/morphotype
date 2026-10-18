@@ -29,6 +29,12 @@ export interface EffectDef {
   reach: (p: ParamValues, size: { w: number; h: number }) => number;
   /** Samples a picture (style param `image`) bound as `u_photo`. */
   photo?: boolean;
+  /**
+   * Sees what's already drawn behind it (glass, lenses): the renderer copies
+   * that area into `u_backdrop` and a copy blurred by the `blur` param into
+   * `u_backdropBlur`. Read them with `behind(uv)` and `behindBlur(uv)`.
+   */
+  backdrop?: boolean;
 }
 
 const num = (key: string, label: string, min: number, max: number, step: number, def: number, advanced = false): ParamDef => ({
@@ -109,6 +115,14 @@ vec3 normalAt(vec2 uv, float depth) {
   return normalize(vec3(-g, 1.0));
 }
 vec4 over(vec4 a, vec4 b) { return a + b * (1.0 - a.a); }
+uniform sampler2D u_backdrop;
+uniform sampler2D u_backdropBlur;
+uniform vec4 u_bdMap;
+uniform float u_hasBackdrop;
+vec2 bdUv(vec2 uv) { return uv * u_bdMap.xy + u_bdMap.zw; }
+/** What's drawn behind this object at a field uv (premultiplied, opaque where the canvas is). */
+vec4 behind(vec2 uv) { return u_hasBackdrop > 0.5 ? texture(u_backdrop, bdUv(uv)) : vec4(0.0); }
+vec4 behindBlur(vec2 uv) { return u_hasBackdrop > 0.5 ? texture(u_backdropBlur, bdUv(uv)) : vec4(0.0); }
 vec3 spectrum(float t) { return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67))); }
 vec4 dropShadow(vec2 uv, vec2 off, float grow, float blur, float opacity) {
   if (opacity <= 0.0) return vec4(0.0);
@@ -822,7 +836,268 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo];
+
+const frost: EffectDef = {
+  id: 'frost',
+  name: 'Frosted glass',
+  description: 'Blurs whatever is behind it, with a tint, a lit edge and grain. Put it over type or shapes.',
+  backdrop: true,
+  params: [
+    num('blur', 'Blur', 0, 120, 0.5, 26),
+    col('tint', 'Tint', '#ffffff'),
+    num('tintAmount', 'Tint amount', 0, 1, 0.01, 0.18),
+    col('tint2', 'Bottom tint', '#3b4bd8'),
+    num('gradient', 'Tint gradient', 0, 1, 0.01, 0),
+    num('rim', 'Edge light', 0, 2, 0.01, 0.8),
+    num('refraction', 'Bend at edges', 0, 2, 0.01, 0.5),
+    num('grain', 'Grain', 0, 1, 0.01, 0.2),
+    num('shadow', 'Shadow', 0, 1, 0.01, 0.35),
+    num('bevel', 'Edge width', 2, 120, 1, 16, true),
+  ],
+  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: 3 }),
+  reach: (p) => (n(p, 'shadow') > 0 ? 70 : 0) + n(p, 'refraction') * 20,
+  glsl: /* glsl */ `
+uniform vec3 u_tint, u_tint2;
+uniform float u_blur, u_tintAmount, u_gradient, u_rim, u_refraction, u_grain, u_shadow;
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float d = dt / u_k;
+  float cov = cover(dt);
+  vec4 sh = dropShadow(uv, vec2(0.0, 16.0), -4.0, 28.0, u_shadow * 0.55);
+  if (cov <= 0.0) return sh;
+  vec3 n = normalAt(uv, 1.0);
+  vec3 bg = behindBlur(uv + offsetUv(-n.xy * u_refraction * 16.0)).rgb;
+  vec3 tint = mix(u_tint, u_tint2, clamp(boxUv(uv).y, 0.0, 1.0) * u_gradient);
+  vec3 c = mix(bg, tint, u_tintAmount);
+  c += (1.0 - c) * 0.06;
+  vec3 L = normalize(vec3(-0.45, -0.6, 0.66));
+  float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 20.0);
+  float edge = (1.0 - n.z) * max(dot(normalize(n.xy + 1e-5), -L.xy), 0.0);
+  c += (spec * 0.45 + edge * 0.55) * u_rim;
+  c += (hash12(floor(artPx(uv) * u_k)) - 0.5) * u_grain * 0.09;
+  return over(vec4(clamp(c, 0.0, 1.0) * cov, cov), sh);
+}`,
+};
+
+const lens: EffectDef = {
+  id: 'lens',
+  name: 'Lens glass',
+  description: 'Clear glass that bends and magnifies what is behind it, splitting light into colour at the edges.',
+  backdrop: true,
+  params: [
+    num('refraction', 'Refraction', 0, 2, 0.01, 0.7),
+    num('dispersion', 'Colour split', 0, 1.5, 0.01, 0.6),
+    num('magnify', 'Magnify', -1, 1, 0.01, 0.2),
+    num('iridescence', 'Iridescence', 0, 1.5, 0.01, 0.5),
+    num('rim', 'Rim', 0, 2, 0.01, 0.8),
+    col('tint', 'Tint', '#ffffff'),
+    num('tintAmount', 'Tint amount', 0, 1, 0.01, 0.03),
+    num('blur', 'Frost', 0, 60, 0.5, 0),
+    num('bevel', 'Dome', 4, 300, 1, 70, true),
+    num('softness', 'Softness', 0, 80, 1, 10, true),
+  ],
+  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  reach: (p) => n(p, 'refraction') * 70,
+  glsl: /* glsl */ `
+uniform vec3 u_tint;
+uniform float u_refraction, u_dispersion, u_magnify, u_iridescence, u_rim, u_tintAmount;
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float d = dt / u_k;
+  float cov = cover(dt);
+  if (cov <= 0.0) return vec4(0.0);
+  vec3 n = normalAt(uv, 1.0);
+  float steep = 1.0 - n.z;
+  vec2 ctr = (u_bbox.xy + u_bbox.zw) * 0.5;
+  vec2 m = ctr + (uv - ctr) * (1.0 - u_magnify * 0.6);
+  vec2 off = offsetUv(-n.xy * u_refraction * 60.0 * (0.35 + steep));
+  float sp = u_dispersion * 0.4;
+  vec3 c = vec3(behindBlur(m + off * (1.0 - sp)).r, behindBlur(m + off).g, behindBlur(m + off * (1.0 + sp)).b);
+  vec3 iri = spectrum(atan(n.y, n.x) / 6.2832 + steep * 1.7);
+  c = mix(c, c * 0.35 + iri, clamp(steep * steep * u_iridescence * 1.6, 0.0, 1.0) * 0.7);
+  c = mix(c, u_tint, u_tintAmount);
+  vec3 L = normalize(vec3(-0.5, -0.6, 0.62));
+  float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 40.0);
+  c += vec3(spec) * 0.8 * u_rim;
+  // A thin dark rim where the glass edge catches nothing.
+  c *= 1.0 - smoothstep(-2.5, 0.0, d) * 0.4 * u_rim;
+  return vec4(clamp(c, 0.0, 1.0) * cov, cov);
+}`,
+};
+
+const thermal: EffectDef = {
+  id: 'thermal',
+  name: 'Thermal',
+  description: 'Heat-camera colours: a cool core that heats up toward the edges and glows out into the canvas.',
+  params: [
+    num('spread', 'Heat spread', 4, 300, 1, 70),
+    num('glow', 'Glow', 0, 400, 1, 140),
+    num('glowAmount', 'Glow amount', 0, 1, 0.01, 0.9),
+    num('noise', 'Hot spots', 0, 1, 0.01, 0.35),
+    num('scale', 'Spot size', 0.2, 4, 0.01, 1),
+    num('shift', 'Shift colours', -0.5, 0.5, 0.01, 0),
+    num('invert', 'Hot core', 0, 1, 1, 0),
+    num('grain', 'Grain', 0, 1, 0.01, 0.55),
+    num('seed', 'Seed', 0, 100, 0.1, 2, true),
+  ],
+  height: (p) => ({ profile: 2, bevel: n(p, 'spread'), softness: n(p, 'spread') * 0.4 }),
+  reach: (p) => n(p, 'glow') * 3 * Math.min(1, n(p, 'glowAmount') * 2),
+  glsl: /* glsl */ `
+uniform float u_spread, u_glow, u_glowAmount, u_noise, u_scale, u_shift, u_invert, u_grain, u_seed;
+vec3 heat(float t) {
+  t = clamp(t, 0.0, 1.0);
+  vec3 c0 = vec3(0.06, 0.17, 1.0), c1 = vec3(0.18, 0.55, 1.0), c2 = vec3(0.62, 0.84, 1.0), c3 = vec3(1.0, 0.95, 0.54), c4 = vec3(1.0, 0.7, 0.12), c5 = vec3(1.0, 0.23, 0.12), c6 = vec3(0.91, 0.07, 0.24);
+  if (t < 0.25) return mix(c0, c1, t / 0.25);
+  if (t < 0.42) return mix(c1, c2, (t - 0.25) / 0.17);
+  if (t < 0.55) return mix(c2, c3, (t - 0.42) / 0.13);
+  if (t < 0.7) return mix(c3, c4, (t - 0.55) / 0.15);
+  if (t < 0.85) return mix(c4, c5, (t - 0.7) / 0.15);
+  return mix(c5, c6, (t - 0.85) / 0.15);
+}
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float d = dt / u_k;
+  float cov = cover(dt);
+  vec2 p = artPx(uv);
+  float h = d <= 0.0 ? 0.5 * (1.0 - H(uv)) : 1.0 - 0.5 * exp(-d / max(u_glow, 1.0));
+  h += (fbm3(p / (180.0 * u_scale) + u_seed) - 0.5) * u_noise * 0.6;
+  if (u_invert > 0.5) h = 1.0 - h;
+  vec3 c = heat(h + u_shift);
+  c += (hash12(floor(p * u_k) + u_seed) - 0.5) * u_grain * 0.22;
+  float a = max(cov, (1.0 - cov) * u_glowAmount * exp(-max(d, 0.0) / max(u_glow * 1.2, 1.0)));
+  return vec4(clamp(c, 0.0, 1.0) * a, a);
+}`,
+};
+
+const prism: EffectDef = {
+  id: 'prism',
+  name: 'Prism light',
+  description: 'Spectral light streaks shining out from the shapes, away from a centre. Lovely with Screen blending on black.',
+  params: [
+    num('length', 'Streak length', 0, 1, 0.01, 0.55),
+    num('intensity', 'Intensity', 0, 3, 0.01, 1.3),
+    num('hue', 'Hue', 0, 1, 0.005, 0),
+    num('spread', 'Colour spread', 0, 3, 0.01, 1),
+    num('saturation', 'Saturation', 0, 1.5, 0.01, 1),
+    num('core', 'Shapes glow', 0, 2, 0.01, 0.8),
+    num('cx', 'Centre X', -1, 1, 0.01, 0, true),
+    num('cy', 'Centre Y', -1, 1, 0.01, 0, true),
+  ],
+  reach: (p, s) => n(p, 'length') * Math.max(s.w, s.h) * 0.7,
+  glsl: /* glsl */ `
+uniform float u_length, u_intensity, u_hue, u_spread, u_saturation, u_core, u_cx, u_cy;
+vec4 effect(vec2 uv) {
+  vec2 ctr = mix(u_bbox.xy, u_bbox.zw, vec2(0.5 + 0.5 * u_cx, 0.5 + 0.5 * u_cy));
+  vec2 toC = ctr - uv;
+  float acc = 0.0;
+  float jit = hash12(floor(artPx(uv) * u_k));
+  for (int i = 0; i < 40; i++) {
+    float s = (float(i) + jit) / 40.0 * u_length;
+    acc += texture(u_mask, uv + toC * s).a * (1.0 - s / max(u_length, 1e-3));
+  }
+  acc = acc / 40.0 * 3.0;
+  vec2 v = artPx(uv) - artPx(ctr);
+  vec3 col = spectrum(atan(v.y, v.x) / 6.2832 * u_spread + u_hue);
+  col = mix(vec3(dot(col, vec3(0.333))), col, u_saturation);
+  float core = cover(sdfPx(uv));
+  vec3 rgb = col * acc * u_intensity + mix(col, vec3(1.0), 0.2) * core * u_core;
+  float a = clamp(max(max(rgb.r, rgb.g), rgb.b), 0.0, 1.0);
+  return vec4(min(rgb, vec3(a)), a);
+}`,
+};
+
+const colorDots: EffectDef = {
+  id: 'colordots',
+  name: 'Colour dots',
+  description: 'A soft colour field printed as a dot screen: dots grow where the colour is bright.',
+  params: [
+    col('c1', 'Hot', '#ff2a14'),
+    col('c2', 'Warm', '#ffb21f'),
+    col('c3', 'Cool', '#2d3cff'),
+    col('c4', 'Dark', '#12030a'),
+    num('cell', 'Dot spacing', 3, 60, 0.5, 11),
+    num('contrast', 'Contrast', 0.3, 3, 0.01, 1.1),
+    num('softness', 'Softness', 0.2, 2, 0.01, 1),
+    num('angle', 'Screen angle', 0, 90, 1, 0, true),
+    num('seed', 'Arrangement', 0, 100, 0.1, 4),
+  ],
+  reach: () => 0,
+  glsl: /* glsl */ `
+uniform vec3 u_c1, u_c2, u_c3, u_c4;
+uniform float u_cell, u_contrast, u_softness, u_angle, u_seed;
+float blob(vec2 q, vec2 c, vec2 r) { vec2 k = (q - c) / max(r, vec2(1e-3)); return exp(-dot(k, k) * 1.6); }
+vec3 field(vec2 q) {
+  float s = u_seed;
+  vec3 c = u_c4;
+  c = mix(c, u_c1, blob(q, vec2(0.5 + 0.1 * cos(s), 0.85), vec2(0.45, 0.32) * u_softness));
+  c = mix(c, u_c2, blob(q, vec2(0.08 + 0.1 * sin(s * 1.3), 0.3), vec2(0.18, 0.3) * u_softness) * 0.9);
+  c = mix(c, u_c2, blob(q, vec2(0.92, 0.32 + 0.1 * cos(s * 0.7)), vec2(0.16, 0.26) * u_softness) * 0.8);
+  c = mix(c, u_c3, blob(q, vec2(0.02, 0.6 + 0.1 * sin(s)), vec2(0.12, 0.2) * u_softness) * 0.9);
+  c = mix(c, u_c4, blob(q, vec2(0.5, 0.15), vec2(0.3, 0.3) * u_softness) * 0.8);
+  return c;
+}
+vec4 effect(vec2 uv) {
+  float cov = cover(sdfPx(uv));
+  if (cov <= 0.0) return vec4(0.0);
+  float a = radians(u_angle);
+  mat2 R = mat2(cos(a), sin(a), -sin(a), cos(a));
+  vec2 p = R * artPx(uv);
+  vec2 g = p / u_cell;
+  vec2 cellC = transpose(R) * ((floor(g) + 0.5) * u_cell);
+  vec2 uvC = (cellC - u_region.xy) / u_region.zw;
+  vec3 c = field(clamp(boxUv(uvC), 0.0, 1.0));
+  float lum = pow(clamp(dot(c, vec3(0.3, 0.59, 0.11)) * 2.0, 0.0, 1.0), u_contrast);
+  float r = 0.5 * u_cell * clamp(sqrt(lum) * 1.35, 0.0, 1.0);
+  float dist = length(fract(g) - 0.5) * u_cell;
+  float aa = max(fwidth(dist), 1e-3);
+  float dotA = clamp((r - dist) / aa + 0.5, 0.0, 1.0) * cov;
+  vec3 col = clamp(c / max(max(c.r, max(c.g, c.b)), 0.25), 0.0, 1.0);
+  return vec4(col * dotA, dotA);
+}`,
+};
+
+const plush: EffectDef = {
+  id: 'plush',
+  name: 'Plush',
+  description: 'Soft fuzzy fabric with a furry edge, like a stuffed toy.',
+  params: [
+    col('color', 'Fabric', '#e5179b'),
+    col('shade', 'Shade', '#7d0753'),
+    num('fuzz', 'Fuzz', 0, 40, 0.5, 9),
+    num('density', 'Fur fineness', 0.2, 4, 0.01, 1),
+    num('light', 'Light', 0, 1, 0.01, 0.75),
+    num('sheen', 'Sheen', 0, 1.5, 0.01, 0.45),
+    num('bevel', 'Puff', 4, 300, 1, 80, true),
+    num('softness', 'Softness', 0, 80, 1, 24, true),
+  ],
+  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  reach: (p) => n(p, 'fuzz') * 2 + 4,
+  glsl: /* glsl */ `
+uniform vec3 u_color, u_shade;
+uniform float u_fuzz, u_density, u_light, u_sheen;
+vec4 effect(vec2 uv) {
+  float d = sdfArt(uv);
+  vec2 p = artPx(uv);
+  float f1 = fbm3(p * 0.32 * u_density);
+  float f2 = vnoise(p * 1.1 * u_density);
+  float hair = f1 * 0.65 + f2 * 0.35 - 0.5;
+  float dd = d - hair * u_fuzz * 1.6 - u_fuzz * 0.15;
+  float a = clamp(0.5 - dd / max(fwidth(dd), 0.75), 0.0, 1.0);
+  if (a <= 0.0) return vec4(0.0);
+  vec3 n = normalAt(uv, 1.0);
+  vec3 L = normalize(vec3(-0.4, -0.55, 0.73));
+  float lam = clamp(dot(n, L) * 0.5 + 0.5, 0.0, 1.0);
+  vec3 c = mix(u_shade, u_color, mix(0.75, pow(lam, 0.8), u_light));
+  c *= 0.86 + 0.28 * (f2 - 0.5) + 0.12 * (f1 - 0.5);
+  float rim = (1.0 - n.z) * u_sheen;
+  c += mix(u_color, vec3(1.0), 0.55) * rim * 0.35;
+  // Stray hairs past the edge are thinner and darker.
+  c *= mix(0.75, 1.0, clamp(-d / max(u_fuzz, 1.0), 0.0, 1.0));
+  return vec4(clamp(c, 0.0, 1.0) * a, a);
+}`,
+};
+
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;
@@ -896,4 +1171,14 @@ export const PRESETS: Preset[] = [
   { name: 'Flat ink', effect: 'flat', params: { fill: '#0a0a0a' }, bg: '#7b4dff', tags: 'solid black' },
   { name: 'Peach gradient', effect: 'flat', params: { fill: '#ffb36b', fill2: '#ff3d7f', gradient: 1 }, bg: '#130f1a', tags: 'gradient' },
   { name: 'Electric gradient', effect: 'flat', params: { fill: '#45f3ff', fill2: '#7b4dff', gradient: 1, angle: 135 }, bg: '#08080c', tags: 'gradient blue' },
+  { name: 'Frosted glass', effect: 'frost', params: {}, bg: '#1b1d2a', tags: 'glass blur backdrop ui card' },
+  { name: 'Frosted indigo', effect: 'frost', params: { tint: '#dfe3ff', tint2: '#3542d6', gradient: 0.85, tintAmount: 0.4, blur: 30 }, bg: '#14151c', tags: 'glass blur gradient folder' },
+  { name: 'Clear lens', effect: 'lens', params: {}, bg: '#eef0f0', tags: 'glass refraction bubble water drop' },
+  { name: 'Prism lens', effect: 'lens', params: { dispersion: 1.2, iridescence: 1.1, refraction: 0.9, magnify: 0.1 }, bg: '#000000', tags: 'glass crystal rainbow iridescent cube' },
+  { name: 'Thermal', effect: 'thermal', params: {}, bg: '#e8133c', tags: 'heat camera infrared map' },
+  { name: 'Hot core', effect: 'thermal', params: { invert: 1, glowAmount: 0.6 }, bg: '#0b1a8f', tags: 'heat thermal' },
+  { name: 'Prism light', effect: 'prism', params: {}, bg: '#000000', tags: 'rainbow streaks light rays spectrum' },
+  { name: 'Colour dots', effect: 'colordots', params: {}, bg: '#000000', tags: 'halftone gradient dot screen led' },
+  { name: 'Plush pink', effect: 'plush', params: {}, bg: '#3ecf3e', tags: 'fuzzy toy fabric fur' },
+  { name: 'Plush moss', effect: 'plush', params: { color: '#5ccf3a', shade: '#1f6b12' }, bg: '#151515', tags: 'fuzzy toy fabric fur green' },
 ];

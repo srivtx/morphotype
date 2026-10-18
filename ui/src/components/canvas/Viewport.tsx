@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { duplicateSelected, editPoints, editText, endTextEdit, finishDrawing, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
 import type { Box } from '../../engine/types';
-import { effectById } from '../../render/effects';
-import { Renderer, type SceneItem } from '../../render/renderer';
+import { Renderer, sceneItem, type SceneItem } from '../../render/renderer';
 import { apply, invert, type Pt, type Xform } from '../../state/geometry';
 import { isGroup, type Node, type ShapeLayer } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, toast, useStore } from '../../state/store';
@@ -31,7 +30,7 @@ export function syncScene(r: Renderer) {
   const items: SceneItem[] = [];
   for (const o of objects) {
     const out = renders.get(o.id);
-    if (out) items.push({ id: o.id, d: out.d, bbox: out.bbox, effect: effectById(o.style.effect), params: o.style.params, stroke: o.style.stroke, opacity: o.style.opacity, blend: o.style.blend });
+    if (out) items.push(sceneItem(o.id, out, o.style));
   }
   r.setScene(items);
   r.setBackground(s.project.background);

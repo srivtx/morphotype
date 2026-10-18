@@ -10,6 +10,7 @@ import { edit, redo, select, setSettings, store, toast, undo } from '../state/st
 import { ancestors } from '../state/tree';
 import { goHome } from './projects';
 import {
+  addIconGrid,
   addShape,
   alignSelected,
   applyPreset,
@@ -75,6 +76,8 @@ export function commands(): Command[] {
   const list: Command[] = [
     // File
     { id: 'home', title: 'Home: all designs and fonts', group: 'File', icon: 'grid', keys: ['alt+mod+h'], when: () => store.get().screen === 'editor', run: () => void goHome() },
+    { id: 'icon-grid', title: 'Show or hide the app-icon grid', group: 'View', icon: 'grid', keywords: 'keylines guides ios macos icon', run: () => setSettings({ iconGrid: !store.get().settings.iconGrid }) },
+    { id: 'add-icon-grid', title: 'Add the app-icon grid as layers', group: 'Add', icon: 'grid', keywords: 'keylines guides presentation icon', run: () => addIconGrid() },
     { id: 'new', title: 'New from template…', group: 'File', icon: 'sparkle', keys: ['mod+n'], run: () => store.set({ dialog: { kind: 'templates' } }) },
     { id: 'open', title: 'Open project…', group: 'File', icon: 'open', keys: ['mod+o'], run: () => void openProject() },
     { id: 'save', title: 'Save project…', group: 'File', icon: 'save', keys: ['mod+s'], run: () => void saveProject() },

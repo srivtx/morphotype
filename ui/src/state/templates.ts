@@ -1,6 +1,7 @@
 // Starting points. Each one is a small, fully editable document.
 import { effectById } from '../render/effects';
 import { brushById } from './brushes';
+import { LAB_TEMPLATES } from './templatesLab';
 import { background, fill, group, MODIFIER_UI, mods, pattern, strokeLayer, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer } from './model';
 
 /**
@@ -718,34 +719,35 @@ const ALL: Template[] = [
         symbolLayer('pill', 380, { x: -470, y: 300, rotation: -52, name: 'Pencil', style: shaded({ rampAngle: 140 }) }, { aspect: 3.4 }),
         symbolLayer('heart', 320, { x: 20, y: 300, rotation: 4, name: 'Heart', style: shaded({ rampAngle: 230 }) }),
         symbolLayer('squircle', 300, { x: 520, y: 320, rotation: 34, name: 'Tile', style: shaded({ rampAngle: 60 }) }, { exponent: 12, aspect: 1 }),
-        label('WOWS', -740, 40),
-        underline(-740, 85, 160),
-        label('INTERACTIVE\n+ WEB', -10, -400, 52),
-        underline(20, -335, 190),
-        label('3D', 760, -20),
-        underline(760, 18, 110),
-        label('HANDMADE', -10, 70),
-        underline(-10, 110, 260),
-        label('ILLUSTRATION', -560, 470),
-        underline(-560, 508, 300),
+        ...(
+          [
+            ['WOWS', -740, 40, 64, -740, 85, 160],
+            ['INTERACTIVE\n+ WEB', -10, -400, 52, 20, -335, 190],
+            ['3D', 760, -20, 64, 760, 18, 110],
+            ['HANDMADE', -10, 70, 64, -10, 110, 260],
+            ['ILLUSTRATION', -560, 470, 64, -560, 508, 300],
+          ] as [string, number, number, number, number, number, number][]
+        ).map(([t, x, y, size, ux, uy, w]) => group([label(t, x, y, size), underline(ux, uy, w)], { name: t.replace('\n', ' '), open: false })),
         label('KEYFRAME\nANIMATION', 760, 150, 52),
       ];
-      for (const [a, b, bend, name] of [
-        [[-760, -10], [-640, -90], -0.25, 'Arrow'],
-        [[200, -320], [240, -200], 0.6, 'Arrow'],
-        [[740, -70], [690, -150], 0.3, 'Arrow'],
-        [[120, 80], [200, 190], -0.3, 'Arrow'],
-        [[-430, 430], [-440, 360], 0.2, 'Arrow'],
-        [[700, 220], [640, 290], 0.3, 'Arrow'],
-      ] as [P, P, number, string][]) {
+      const arrows: Node[] = [];
+      for (const [a, b, bend] of [
+        [[-760, -10], [-640, -90], -0.25],
+        [[200, -320], [240, -200], 0.6],
+        [[740, -70], [690, -150], 0.3],
+        [[120, 80], [200, 190], -0.3],
+        [[-430, 430], [-440, 360], 0.2],
+        [[700, 220], [640, 290], 0.3],
+      ] as [P, P, number][]) {
         const [shaft, head] = arrow(a, b, bend);
-        layers.push(drawn(shaft, 7, ink, 'marker', name, 0, 0, 0.15), drawn(head, 7, ink, 'marker', `${name} head`));
+        arrows.push(group([drawn(shaft, 7, ink, 'marker', 'Shaft', 0, 0, 0.15), drawn(head, 7, ink, 'marker', 'Head')], { name: 'Arrow', open: false }));
       }
       // Little "wow" ticks around the star.
-      for (const [x, y, a] of [[-560, -400, 90], [-380, -330, 40], [-330, -170, 0], [-760, -280, 150], [-560, 70, 270]] as [number, number, number][]) {
+      const ticks = ([[-560, -400, 90], [-380, -330, 40], [-330, -170, 0], [-760, -280, 150], [-560, 70, 270]] as [number, number, number][]).map(([x, y, a]) => {
         const r = (a * Math.PI) / 180;
-        layers.push(drawn([[0, 0], [22 * Math.cos(r), -22 * Math.sin(r)]], 7, ink, 'marker', 'Tick', x, y));
-      }
+        return drawn([[0, 0], [22 * Math.cos(r), -22 * Math.sin(r)]], 7, ink, 'marker', 'Tick', x, y);
+      });
+      layers.push(group(arrows, { name: 'Arrows', open: false }), group(ticks, { name: 'Ticks', open: false }));
       return project('Printed shapes', layers, solid('#0aa84f', { grain: 0.15 }), { width: 1920, height: 1080 });
     },
   },
@@ -816,5 +818,8 @@ const ALL: Template[] = [
 ];
 
 /** Newest, most current looks first. */
-const FEATURED = ['Printed shapes', 'Night notes', 'Echo rings', 'Sun stamp', 'Ring seal', 'Voxel cursor', 'Dot type', 'Folder sticker', 'Pixel wordmark', 'Pixel poster', 'Dither signal', 'Fused band', 'Pixel garden'];
-export const TEMPLATES: Template[] = [...FEATURED.map((n) => ALL.find((t) => t.name === n)!).filter(Boolean), ...ALL.filter((t) => !FEATURED.includes(t.name))];
+const FEATURED = [
+  ...LAB_TEMPLATES.map((t) => t.name),
+  'Printed shapes', 'Night notes', 'Echo rings', 'Sun stamp', 'Ring seal', 'Voxel cursor', 'Dot type', 'Folder sticker', 'Pixel wordmark', 'Pixel poster', 'Dither signal', 'Fused band', 'Pixel garden'];
+const EVERY = [...ALL, ...LAB_TEMPLATES];
+export const TEMPLATES: Template[] = [...FEATURED.map((n) => EVERY.find((t) => t.name === n)!).filter(Boolean), ...EVERY.filter((t) => !FEATURED.includes(t.name))];

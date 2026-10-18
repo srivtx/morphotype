@@ -36,11 +36,14 @@ export type Modifier =
     }
   | { kind: 'echo'; count: number; spacing: number; width: number }
   | { kind: 'fuse'; amount: number }
-  | { kind: 'fitCircle'; amount: number };
+  | { kind: 'fitCircle'; amount: number }
+  | { kind: 'isometric'; face: IsoFace }
+  | { kind: 'foam'; amount: number; size: number; wall: number; spread: number; angle: number; seed: number };
 
 export type RepeatMode = 'radial' | 'grid' | 'trail';
 
-export type PixelShape = 'square' | 'dot' | 'rounded';
+export type PixelShape = 'square' | 'dot' | 'rounded' | 'cross' | 'plus' | 'diamond';
+export type IsoFace = 'top' | 'left' | 'right';
 export type WarpStyle = 'custom' | 'arch' | 'arc' | 'arcLower' | 'bulge' | 'flag' | 'rise' | 'fish' | 'inflate' | 'squeeze' | 'twist';
 
 export type ModifierKind = Modifier['kind'];
@@ -74,7 +77,12 @@ export type SymbolSpec =
   | { kind: 'half' }
   | { kind: 'cove' }
   | { kind: 'pill'; aspect: number }
-  | { kind: 'folder'; tab: number; corner: number };
+  | { kind: 'folder'; tab: number; corner: number }
+  | { kind: 'wavy'; waves: number; depth: number; scallop: number }
+  | { kind: 'lens'; aspect: number }
+  | { kind: 'cloud'; puffs: number; seed: number }
+  | { kind: 'globe'; meridians: number; parallels: number; weight: number; aspect: number }
+  | { kind: 'asterisk'; arms: number; weight: number; inner: number };
 
 export type SymbolKind = SymbolSpec['kind'];
 

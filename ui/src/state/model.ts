@@ -21,6 +21,21 @@ export interface Stroke {
 
 export type BlendMode = 'normal' | 'multiply' | 'screen';
 
+/** Solid 3D extrusion behind a layer, like letters cut from thick card. */
+export interface Depth {
+  /** Artboard px. */
+  amount: number;
+  /** Direction the sides go toward, degrees clockwise from up (135 = down-right). */
+  angle: number;
+  color: string;
+  /** 0..1: how much the sides darken toward the back. */
+  shade: number;
+}
+
+export function depth(amount = 40, color = '#ff5a1f', angle = 150): Depth {
+  return { amount, angle, color, shade: 0.35 };
+}
+
 /** How an object is shaded: an effect and its parameters, plus an optional stroke. */
 export interface Style {
   effect: string;
@@ -30,6 +45,7 @@ export interface Style {
   opacity?: number;
   /** How it mixes with what's below (multiply for overprinted inks). */
   blend?: BlendMode;
+  depth?: Depth | null;
 }
 
 export function stroke(width = 6, color = '#0a0a0a', align: StrokeAlign = 'outside'): Stroke {
@@ -98,7 +114,7 @@ export interface Tile {
   holo: boolean;
 }
 
-export type PatternKind = 'grid' | 'dots' | 'lines' | 'diagonal' | 'checker';
+export type PatternKind = 'grid' | 'dots' | 'lines' | 'diagonal' | 'checker' | 'doodles';
 
 /** A repeating pattern over the page fill: grid paper, dot grid, stripes… */
 export interface Pattern {
@@ -190,6 +206,8 @@ export const MODIFIER_DEFAULTS: Record<ModifierKind, Modifier> = {
   echo: { kind: 'echo', count: 3, spacing: 0.06, width: 0.015 },
   fuse: { kind: 'fuse', amount: 0.08 },
   fitCircle: { kind: 'fitCircle', amount: 1 },
+  isometric: { kind: 'isometric', face: 'top' },
+  foam: { kind: 'foam', amount: 0.7, size: 0.16, wall: 0.012, spread: 0, angle: 135, seed: 1 },
 };
 
 export interface NumberField {
@@ -203,7 +221,7 @@ export interface NumberField {
   advanced?: boolean;
   /** A 0/1 value shown as a switch. */
   toggle?: boolean;
-  /** Only shown while other fields have these values. */
+  /** Only shown while other fields have these values ('nonzero': while a number isn't 0). */
   show?: Record<string, string>;
 }
 
@@ -216,7 +234,8 @@ export interface ChoiceField {
 
 /** Whether a field applies given the modifier's current values. */
 export function fieldShown(f: Field, values: Record<string, unknown>): boolean {
-  return !f.show || Object.entries(f.show).every(([k, v]) => values[k] === v);
+  // 'nonzero' shows a field only while a number field isn't 0 (e.g. a fade's direction).
+  return !f.show || Object.entries(f.show).every(([k, v]) => (v === 'nonzero' ? Number(values[k] ?? 0) !== 0 : values[k] === v));
 }
 
 export type Field = NumberField | ChoiceField;
@@ -263,6 +282,9 @@ export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
           { value: 'square', label: 'Blocks' },
           { value: 'dot', label: 'Dots' },
           { value: 'rounded', label: 'Soft' },
+          { value: 'cross', label: 'Cross' },
+          { value: 'plus', label: 'Plus' },
+          { value: 'diamond', label: 'Diamond' },
         ],
       },
       { key: 'size', label: 'Pixel size', min: 0.01, max: 0.3, step: 0.001 },
@@ -300,6 +322,19 @@ export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
     ],
   },
   fuse: { label: 'Fuse', blurb: 'Melt nearby letters into one solid form', group: 'Shape', fields: [{ key: 'amount', label: 'Close gaps', min: 0, max: 0.4, step: 0.001 }] },
+  foam: {
+    label: 'Foam',
+    blurb: 'Packed bubbles cut out, like foam or a sponge',
+    group: 'Shape',
+    fields: [
+      { key: 'amount', label: 'Bubbles', min: 0, max: 1, step: 0.01 },
+      { key: 'size', label: 'Largest', min: 0.02, max: 0.6, step: 0.005 },
+      { key: 'wall', label: 'Walls', min: 0.002, max: 0.08, step: 0.001 },
+      { key: 'spread', label: 'Fade out', min: 0, max: 1, step: 0.01 },
+      { key: 'angle', label: 'Fade toward', min: 0, max: 360, step: 1, show: { spread: 'nonzero' } },
+      { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1, integer: true, advanced: true },
+    ],
+  },
   repeat: {
     label: 'Repeat',
     blurb: 'Copies around a circle or in a grid',
@@ -349,6 +384,22 @@ export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
     ],
   },
   arc: { label: 'Arc', blurb: 'Set text on a circle; 2 goes all the way round', group: 'Distort', fields: [{ key: 'bend', label: 'Bend', min: -2, max: 2, step: 0.01 }] },
+  isometric: {
+    label: 'Isometric',
+    blurb: 'Lay it on a face of a 3D cube',
+    group: 'Distort',
+    fields: [
+      {
+        key: 'face',
+        label: 'Face',
+        options: [
+          { value: 'top', label: 'Top' },
+          { value: 'left', label: 'Left' },
+          { value: 'right', label: 'Right' },
+        ],
+      },
+    ],
+  },
   fitCircle: { label: 'Fit in circle', blurb: 'Squeeze into a round badge or ellipse', group: 'Distort', fields: [{ key: 'amount', label: 'Amount', min: 0, max: 1.5, step: 0.01 }] },
   wave: {
     label: 'Wave',
@@ -430,6 +481,11 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   half: { kind: 'half' },
   cove: { kind: 'cove' },
   folder: { kind: 'folder', tab: 0.38, corner: 0.05 },
+  wavy: { kind: 'wavy', waves: 18, depth: 0.08, scallop: 0 },
+  lens: { kind: 'lens', aspect: 0.55 },
+  cloud: { kind: 'cloud', puffs: 3, seed: 0 },
+  globe: { kind: 'globe', meridians: 2, parallels: 2, weight: 0.04, aspect: 1 },
+  asterisk: { kind: 'asterisk', arms: 8, weight: 0.12, inner: 0 },
 };
 
 export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Badge' | 'Mascot'; fields: NumberField[] }> = {
@@ -468,7 +524,35 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
       { key: 'rounding', label: 'Rounding', min: 0, max: 0.5, step: 0.005 },
     ],
   },
+  wavy: {
+    label: 'Wavy badge',
+    group: 'Badge',
+    fields: [
+      { key: 'waves', label: 'Waves', min: 3, max: 64, step: 1, integer: true },
+      { key: 'depth', label: 'Depth', min: 0, max: 0.3, step: 0.005 },
+      { key: 'scallop', label: 'Scallops', min: 0, max: 1, step: 0.01 },
+    ],
+  },
   sparkle: { label: 'Sparkle', group: 'Badge', fields: [{ key: 'pinch', label: 'Pinch', min: 0, max: 0.9, step: 0.01 }] },
+  asterisk: {
+    label: 'Asterisk',
+    group: 'Badge',
+    fields: [
+      { key: 'arms', label: 'Arms', min: 2, max: 64, step: 1, integer: true },
+      { key: 'weight', label: 'Line weight', min: 0.005, max: 0.4, step: 0.005 },
+      { key: 'inner', label: 'Empty middle', min: 0, max: 0.9, step: 0.01 },
+    ],
+  },
+  globe: {
+    label: 'Globe',
+    group: 'Badge',
+    fields: [
+      { key: 'meridians', label: 'Meridians', min: 0, max: 8, step: 1, integer: true },
+      { key: 'parallels', label: 'Parallels', min: 0, max: 8, step: 1, integer: true },
+      { key: 'weight', label: 'Line weight', min: 0.01, max: 0.2, step: 0.005 },
+      { key: 'aspect', label: 'Width', min: 0.3, max: 3, step: 0.01 },
+    ],
+  },
   flower: {
     label: 'Flower',
     group: 'Badge',
@@ -491,6 +575,7 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
   moon: { label: 'Moon', group: 'Badge', fields: [{ key: 'phase', label: 'Fullness', min: 0, max: 1, step: 0.01 }] },
   bolt: { label: 'Bolt', group: 'Badge', fields: [] },
   pill: { label: 'Pill', group: 'Basic', fields: [{ key: 'aspect', label: 'Aspect', min: 0.2, max: 8, step: 0.01 }] },
+  lens: { label: 'Lens', group: 'Basic', fields: [{ key: 'aspect', label: 'Width', min: 0.05, max: 1, step: 0.01 }] },
   quarter: { label: 'Quarter circle', group: 'Basic', fields: [] },
   half: { label: 'Half circle', group: 'Basic', fields: [] },
   cove: { label: 'Cove', group: 'Basic', fields: [] },
@@ -501,7 +586,15 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
       { key: 'tab', label: 'Tab', min: 0.1, max: 0.8, step: 0.005 },
       { key: 'corner', label: 'Corners', min: 0, max: 0.2, step: 0.005 },
     ],
+  },  cloud: {
+    label: 'Cloud',
+    group: 'Mascot',
+    fields: [
+      { key: 'puffs', label: 'Puffs', min: 1, max: 7, step: 1, integer: true },
+      { key: 'seed', label: 'Variation', min: 0, max: 99, step: 1, integer: true },
+    ],
   },
+
   arrow: {
     label: 'Arrow',
     group: 'Basic',
@@ -652,7 +745,7 @@ export function background(f: Fill = fill('solid', '#0b0b0d'), extra: Partial<Ba
 }
 
 export function pattern(kind: PatternKind, color = '#000000', extra: Partial<Pattern> = {}): Pattern {
-  return { kind, size: kind === 'dots' ? 40 : 100, weight: kind === 'dots' ? 3 : 3, color, opacity: 1, ...extra };
+  return { kind, size: kind === 'dots' ? 40 : kind === 'doodles' ? 120 : 100, weight: kind === 'doodles' ? 7 : 3, color, opacity: 1, ...extra };
 }
 
 export function tile(f: Fill, extra: Partial<Tile> = {}): Tile {

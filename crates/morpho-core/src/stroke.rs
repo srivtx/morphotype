@@ -123,6 +123,63 @@ pub fn outline(points: &[[f64; 3]], width: f64, taper: f64, smooth: f64, cell_hi
     extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 0.5)
 }
 
+/// Outline of constant-width lines with round caps and joins (`closed` lines
+/// loop back to their start). Overlaps merge cleanly, so globes, asterisks
+/// and line icons built from many strokes come out as one solid.
+pub fn polylines(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64) -> Shape {
+    let r = (width.abs() * 0.5).max(1e-4);
+    let mut bbox = Rect::EMPTY;
+    for (l, _) in lines {
+        for p in l {
+            bbox = bbox.union(&Rect { x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+        }
+    }
+    if bbox.is_empty() {
+        return Shape::default();
+    }
+    let cell = cell.min(r / 2.5).max(1e-4);
+    let pad = r + 3.0 * cell;
+    let g = Grid::covering(bbox, pad, cell);
+    let mut v = vec![(pad * 2.0) as f32; g.len()];
+    let mut seg = |a: Pt, b: Pt| {
+        let reach = r + 2.0 * g.cell;
+        let i0 = (((a.x.min(b.x) - reach - g.origin.x) / g.cell).floor().max(0.0)) as usize;
+        let j0 = (((a.y.min(b.y) - reach - g.origin.y) / g.cell).floor().max(0.0)) as usize;
+        let i1 = (((a.x.max(b.x) + reach - g.origin.x) / g.cell).ceil() as usize).min(g.w);
+        let j1 = (((a.y.max(b.y) + reach - g.origin.y) / g.cell).ceil() as usize).min(g.h);
+        let ab = b - a;
+        let l2 = ab.dot(ab);
+        for j in j0..j1 {
+            for i in i0..i1 {
+                let p = g.sample_pos(i, j);
+                let u = if l2 > 1e-12 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                let q = p - (a + ab * u);
+                let k = j * g.w + i;
+                let lim = v[k] as f64 + r;
+                let d2 = q.dot(q);
+                if lim > 0.0 && d2 < lim * lim {
+                    v[k] = (d2.sqrt() - r) as f32;
+                }
+            }
+        }
+    };
+    for (l, closed) in lines {
+        match l.len() {
+            0 => {}
+            1 => seg(l[0], l[0]),
+            n => {
+                for w in l.windows(2) {
+                    seg(w[0], w[1]);
+                }
+                if *closed {
+                    seg(l[n - 1], l[0]);
+                }
+            }
+        }
+    }
+    extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 0.5)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +206,16 @@ mod tests {
         assert!(b.width() > 200.0 && b.height() > 90.0);
         // The centre point (on the crossing) is inside.
         assert!(s.contours.iter().map(|c| crate::geom::winding(c, pt(0.0, 0.0))).sum::<i32>() != 0);
+    }
+
+    #[test]
+    fn crossing_lines_merge() {
+        // A plus from two bars: one contour, area of two bars minus the overlap.
+        let s = polylines(&[(vec![pt(-50.0, 0.0), pt(50.0, 0.0)], false), (vec![pt(0.0, -50.0), pt(0.0, 50.0)], false)], 10.0, 0.5);
+        assert_eq!(s.contours.len(), 1);
+        let caps = std::f64::consts::PI * 25.0;
+        let expect = 2.0 * (100.0 * 10.0 + caps) - 100.0;
+        assert!((s.area() - expect).abs() / expect < 0.03, "{} vs {expect}", s.area());
     }
 
     #[test]

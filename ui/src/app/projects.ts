@@ -2,7 +2,7 @@
 // library, and library housekeeping with undo.
 import { deleteProject, duplicateProject, listProjects, loadProject, renameProject, restoreProject } from '../state/library';
 import { migrate } from '../state/migrate';
-import { emptyProject, uid, type Project } from '../state/model';
+import { background, emptyProject, fill, uid, type Project } from '../state/model';
 import { openDocument, store, toast } from '../state/store';
 import type { Template } from '../state/templates';
 import { errorText, loadProjectFonts } from './actions';
@@ -18,7 +18,8 @@ export async function goHome() {
 
 /** A blank artboard. */
 export function newDesign(w = 1080, h = 1080, name = 'Untitled') {
-  const p: Project = { ...emptyProject(), name, layers: [], canvas: { width: w, height: h } };
+  // A white page reads as a page against the dark canvas.
+  const p: Project = { ...emptyProject(), name, layers: [], canvas: { width: w, height: h }, background: background(fill('solid', '#ffffff')) };
   openDocument(p, { mode: 'design' });
   fit();
 }

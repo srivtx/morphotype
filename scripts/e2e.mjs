@@ -352,6 +352,23 @@ try {
   await settle(800);
   await page.screenshot({ path: path.join(out, 'new-01-draw-photo-construction.png') });
 
+  // ---- depth, glass and the icon grid ----
+  await openTemplate('Frosted 404');
+  await page.locator('.row', { hasText: 'Caption' }).click();
+  await page.getByRole('tab', { name: 'Design' }).click();
+  await page.getByRole('button', { name: 'Add depth' }).click();
+  await settle();
+  s = await state();
+  check(layersOf(s).find((l) => l.name === 'Caption')?.style.depth?.amount > 0, 'Depth adds 3D sides to any layer');
+  await page.keyboard.press(`${mod}+k`);
+  await page.keyboard.type('Add the app-icon grid');
+  await page.keyboard.press('Enter');
+  check(await until((st) => st.project.layers.some((n) => n.type === 'group' && n.name === 'Icon grid')), 'the app-icon grid can be added as layers');
+  await settle(900);
+  await page.screenshot({ path: path.join(out, 'new-02-depth-glass-grid.png') });
+  // A new font starts from the selected text's typeface; start from the default.
+  await page.evaluate(() => window.morphotype.store.set({ selection: [] }));
+
   // ---- Type mode ----
   await page.keyboard.press(`${mod}+2`);
   await page.waitForSelector('.type-start', { timeout: 15_000 });

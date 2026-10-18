@@ -130,3 +130,28 @@ void main() {
   }
   o = vec4(acc / total, 0.0, 0.0, 0.0);
 }`;
+
+/** Separable Gaussian for colour (backdrop blur); samples by normalised uv so it can also downsample. */
+export const BLUR_RGBA_FS = /* glsl */ `#version 300 es
+precision highp float;
+uniform sampler2D u_src;
+uniform vec2 u_dir;
+uniform vec2 u_outSize;
+uniform float u_radius;
+out vec4 o;
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_outSize;
+  vec2 texel = 1.0 / vec2(textureSize(u_src, 0));
+  if (u_radius < 0.5) { o = texture(u_src, uv); return; }
+  float sigma = u_radius * 0.5;
+  float stride = max(u_radius / 12.0, 1.0);
+  float total = 0.0;
+  vec4 acc = vec4(0.0);
+  for (int i = -12; i <= 12; i++) {
+    float x = float(i) * stride;
+    float w = exp(-0.5 * x * x / (sigma * sigma));
+    acc += texture(u_src, uv + u_dir * x * texel) * w;
+    total += w;
+  }
+  o = acc / total;
+}`;

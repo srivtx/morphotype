@@ -7,6 +7,14 @@ import { Dialog } from './ui';
 
 const GUIDE: { title: string; steps: string[] }[] = [
   {
+    title: 'Your projects',
+    steps: [
+      'Home (⌥⌘H, or the grid button top left) lists every design and font you have made. They save on this device as you work, so there is nothing to save; “Saved” in the top bar confirms it.',
+      'Start a new design in a common size, a new font, or a template. Double-click a project name to rename it; the ⋯ menu duplicates or deletes (with Undo).',
+      'Save project (⌘S) still writes a .morpho file to share or back up, pictures and imported fonts included.',
+    ],
+  },
+  {
     title: 'Make a logo',
     steps: [
       'Start from a template (⌘N), or press T and click anywhere to type. Double-click any text to edit it right on the canvas; Esc or a click outside finishes.',
@@ -25,6 +33,7 @@ const GUIDE: { title: string; steps: string[] }[] = [
       'Edit points (P or double-click) turns text or a shape into an outline you can edit point by point. Double-click a line to add a point, double-click a point to make it smooth or sharp, ⌫ deletes.',
       'Add an image (⇧⌘I) as a Photo inside any shape, Trace it into vectors, or turn it into Pixel art with a few inks.',
       'Slice cuts rays and wedges, Repeat copies around a circle or in a trail, Echo lines draws contour rings, Fuse melts letters together.',
+      'Foam eats bubbles through a shape, Isometric lays it on a face of a 3D cube, and Pixels can be crosses, pluses or diamonds as well as blocks and dots.',
     ],
   },
   {
@@ -33,6 +42,9 @@ const GUIDE: { title: string; steps: string[] }[] = [
       'Press B and draw with a pen, marker, pencil or highlighter. [ and ] change the size; strokes stay editable.',
       'Give any layer a stroke, opacity or a Multiply blend in Appearance, and a pattern to the background (grid paper, dot grid…).',
       'Right-click a logo and choose Draw construction for guides, anchor points and metric lines, ready for a presentation.',
+      'Depth (in Appearance) gives any layer solid 3D sides in any direction and colour.',
+      'Glass materials see what is behind them: Frosted glass blurs it, Lens glass bends, magnifies and splits it into colour. Put them over type.',
+      'App icons: turn on Show the icon grid under App icon tile while you design, or add the grid as layers for a presentation shot.',
     ],
   },
   {
@@ -40,6 +52,7 @@ const GUIDE: { title: string; steps: string[] }[] = [
     steps: [
       'Switch to Type mode (⌘2). Name your font and start from a typeface or a blank set, then apply a look to every glyph at once: pixels, dots, rounding, weight, slant.',
       'Click a glyph to open it. Drag its points, give it its own modifiers, change its width, or reset it to the base font.',
+      'Build glyphs from layers in the Glyph tab: add circles, quarters, pills or any shape, cut ink traps and counters with them, or reuse another glyph (draw the dot once, use it on i, j and !). A glyph can skip the font look, and Bake into points turns the finished glyph into an outline you can reshape.',
       'Add any character you like, even ones the base font doesn’t have, and draw it or trace it from an image.',
       'Use in Design adds it to your font list under its own name. Export a .ttf to install, a .woff for the web, or the web kit with a ready-to-paste @font-face snippet.',
       'New to type design? Type basics (in the ⋯ menu of the Font tab, or ⌘K) explains cap height, x-height, spacing and more in five minutes.',

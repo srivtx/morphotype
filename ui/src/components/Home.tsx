@@ -279,7 +279,7 @@ export function Home() {
             <section className="home-section">
               <div className="home-section-head">
                 <h2>{view === 'home' ? 'Recent' : view === 'designs' ? 'Designs' : 'Fonts'}</h2>
-                <span className="dim small">{list === null ? '' : `${shown.length}`}</span>
+                <span className="dim small">{shown.length || ''}</span>
                 <span className="spacer" />
                 {view === 'home' && shown.length > 12 && (
                   <button className="link-btn" onClick={() => setView('designs')}>

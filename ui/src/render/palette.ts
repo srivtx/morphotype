@@ -24,6 +24,10 @@ export const COLOR_ROLES: Record<string, Record<string, ColorRole>> = {
   halftone: { ink: 'base' },
   riso: { ink: 'base', ink2: 'accent' },
   dither: { light: 'base', ink: 'shadow' },
+  frost: { tint: 'base', tint2: 'shadow' },
+  lens: { tint: 'base' },
+  colordots: { c1: 'base', c2: 'highlight', c3: 'accent', c4: 'shadow' },
+  plush: { color: 'base', shade: 'shadow' },
 };
 
 // ---------- OKLCH ----------

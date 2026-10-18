@@ -15,6 +15,12 @@ fn one() -> f64 {
 fn yes() -> bool {
     true
 }
+fn foam_size() -> f64 {
+    0.16
+}
+fn foam_wall() -> f64 {
+    0.012
+}
 fn d180() -> f64 {
     180.0
 }
@@ -184,6 +190,36 @@ pub enum Modifier {
     /// Squeeze the shape's box into an ellipse (a circle for a square box),
     /// like lettering filling a round badge. `amount` blends 0..1.
     FitCircle { #[serde(default = "one")] amount: f64 },
+    /// Lay the shape onto a face of an isometric cube (30° projection).
+    Isometric { #[serde(default)] face: IsoFace },
+    /// Packed bubbles cut out of the shape, like foam or a sponge. Bubbles
+    /// shrink toward the edges and thin out toward `angle` with `spread`.
+    Foam {
+        #[serde(default = "half")]
+        amount: f64,
+        /// Largest bubble, in em.
+        #[serde(default = "foam_size")]
+        size: f64,
+        /// Thinnest wall between bubbles, in em.
+        #[serde(default = "foam_wall")]
+        wall: f64,
+        /// 0 = bubbles everywhere, 1 = they fade out toward `angle`.
+        #[serde(default)]
+        spread: f64,
+        #[serde(default = "d180")]
+        angle: f64,
+        #[serde(default)]
+        seed: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IsoFace {
+    #[default]
+    Top,
+    Left,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +239,10 @@ pub enum PixelShape {
     Square,
     Dot,
     Rounded,
+    /// Diagonal cross (×); neighbours touch at the corners and chain up.
+    Cross,
+    Plus,
+    Diamond,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,6 +504,13 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
                         PixelShape::Dot => circle(c, side * 0.5, 20),
                         PixelShape::Rounded => rounded_square(c, side, side * 0.28),
                         PixelShape::Square => square_at(c, side),
+                        PixelShape::Plus => plus_at(c, side, 0.0, 0.34),
+                        // Thin diagonal arms reach the cell corners, so neighbours chain into a lattice.
+                        PixelShape::Cross => plus_at(c, side * std::f64::consts::SQRT_2, std::f64::consts::FRAC_PI_4, 0.2),
+                        PixelShape::Diamond => {
+                            let h = side * 0.5;
+                            vec![Pt { x: c.x, y: c.y - h }, Pt { x: c.x + h, y: c.y }, Pt { x: c.x, y: c.y + h }, Pt { x: c.x - h, y: c.y }]
+                        }
                     });
                 }
             }
@@ -478,6 +525,22 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             }
             Geo::poly_only(offset(&offset(&cut.poly, -r, ctx), r, ctx))
         }
+        Modifier::Isometric { face } => {
+            if bbox.is_empty() {
+                return geo;
+            }
+            let (c30, s30) = (30f64.to_radians().cos(), 0.5);
+            let m = match face {
+                IsoFace::Top => Affine([c30, s30, -c30, s30, 0.0, 0.0]),
+                IsoFace::Left => Affine([c30, s30, 0.0, 1.0, 0.0, 0.0]),
+                IsoFace::Right => Affine([c30, -s30, 0.0, 1.0, 0.0, 0.0]),
+            };
+            let c = bbox.center();
+            let mut g = geo;
+            g.transform(&Affine::translate(c.x, c.y).then(m).then(Affine::translate(-c.x, -c.y)));
+            g
+        }
+        Modifier::Foam { amount, size, wall, spread, angle, seed } => Geo::poly_only(foam(&geo.poly, ctx, amount, size, wall, spread, angle, seed)),
         Modifier::Echo { count, spacing, width } => {
             let n = (count.round() as usize).clamp(0, 40);
             let (sp, hw) = (spacing.abs().max(0.002) * em, (width.abs() * em * 0.5).max(1e-6));
@@ -631,6 +694,108 @@ fn dissolve_cells(mask: &mut [u8], g: &Grid, bbox: Rect, amount: f64, angle: f64
     }
 }
 
+/// Bubbles packed into a shape (largest first, rejecting overlaps through a
+/// spatial hash), cut out as circles from its distance field.
+#[allow(clippy::too_many_arguments)]
+fn foam(s: &Shape, ctx: &Ctx, amount: f64, size: f64, wall: f64, spread: f64, angle: f64, seed: u32) -> Shape {
+    let bbox = s.bbox();
+    let em = ctx.em;
+    let amount = amount.clamp(0.0, 1.0);
+    let rmax = (size.abs() * em * 0.5).max(em * 0.004);
+    if bbox.is_empty() || amount < 1e-3 {
+        return s.clone();
+    }
+    let rmin = rmax * 0.14;
+    let wall = wall.abs() * em;
+    // Fine enough that the smallest bubbles stay round.
+    let cell = ctx.cell().min(rmin * 0.7).max(em / 1024.0);
+    let band = rmax * 2.0 + 3.0 * cell;
+    let g = Grid::covering(bbox, 3.0 * cell, cell);
+    let mut v = signed_distance(s, &g, band);
+    let at = |p: Pt| -> f32 {
+        let i = (((p.x - g.origin.x) / g.cell) as isize).clamp(0, g.w as isize - 1) as usize;
+        let j = (((p.y - g.origin.y) / g.cell) as isize).clamp(0, g.h as isize - 1) as usize;
+        v[j * g.w + i]
+    };
+    let a = angle.to_radians();
+    let dir = Pt { x: a.sin(), y: -a.cos() };
+    let c = bbox.center();
+    let ext = (0.5 * (dir.x.abs() * bbox.width() + dir.y.abs() * bbox.height())).max(1e-9);
+    let spread = spread.clamp(0.0, 1.0);
+    // Spatial hash with cells as wide as the largest bubble.
+    let hc = rmax * 2.0 + wall;
+    let (hw, hh) = (((bbox.width() / hc).ceil() as usize + 1).max(1), ((bbox.height() / hc).ceil() as usize + 1).max(1));
+    let mut hash: Vec<Vec<u32>> = vec![Vec::new(); hw * hh];
+    let key = |p: Pt| -> (isize, isize) { (((p.x - bbox.x0) / hc).floor() as isize, ((p.y - bbox.y0) / hc).floor() as isize) };
+    let mut bubbles: Vec<(Pt, f64)> = Vec::new();
+    let mut rng = seed.wrapping_mul(2654435761).wrapping_add(0x9e3779b9) | 1;
+    let mut next = || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        rng as f64 / u32::MAX as f64
+    };
+    let area = bbox.width() * bbox.height();
+    let mut r = rmax;
+    while r >= rmin {
+        let tries = ((area / (r * r)) * 4.0 * amount).min(120_000.0) as usize;
+        for _ in 0..tries {
+            let p = Pt { x: bbox.x0 + next() * bbox.width(), y: bbox.y0 + next() * bbox.height() };
+            let r = r * (0.8 + 0.2 * next());
+            // Mostly inside: bubbles may bite into the edge a little.
+            if (at(p) as f64) > -r * 0.55 {
+                continue;
+            }
+            if spread > 0.0 {
+                let t = (((p.x - c.x) * dir.x + (p.y - c.y) * dir.y) / ext * 0.5 + 0.5).clamp(0.0, 1.0);
+                if next() < (t * spread * 1.4 - (1.0 - spread) * 0.2).clamp(0.0, 1.0) {
+                    continue;
+                }
+            }
+            if next() > amount.sqrt() {
+                continue;
+            }
+            let (ki, kj) = key(p);
+            let mut free = true;
+            'scan: for dj in -1..=1 {
+                for di in -1..=1 {
+                    let (i, j) = (ki + di, kj + dj);
+                    if i < 0 || j < 0 || i >= hw as isize || j >= hh as isize {
+                        continue;
+                    }
+                    for &b in &hash[j as usize * hw + i as usize] {
+                        let (q, rq) = bubbles[b as usize];
+                        if p.dist(q) < r + rq + wall {
+                            free = false;
+                            break 'scan;
+                        }
+                    }
+                }
+            }
+            if free && ki >= 0 && kj >= 0 && (ki as usize) < hw && (kj as usize) < hh {
+                hash[kj as usize * hw + ki as usize].push(bubbles.len() as u32);
+                bubbles.push((p, r));
+            }
+        }
+        r *= 0.7;
+    }
+    // Carve: inside a bubble the field turns positive (outside the shape).
+    for &(p, r) in &bubbles {
+        let reach = r + 2.0 * g.cell;
+        let i0 = (((p.x - reach - g.origin.x) / g.cell).floor().max(0.0)) as usize;
+        let j0 = (((p.y - reach - g.origin.y) / g.cell).floor().max(0.0)) as usize;
+        let i1 = (((p.x + reach - g.origin.x) / g.cell).ceil() as usize).min(g.w);
+        let j1 = (((p.y + reach - g.origin.y) / g.cell).ceil() as usize).min(g.h);
+        for j in j0..j1 {
+            for i in i0..i1 {
+                let k = j * g.w + i;
+                v[k] = v[k].max((r - g.sample_pos(i, j).dist(p)) as f32);
+            }
+        }
+    }
+    extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 1.5)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn slice(geo: Geo, ctx: &Ctx, count: f64, gap: f64, angle: f64, ring: f64, hole: f64, jitter: f64, seed: u32, shift: (f64, f64)) -> Geo {
     let bbox = geo.poly.bbox();
@@ -679,6 +844,17 @@ fn circle(c: Pt, r: f64, n: usize) -> Vec<Pt> {
             let a = k as f64 / n as f64 * std::f64::consts::TAU;
             Pt { x: c.x + r * a.cos(), y: c.y + r * a.sin() }
         })
+        .collect()
+}
+
+/// A plus (rotated by `turn` radians) whose arms span `side` and are `arm` × side thick.
+fn plus_at(c: Pt, side: f64, turn: f64, arm: f64) -> Vec<Pt> {
+    let h = side * 0.5;
+    let t = side * arm * 0.5;
+    let (sn, cs) = turn.sin_cos();
+    [(-t, -h), (t, -h), (t, -t), (h, -t), (h, t), (t, t), (t, h), (-t, h), (-t, t), (-h, t), (-h, -t), (-t, -t)]
+        .iter()
+        .map(|&(x, y)| Pt { x: c.x + x * cs - y * sn, y: c.y + x * sn + y * cs })
         .collect()
 }
 
@@ -884,6 +1060,48 @@ mod tests {
         g.curves = Some(crate::geom::poly_to_curves(&g.poly));
         let g = apply(g, &Modifier::Slant { angle: 12.0 }, &CTX);
         assert!(g.curves.is_some());
+    }
+
+    #[test]
+    fn isometric_keeps_area_ratio_and_curves() {
+        let mut g = Geo::poly_only(square(100.0));
+        g.curves = Some(crate::geom::poly_to_curves(&g.poly));
+        let t = apply(g.clone(), &Modifier::Isometric { face: IsoFace::Top }, &CTX);
+        assert!(t.curves.is_some());
+        // The top face of a cube: a rhombus, √3/2 of the area, twice as wide as tall.
+        assert!((t.poly.area().abs() - 10000.0 * 0.866).abs() < 5.0, "{}", t.poly.area());
+        let b = t.poly.bbox();
+        assert!((b.width() / b.height() - 3f64.sqrt()).abs() < 1e-6);
+        let l = apply(g, &Modifier::Isometric { face: IsoFace::Left }, &CTX);
+        assert!((l.poly.bbox().height() - 150.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn foam_cuts_bubbles_and_fades() {
+        let base = square(100.0);
+        let g = apply(Geo::poly_only(base.clone()), &Modifier::Foam { amount: 0.8, size: 0.15, wall: 0.01, spread: 0.0, angle: 180.0, seed: 3 }, &CTX);
+        let holes = g.poly.contours.iter().filter(|c| crate::geom::signed_area(c) < 0.0).count();
+        assert!(holes > 30, "{holes} bubbles");
+        assert!(g.poly.area() < 10000.0 * 0.85 && g.poly.area() > 10000.0 * 0.2, "{}", g.poly.area());
+        // Fading toward the bottom keeps the bottom more solid than the top.
+        let f = apply(Geo::poly_only(base), &Modifier::Foam { amount: 0.8, size: 0.15, wall: 0.01, spread: 1.0, angle: 180.0, seed: 3 }, &CTX);
+        let half = |s: &Shape, top: bool| {
+            let clip = Shape::new(vec![if top { vec![pt(-10.0, -10.0), pt(110.0, -10.0), pt(110.0, 50.0), pt(-10.0, 50.0)] } else { vec![pt(-10.0, 50.0), pt(110.0, 50.0), pt(110.0, 110.0), pt(-10.0, 110.0)] }]);
+            let g = Grid::covering(clip.bbox(), 0.0, 1.0);
+            let a = rasterize(s, &g);
+            let b = rasterize(&clip, &g);
+            a.iter().zip(&b).filter(|(x, y)| **x > 0 && **y > 0).count()
+        };
+        assert!(half(&f.poly, false) > half(&f.poly, true), "bottom should stay more solid");
+    }
+
+    #[test]
+    fn cross_and_diamond_pixels() {
+        for shape in [PixelShape::Cross, PixelShape::Plus, PixelShape::Diamond] {
+            let g = apply(Geo::poly_only(square(100.0)), &Modifier::Pixelate { size: 0.2, shape, gap: 0.0, dissolve: 0.0, angle: 180.0, seed: 0 }, &CTX);
+            assert_eq!(g.poly.contours.len(), 25, "{shape:?}");
+            assert!(g.poly.area() > 0.0);
+        }
     }
 
     #[test]

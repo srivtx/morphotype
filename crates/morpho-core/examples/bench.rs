@@ -35,6 +35,9 @@ fn main() {
         ("fuse", r#"{"kind":"fuse","amount":0.15}"#, ""),
         ("fitCirc", r#"{"kind":"fitCircle","amount":1}"#, ""),
         ("arc360", r#"{"kind":"arc","bend":2}"#, ""),
+        ("foam", r#"{"kind":"foam","amount":0.8,"size":0.16,"wall":0.012,"spread":0.5,"angle":135,"seed":2}"#, ""),
+        ("iso", r#"{"kind":"isometric","face":"left"}"#, ""),
+        ("cross", r#"{"kind":"pixelate","size":0.06,"shape":"cross","gap":0.1}"#, ""),
         ("dissolve", r#"{"kind":"pixelate","size":0.05,"gap":0.1,"dissolve":0.8}"#, ""),
     ];
     // Shapes: a big sliced square (the "Sun stamp" template) and a radial repeat.

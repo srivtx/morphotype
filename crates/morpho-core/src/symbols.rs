@@ -2,7 +2,8 @@
 //! Every symbol fits roughly in a 1×1 box centred on the origin (y-down);
 //! the layer's `size` scales it.
 
-use crate::geom::{normalize_winding, pt, Pt, Shape};
+use crate::field::{extract, Grid};
+use crate::geom::{normalize_winding, pt, Pt, Rect, Shape};
 use crate::noise::noise2;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{PI, TAU};
@@ -80,6 +81,42 @@ pub enum Symbol {
         jitter: f64,
         #[serde(default)]
         seed: u32,
+    },
+    /// Badge with a wavy edge: smooth waves, or scallops like a cookie cutter.
+    Wavy {
+        #[serde(default = "d::<1800>")]
+        waves: f64,
+        #[serde(default = "d::<8>")]
+        depth: f64,
+        /// 0 = sine waves, 1 = round scallops with sharp valleys.
+        #[serde(default)]
+        scallop: f64,
+    },
+    /// Pointed oval (vesica): eyes, seeds, leaves, lens flares.
+    Lens { #[serde(default = "d::<55>")] aspect: f64 },
+    /// Cartoon cloud: round puffs on a flat base.
+    Cloud { #[serde(default = "d::<300>")] puffs: f64, #[serde(default)] seed: u32 },
+    /// Wireframe globe: outline, meridians and parallels as lines.
+    Globe {
+        #[serde(default = "d::<200>")]
+        meridians: f64,
+        #[serde(default = "d::<200>")]
+        parallels: f64,
+        #[serde(default = "d::<4>")]
+        weight: f64,
+        /// Width ÷ height; lines keep their weight when stretched.
+        #[serde(default = "d::<100>")]
+        aspect: f64,
+    },
+    /// Lines radiating from the centre with round ends (✳, sunbursts).
+    Asterisk {
+        #[serde(default = "d::<800>")]
+        arms: f64,
+        #[serde(default = "d::<12>")]
+        weight: f64,
+        /// Empty middle, as a fraction of the radius.
+        #[serde(default)]
+        inner: f64,
     },
 }
 
@@ -522,9 +559,120 @@ pub fn build(sym: &Symbol) -> Shape {
             }
             Shape::new(vec![pts])
         }
+        Symbol::Wavy { waves, depth, scallop } => {
+            let n = waves.round().clamp(3.0, 64.0);
+            let a_ = depth.clamp(0.0, 0.3) * 0.5;
+            let sc = scallop.clamp(0.0, 1.0);
+            let r0 = 0.5 - a_;
+            let m = 1024;
+            let pts = (0..m)
+                .map(|k| {
+                    let a = k as f64 / m as f64 * TAU - PI / 2.0;
+                    let t = (a + PI / 2.0) * n;
+                    let wave = t.cos() * (1.0 - sc) + (2.0 * (t * 0.5).cos().abs() - 1.0) * sc;
+                    let r = r0 + a_ * wave;
+                    pt(r * a.cos(), r * a.sin())
+                })
+                .collect();
+            Shape::new(vec![pts])
+        }
+        Symbol::Lens { aspect } => {
+            let s = (aspect.clamp(0.05, 1.0) * 0.5).max(1e-3);
+            let c = 0.5;
+            let r = (c * c + s * s) / (2.0 * s);
+            let th = (c / r).asin();
+            let n = 96;
+            let mut pts = Vec::with_capacity(n * 2);
+            // Right arc top to bottom, then the left arc back up.
+            for k in 0..n {
+                let a = -th + 2.0 * th * k as f64 / n as f64;
+                pts.push(pt(s - r + r * a.cos(), r * a.sin()));
+            }
+            for k in 0..n {
+                let a = -th + 2.0 * th * k as f64 / n as f64;
+                pts.push(pt(-(s - r + r * a.cos()), -r * a.sin()));
+            }
+            Shape::new(vec![pts])
+        }
+        Symbol::Cloud { puffs, seed } => {
+            let n = (puffs.round() as usize).clamp(1, 7);
+            let base_y = 0.16;
+            let base_h = 0.13;
+            let mut circles = Vec::with_capacity(n);
+            for k in 0..n {
+                let t = if n == 1 { 0.5 } else { k as f64 / (n - 1) as f64 };
+                let j = noise2(k as f64 * 3.7, 0.5, *seed);
+                let r = 0.15 + 0.13 * (PI * (k as f64 + 0.5) / n as f64).sin() + 0.03 * j;
+                let x = -0.3 + 0.6 * t + 0.04 * j;
+                circles.push((pt(x, base_y + base_h - r * 1.05), r));
+            }
+            let f = |p: Pt| {
+                // Flat-bottomed base: a pill.
+                let hx = 0.5 - base_h;
+                let q = pt((p.x.abs() - hx).max(0.0), p.y - base_y);
+                let mut d = q.x.hypot(q.y) - base_h;
+                for &(c, r) in &circles {
+                    d = d.min(p.dist(c) - r);
+                }
+                d
+            };
+            let s = field_shape(Rect { x0: -0.5, y0: -0.6, x1: 0.5, y1: 0.35 }, 1.0 / 320.0, f);
+            let b = s.bbox();
+            let c = b.center();
+            let k = 1.0 / b.width().max(b.height()).max(1e-6);
+            s.transformed(&crate::geom::Affine::scale(k, k).then(crate::geom::Affine::translate(-c.x, -c.y)))
+        }
+        Symbol::Globe { meridians, parallels, weight, aspect } => {
+            let w = weight.clamp(0.01, 0.2);
+            let r = 0.5 - w / 2.0;
+            let (ax, ay) = { let a = aspect.clamp(0.3, 3.0); if a >= 1.0 { (1.0, 1.0 / a) } else { (a, 1.0) } };
+            let ell = |rx: f64, ry: f64| -> Vec<Pt> { (0..160).map(|k| { let a = k as f64 / 160.0 * TAU; pt(rx * a.cos() * ax, ry * a.sin() * ay) }).collect() };
+            let mut lines = vec![(ell(r, r), true), (vec![pt(0.0, -r * ay), pt(0.0, r * ay)], false)];
+            let m = meridians.round().clamp(0.0, 8.0) as usize;
+            for k in 1..=m {
+                let rx = r * (k as f64 * PI / (2.0 * (m as f64 + 1.0))).sin();
+                lines.push((ell(rx, r), true));
+            }
+            let pn = parallels.round().clamp(0.0, 8.0) as usize;
+            lines.push((vec![pt(-r * ax, 0.0), pt(r * ax, 0.0)], false));
+            for k in 1..=pn {
+                let y = r * (k as f64 * PI / (2.0 * (pn as f64 + 1.0))).sin();
+                let half = (r * r - y * y).max(0.0).sqrt();
+                for sy in [-1.0, 1.0] {
+                    lines.push((vec![pt(-half * ax, sy * y * ay), pt(half * ax, sy * y * ay)], false));
+                }
+            }
+            crate::stroke::polylines(&lines, w, 1.0 / 400.0)
+        }
+        Symbol::Asterisk { arms, weight, inner } => {
+            let n = (arms.round() as usize).clamp(2, 64);
+            let w = weight.clamp(0.005, 0.4);
+            let r = 0.5 - w / 2.0;
+            let ri = inner.clamp(0.0, 0.9) * r;
+            let lines: Vec<(Vec<Pt>, bool)> = (0..n)
+                .map(|k| {
+                    let a = k as f64 / n as f64 * TAU - PI / 2.0;
+                    let (s, c) = a.sin_cos();
+                    (vec![pt(ri * c, ri * s), pt(r * c, r * s)], false)
+                })
+                .collect();
+            crate::stroke::polylines(&lines, w, 1.0 / 400.0)
+        }
     };
     normalize_winding(&mut s);
     s
+}
+
+/// Zero level of a distance function sampled over `bounds`.
+fn field_shape(bounds: Rect, cell: f64, f: impl Fn(Pt) -> f64) -> Shape {
+    let g = Grid::covering(bounds, cell * 3.0, cell);
+    let mut v = vec![0f32; g.len()];
+    for j in 0..g.h {
+        for i in 0..g.w {
+            v[j * g.w + i] = f(g.sample_pos(i, j)) as f32;
+        }
+    }
+    extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 1.5)
 }
 
 fn aspect_radii(aspect: f64) -> (f64, f64) {
@@ -543,7 +691,9 @@ mod tests {
             {"kind":"star","rounding":0.2},{"kind":"sparkle"},{"kind":"burst"},{"kind":"pin"},{"kind":"cursor"},{"kind":"blob","wobble":1},
             {"kind":"eyes"},{"kind":"heart"},{"kind":"plus"},{"kind":"catHead"},{"kind":"bubble"},{"kind":"spiral"},
             {"kind":"flower"},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1},
-            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3},{"kind":"folder"},{"kind":"quarter"},{"kind":"half"},{"kind":"cove"},{"kind":"pill"},{"kind":"pill","aspect":0.4},{"kind":"folder","corner":0}]"#,
+            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3},{"kind":"folder"},{"kind":"quarter"},{"kind":"half"},{"kind":"cove"},{"kind":"pill"},{"kind":"pill","aspect":0.4},{"kind":"folder","corner":0},
+            {"kind":"wavy"},{"kind":"wavy","scallop":1,"waves":12,"depth":0.2},{"kind":"lens"},{"kind":"cloud"},{"kind":"cloud","puffs":5,"seed":2},
+            {"kind":"globe"},{"kind":"globe","aspect":1.8,"meridians":4},{"kind":"asterisk"},{"kind":"asterisk","arms":24,"weight":0.02,"inner":0.2}]"#,
         )
         .unwrap();
         for s in &all {
@@ -552,6 +702,26 @@ mod tests {
             assert!(sh.area() > 0.0, "{s:?} area {}", sh.area());
             let b = sh.bbox();
             assert!(b.width() <= 1.05 && b.height() <= 1.05, "{s:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn line_symbols_are_one_piece() {
+        // Globe lines and asterisk arms merge into single solids.
+        let g = build(&Symbol::Globe { meridians: 2.0, parallels: 2.0, weight: 0.04, aspect: 1.0 });
+        let outer = g.contours.iter().filter(|c| crate::geom::signed_area(c) > 0.0).count();
+        assert_eq!(outer, 1, "globe solids: {outer}");
+        let a = build(&Symbol::Asterisk { arms: 8.0, weight: 0.1, inner: 0.0 });
+        assert_eq!(a.contours.len(), 1);
+        // With an empty middle the arms come apart.
+        assert_eq!(build(&Symbol::Asterisk { arms: 8.0, weight: 0.05, inner: 0.3 }).contours.len(), 8);
+    }
+
+    #[test]
+    fn wavy_badge_stays_in_its_box() {
+        for sc in [0.0, 1.0] {
+            let b = build(&Symbol::Wavy { waves: 20.0, depth: 0.2, scallop: sc }).bbox();
+            assert!(b.width() <= 1.0 + 1e-9 && b.width() > 0.97, "{b:?}");
         }
     }
 

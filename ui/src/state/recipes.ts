@@ -47,6 +47,12 @@ export const SHAPE_RECIPES: Recipe[] = [
     mods: [{ kind: 'repeat', mode: 'trail', count: 9, radius: 0, sweep: 360, orient: 0, cols: 1, rows: 1, gapX: 0, gapY: 0, dx: 0, dy: 0, grow: 0.9, spin: 8 }, { kind: 'outline', width: 0.01 }],
     tags: 'trail spiral tunnel blend rotate scale',
   },
+  { name: 'Foam', mods: [{ kind: 'foam', amount: 0.75, size: 0.16, wall: 0.012, spread: 0.6, angle: 135, seed: 1 }], tags: 'bubbles sponge soap slime holes' },
+  { name: 'Sponge', mods: [{ kind: 'foam', amount: 1, size: 0.09, wall: 0.01, spread: 0, angle: 180, seed: 4 }], tags: 'bubbles foam holes porous' },
+  { name: 'Cross stitch', mods: [{ kind: 'pixelate', size: 0.06, shape: 'cross', gap: 0.08, dissolve: 0, angle: 180, seed: 1 }], tags: 'pixel x cross embroidery led' },
+  { name: 'Diamonds', mods: [{ kind: 'pixelate', size: 0.06, shape: 'diamond', gap: 0.12, dissolve: 0, angle: 180, seed: 1 }], tags: 'pixel rhombus mosaic' },
+  { name: 'Iso left', mods: [{ kind: 'isometric', face: 'left' }], tags: '3d isometric cube side' },
+  { name: 'Iso top', mods: [{ kind: 'isometric', face: 'top' }], tags: '3d isometric cube floor' },
   { name: 'Rough cut', mods: [{ kind: 'wobble', amount: 0.012, scale: 0.12, seed: 5 }, { kind: 'ink', amount: 0.008, scale: 0.2, seed: 2 }], tags: 'stamp lino hand cut rough edge' },
 ];
 

@@ -10,9 +10,16 @@ describe('effects', () => {
       e.height?.(new Proxy(params, { get: (t, k: string) => (read.add(k), t[k]) }));
       for (const p of e.params) {
         if (read.has(p.key)) continue;
+        // The renderer reads a backdrop effect's blur when it copies what's behind.
+        if (e.backdrop && p.key === 'blur') continue;
         expect(e.glsl, `${e.id}.${p.key}`).toMatch(new RegExp(`\\bu_${p.key}\\b`));
       }
     }
+  });
+
+  it('never names a parameter after a uniform the renderer sets itself', () => {
+    const reserved = ['mask', 'sdf', 'height', 'texSize', 'art', 'region', 'k', 'time', 'bevelTex', 'bbox', 'ambient', 'rect', 'opacity', 'strokeW', 'strokeAlign', 'strokeOpacity', 'strokeColor', 'sideDepth', 'sideAngle', 'sideShade', 'sideColor', 'backdrop', 'backdropBlur', 'bdMap', 'hasBackdrop', 'photo', 'hasPhoto', 'imgAspect'];
+    for (const e of EFFECTS) for (const p of e.params) expect(reserved, `${e.id}.${p.key}`).not.toContain(p.key);
   });
 
   it('keeps defaults inside slider ranges', () => {
