@@ -1,6 +1,6 @@
 import { engine } from '../engine/client';
 import type { EngineDocument, Layer } from '../engine/types';
-import { fromBase64, importFontBytes, toBase64, type FontEntry } from '../fonts/library';
+import { fromBase64, importFontBytes, registerCssFont, toBase64, type FontEntry } from '../fonts/library';
 import { platform } from '../platform';
 import type { Renderer } from '../render/renderer';
 import { uid, type Project } from '../state/model';
@@ -193,7 +193,9 @@ export async function openProject(files?: { name: string; bytes: Uint8Array }[])
     if (p.version !== 1 || !Array.isArray(p.layers)) throw new Error('Not a Morphotype project.');
     for (const font of p.fonts ?? []) {
       if (!font.data || store.get().fonts.some((x) => x.id === font.id)) continue;
-      const info = await engine.loadFont(font.id, fromBase64(font.data));
+      const bytes = fromBase64(font.data);
+      const info = await engine.loadFont(font.id, bytes);
+      registerCssFont(font.id, bytes);
       registerFonts([{ id: font.id, name: font.name ?? info.family, source: 'imported', info }]);
     }
     replaceProject({ ...p, fonts: [] });

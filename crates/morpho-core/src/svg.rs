@@ -291,7 +291,7 @@ pub fn parse_path(d: &str) -> Result<CurveShape, String> {
                 last_ctrl = None;
             }
             b'C' | b'S' => {
-                let is_s = cmd.to_ascii_uppercase() == b'S';
+                let is_s = cmd.eq_ignore_ascii_case(&b'S');
                 let c1 = if is_s {
                     match last_ctrl {
                         Some((b'C', c)) => pos * 2.0 - c,
@@ -307,7 +307,7 @@ pub fn parse_path(d: &str) -> Result<CurveShape, String> {
                 pos = e;
             }
             b'Q' | b'T' => {
-                let is_t = cmd.to_ascii_uppercase() == b'T';
+                let is_t = cmd.eq_ignore_ascii_case(&b'T');
                 let c1 = if is_t {
                     match last_ctrl {
                         Some((b'Q', c)) => pos * 2.0 - c,

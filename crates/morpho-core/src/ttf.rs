@@ -52,7 +52,7 @@ impl W {
         self.0.extend_from_slice(t);
     }
     fn pad4(&mut self) {
-        while self.0.len() % 4 != 0 {
+        while !self.0.len().is_multiple_of(4) {
             self.0.push(0);
         }
     }
@@ -519,7 +519,7 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
         (*b"name", name_table(m)),
         (*b"post", post.0),
     ];
-    tables.sort_by(|a, b| a.0.cmp(&b.0));
+    tables.sort_by_key(|a| a.0);
     let n = tables.len();
     let mut es = 0u16;
     while (1usize << (es + 1)) <= n {

@@ -160,6 +160,8 @@ export function Viewport() {
     // Prefer the selected layer if it's under the pointer, otherwise the topmost.
     const hit = hits.find((h) => h.id === s.selection) ?? hits.at(-1);
     if (!hit) {
+      // Clicking empty space deselects; dragging from it pans.
+      store.set({ selection: null });
       drag.current = { kind: 'pan', x: p.x, y: p.y };
       return;
     }

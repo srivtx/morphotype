@@ -105,11 +105,9 @@ pub fn fit_closed(c: &[Pt], tol: f64, corner_deg: f64) -> CurveContour {
 }
 
 fn left_tangent(p: &[Pt]) -> Pt {
-    let n = p.len();
-    let k = 1.min(n - 1).max(1);
     // Average a couple of samples for robustness on noisy traces.
-    let far = (k + 2).min(n - 1);
-    ((p[k] - p[0]).normalized() + (p[far] - p[0]).normalized()).normalized()
+    let far = 3.min(p.len() - 1);
+    ((p[1] - p[0]).normalized() + (p[far] - p[0]).normalized()).normalized()
 }
 
 fn right_tangent(p: &[Pt]) -> Pt {

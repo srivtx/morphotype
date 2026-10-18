@@ -6,3 +6,4 @@ ui/src/engine/pkg/
 .DS_Store
 test-results/
 playwright-report/
+src-tauri/target/

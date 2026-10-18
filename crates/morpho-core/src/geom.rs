@@ -361,7 +361,7 @@ pub fn interior_point(c: &[Pt]) -> Pt {
         let mut best: Option<(f64, f64)> = None;
         for pair in xs.chunks(2) {
             if let [x0, x1] = pair {
-                if best.map_or(true, |(bx0, bx1)| x1 - x0 > bx1 - bx0) {
+                if best.is_none_or(|(bx0, bx1)| x1 - x0 > bx1 - bx0) {
                     best = Some((*x0, *x1));
                 }
             }

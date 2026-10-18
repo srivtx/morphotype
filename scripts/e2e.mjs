@@ -37,7 +37,7 @@ const browser = await chromium.launch({
 const errors = [];
 try {
   await mkdir(out, { recursive: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, acceptDownloads: true });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
   await page.goto(`http://127.0.0.1:${port}/`);
@@ -62,8 +62,39 @@ try {
     await page.waitForTimeout(700);
     const file = `${String(i + 1).padStart(2, '0')}-${label.toLowerCase().replace(/\W+/g, '-')}.png`;
     await page.screenshot({ path: path.join(out, file) });
+    // A clean shot of the artboard alone (no selection box or view tools).
+    const vp = page.locator('.viewport');
+    const box = await vp.boundingBox();
+    await page.mouse.click(box.x + 6, box.y + 6);
+    const hide = await page.addStyleTag({ content: '.view-tools,.sel-box{display:none!important}' });
+    await vp.screenshot({ path: path.join(out, `art-${file}`) });
+    await hide.evaluate((el) => el.remove());
     console.log(`✓ ${label}`);
   }
+  // Exports: PNG, SVG and a compiled font must all download and look valid.
+  const download = async (open, click) => {
+    const wait = page.waitForEvent('download', { timeout: 60_000 });
+    await open();
+    await click();
+    const d = await wait;
+    const file = path.join(out, d.suggestedFilename());
+    await d.saveAs(file);
+    return readFile(file);
+  };
+  const exportMenu = () => page.getByRole('button', { name: 'Export', exact: true }).click();
+  const png = await download(exportMenu, () => page.getByRole('button', { name: /^PNG 1×/ }).click());
+  if (png.subarray(1, 4).toString() !== 'PNG' || png.length < 10_000) errors.push(`PNG export looks wrong (${png.length} bytes)`);
+  else console.log(`✓ PNG export (${(png.length / 1024).toFixed(0)} KB)`);
+  const svg = await download(exportMenu, () => page.getByRole('button', { name: /^SVG/ }).click());
+  if (!svg.toString().startsWith('<svg') || !svg.toString().includes(' d="M')) errors.push('SVG export looks wrong');
+  else console.log(`✓ SVG export (${(svg.length / 1024).toFixed(0)} KB)`);
+  const ttf = await download(
+    () => page.getByRole('button', { name: 'Make font' }).click(),
+    () => page.getByRole('button', { name: 'Export .ttf' }).click(),
+  );
+  if (ttf.readUInt32BE(0) !== 0x00010000 || ttf.length < 5_000) errors.push(`Font export looks wrong (${ttf.length} bytes)`);
+  else console.log(`✓ Font export (${(ttf.length / 1024).toFixed(0)} KB)`);
+
   const layerErrors = await page.locator('.layer-warn').count();
   if (layerErrors) errors.push(`${layerErrors} layer(s) reported engine errors`);
 } finally {
