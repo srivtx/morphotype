@@ -4,12 +4,14 @@ import { getRenderer } from './app/actions';
 import { App } from './app/App';
 import { engine } from './engine/client';
 import { store } from './state/store';
+import { TEMPLATES } from './state/templates';
 import './styles.css';
 
 // Handles for automation and debugging (e2e tests drive the app through these).
 (window as unknown as { morphotype: unknown }).morphotype = {
   store,
   engine,
+  templates: TEMPLATES,
   get renderer() {
     return getRenderer();
   },

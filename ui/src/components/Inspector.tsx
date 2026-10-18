@@ -2,11 +2,11 @@ import { useRef, useState } from 'react';
 import { alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
 import type { Content, ModEntry, ModifierKind, SymbolKind } from '../engine/types';
-import { fillCss } from '../render/background';
+import { backgroundCss, fillCss } from '../render/background';
 import { effectById } from '../render/effects';
-import { QUICK_COLORS, recolor } from '../render/palette';
+import { luminance, QUICK_COLORS, recolor } from '../render/palette';
 import { useShape, viewBoxOf } from '../render/thumbs';
-import { CANVAS_PRESETS, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, symbolLayer, tile, uid, type Fill, type FillKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
+import { CANVAS_PRESETS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
 import { BG_PRESETS, SHAPE_RECIPES, type Recipe } from '../state/recipes';
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
@@ -52,7 +52,7 @@ export function Inspector() {
 
 function SelectionHeader({ nodes }: { nodes: Node[] }) {
   const n = nodes.at(-1)!;
-  const kind = nodes.length > 1 ? `${nodes.length} layers` : isGroup(n) ? (n.merge ? 'Merged shape' : 'Group') : { text: 'Text', symbol: 'Shape', path: 'Outline', morph: 'Morph' }[n.content.type];
+  const kind = nodes.length > 1 ? `${nodes.length} layers` : isGroup(n) ? (n.merge ? 'Merged shape' : 'Group') : { text: 'Text', symbol: 'Shape', path: 'Outline', morph: 'Morph', stroke: 'Drawing' }[n.content.type];
   return (
     <div className="sel-header">
       <span className="sel-kind">{kind}</span>
@@ -178,7 +178,59 @@ function Appearance({ nodes }: { nodes: Node[] }) {
           <button key={c} className="quick-color" style={{ background: c }} aria-label={`Recolour ${c}`} data-tip={colors.length > 1 ? 'Recolour the whole material from this colour' : c} onClick={() => recolorAll(c)} />
         ))}
       </div>
+      <StrokeEditor ids={ids} value={st.stroke ?? null} />
+      <div className="blend-row">
+        <Slider label="Opacity" value={st.opacity ?? 1} min={0} max={1} step={0.01} reset={1} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.opacity = v; }), `op:${ids.join()}`)} />
+        <div className="field">
+          <span>Blend</span>
+          <Segmented
+            size="sm"
+            value={st.blend ?? 'normal'}
+            options={[
+              { value: 'normal', label: 'Normal' },
+              { value: 'multiply', label: 'Multiply', title: 'Darkens like overprinted ink: risograph, highlighter, shadows' },
+              { value: 'screen', label: 'Screen', title: 'Lightens like projected light: glows and light leaks' },
+            ]}
+            onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.blend = v as BlendMode; }))}
+          />
+        </div>
+      </div>
     </Section>
+  );
+}
+
+const ALIGNS: { value: StrokeAlign; label: string; title: string }[] = [
+  { value: 'outside', label: 'Outside', title: 'Around the shape; keeps the shape its size' },
+  { value: 'center', label: 'Centre', title: 'Half inside, half outside, like most vector tools' },
+  { value: 'inside', label: 'Inside', title: 'Inside the edge; never grows the shape' },
+];
+
+/** A line around the outline, for any material. */
+function StrokeEditor({ ids, value }: { ids: string[]; value: Stroke | null }) {
+  const set = (fn: (s: Style) => void, key = '') =>
+    edit((p) => {
+      for (const id of ids) {
+        const n = findNode(p.layers, id);
+        if (n) fn(n.style);
+      }
+    }, key && `stroke:${ids.join()}:${key}`);
+  if (!value)
+    return (
+      <button className="link-btn stroke-add" onClick={() => set((s) => (s.stroke = stroke()))} data-tip="Draw a line around the shape, over any material">
+        <Icon name="plus" size={12} /> Add stroke
+      </button>
+    );
+  return (
+    <div className="stroke-editor">
+      <div className="stroke-head">
+        <span>Stroke</span>
+        <ColorChip label="Stroke colour" value={value.color} onChange={(v) => set((s) => s.stroke && (s.stroke.color = v), 'c')} />
+        <NumberBox label="W" value={value.width} min={0} max={400} onChange={(v) => set((s) => s.stroke && (s.stroke.width = Math.max(0, v)), 'w')} />
+        <IconButton icon="minus" title="Remove stroke" size={13} className="tiny" onClick={() => set((s) => (s.stroke = null))} />
+      </div>
+      <Segmented size="sm" value={value.align} options={ALIGNS.map((a) => ({ value: a.value, label: a.label, title: a.title }))} onChange={(v) => set((s) => s.stroke && (s.stroke.align = v))} />
+      {value.opacity < 1 || value.width > 0 ? <Slider label="Opacity" value={value.opacity} min={0} max={1} step={0.01} reset={1} onChange={(v) => set((s) => s.stroke && (s.stroke.opacity = v), 'o')} /> : null}
+    </div>
   );
 }
 
@@ -360,6 +412,15 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
       );
     case 'morph':
       return <MorphLayerEditor c={c} self={layer.id} setC={setC} />;
+    case 'stroke':
+      return (
+        <Section title="Drawing" id="stroke">
+          <Slider label="Width" value={c.width} min={0.5} max={200} step={0.5} suffix="px" onChange={(v) => setC<'stroke'>((x) => (x.width = v), 'sw')} />
+          <Slider label="Taper ends" value={c.taper} min={0} max={0.5} step={0.01} onChange={(v) => setC<'stroke'>((x) => (x.taper = v), 'st')} />
+          <Slider label="Smoothing" value={c.smooth} min={0} max={1} step={0.01} onChange={(v) => setC<'stroke'>((x) => (x.smooth = v), 'ss')} />
+          <p className="hint">Stays editable: change the width or smoothing any time, or add modifiers like Wobble, Echo lines or Repeat.</p>
+        </Section>
+      );
   }
 }
 
@@ -634,7 +695,7 @@ export function Modifiers({ mods, onChange, owner, layer }: { mods: ModEntry[]; 
               </Menu>
             </div>
             {ui.fields
-              .filter((f) => isChoice(f) || adv || !f.advanced)
+              .filter((f) => (isChoice(f) || adv || !f.advanced) && fieldShown(f, values))
               .map((f) =>
                 isChoice(f) ? (
                   <div className="field" key={f.key}>
@@ -645,6 +706,8 @@ export function Modifiers({ mods, onChange, owner, layer }: { mods: ModEntry[]; 
                       <Select value={String(values[f.key])} options={f.options} onChange={(v) => patch(m.uid, (x) => ((x as unknown as Record<string, string>)[f.key] = v))} />
                     )}
                   </div>
+                ) : f.toggle ? (
+                  <Toggle key={f.key} label={f.label} checked={Number(values[f.key] ?? 0) > 0.5} onChange={(v) => patch(m.uid, (x) => ((x as unknown as Record<string, number>)[f.key] = v ? 1 : 0))} />
                 ) : (
                   <Slider
                     key={f.key}
@@ -729,9 +792,9 @@ export function BackgroundEditor() {
             className="bg-chip"
             data-tip={b.name}
             aria-label={b.name}
-            style={{ background: fillCss(b.bg.fill) }}
+            style={{ background: backgroundCss(b.bg, 0.06) }}
             // Page-only presets keep an app-icon tile you already have.
-            onClick={() => edit((d) => (d.background = { ...structuredClone(b.bg), tile: b.bg.tile ? structuredClone(b.bg.tile) : d.background.tile }))}
+            onClick={() => edit((d) => (d.background = { ...structuredClone(b.bg), pattern: b.bg.pattern ? structuredClone(b.bg.pattern) : null, tile: b.bg.tile ? structuredClone(b.bg.tile) : d.background.tile }))}
           >
             {b.bg.tile && <span className="bg-chip-tile" style={{ background: fillCss(b.bg.tile.fill) }} />}
           </button>
@@ -739,6 +802,51 @@ export function BackgroundEditor() {
       </div>
       <FillEditor value={bg.fill} keyPrefix="page" onChange={(fn, key) => setBackground((b) => fn(b.fill), key)} />
       <Slider label="Grain" value={bg.grain} min={0} max={1} step={0.01} reset={0} onChange={(v) => setBackground((b) => (b.grain = v), 'grain')} />
+      <PatternEditor />
+    </>
+  );
+}
+
+const PATTERNS: { value: PatternKind | 'none'; label: string; title: string }[] = [
+  { value: 'none', label: 'None', title: 'No pattern' },
+  { value: 'grid', label: 'Grid', title: 'Grid paper' },
+  { value: 'dots', label: 'Dots', title: 'Dot grid' },
+  { value: 'lines', label: 'Lines', title: 'Ruled lines' },
+  { value: 'diagonal', label: 'Stripes', title: 'Diagonal stripes' },
+  { value: 'checker', label: 'Checks', title: 'Checkerboard' },
+];
+
+/** Grid paper, dot grid, stripes or checks over the page fill. */
+function PatternEditor() {
+  const pt = useStore((s) => s.project.background.pattern ?? null);
+  const page = useStore((s) => s.project.background.fill);
+  const set = (fn: (p: Pattern) => void, key?: string) => setBackground((b) => b.pattern && fn(b.pattern), key);
+  return (
+    <>
+      <div className="field">
+        <span>Pattern</span>
+        <Select
+          value={pt?.kind ?? 'none'}
+          options={PATTERNS.map((p) => ({ value: p.value, label: p.label, hint: p.title }))}
+          onChange={(v) =>
+            setBackground((b) => {
+              if (v === 'none') return void (b.pattern = null);
+              // A shade of the page colour reads as paper; keep the user's colour once set.
+              const base = page.colors[0] ?? '#ffffff';
+              b.pattern = b.pattern ? { ...b.pattern, kind: v } : pattern(v, luminance(base) > 0.18 ? '#000000' : '#ffffff', { opacity: 0.18 });
+              if (v === 'dots' && b.pattern.weight > b.pattern.size / 3) b.pattern.weight = 3;
+            })
+          }
+        />
+      </div>
+      {pt && (
+        <>
+          <ColorField label="Pattern colour" value={pt.color} onChange={(v) => set((p) => (p.color = v), 'pc')} />
+          <Slider label="Cell size" value={pt.size} min={4} max={400} step={1} suffix="px" onChange={(v) => set((p) => (p.size = v), 'ps')} />
+          {pt.kind !== 'checker' && <Slider label={pt.kind === 'dots' ? 'Dot size' : 'Line width'} value={pt.weight} min={0.5} max={Math.max(4, pt.size / 2)} step={0.5} suffix="px" onChange={(v) => set((p) => (p.weight = v), 'pw')} />}
+          <Slider label="Opacity" value={pt.opacity} min={0} max={1} step={0.01} onChange={(v) => set((p) => (p.opacity = v), 'po')} />
+        </>
+      )}
     </>
   );
 }

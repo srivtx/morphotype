@@ -2,12 +2,15 @@ import { engine } from '../engine/client';
 import type { Box, Content, ModEntry } from '../engine/types';
 import { fromBase64, importFontBytes, registerCssFont, toBase64, type FontEntry } from '../fonts/library';
 import { platform } from '../platform';
-import { ambientOf, fillCss } from '../render/background';
+import { ambientOf, backgroundCss as bgCss } from '../render/background';
+import { addImage, encodeImage, imageAsset, packImages, unpackImages } from '../state/assets';
 import { luminance } from '../render/palette';
 import { defaultParams, effectById, type Preset } from '../render/effects';
 import type { Renderer } from '../render/renderer';
+import { parsePath, serializePath } from '../state/geometry';
+import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
-import { group, isGroup, pathLayer, style, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
+import { group, isGroup, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
 import { allLayers, ancestors, buildScene, childrenOf, find, findNode, layersOf, removeNodes, topmost, walk } from '../state/tree';
 
@@ -129,6 +132,131 @@ export function addShape(l: ShapeLayer) {
   const prev = primaryNode();
   if (prev && !isGroup(prev) && prev.op === 'add') l.style = structuredClone(prev.style);
   addNode(l);
+}
+
+// ---------- construction sheet ----------
+
+const CONSTRUCTION = '#5b3fd6';
+
+/** A path layer from artboard-space path data (normalised into the 1-unit box path layers use). */
+function artPathLayer(d: string, name: string, st: Style): ShapeLayer | null {
+  const b = pathBounds(d);
+  if (!b) return null;
+  const cx = (b[0] + b[2]) / 2;
+  const cy = (b[1] + b[3]) / 2;
+  const size = Math.max(b[2] - b[0], b[3] - b[1], 1);
+  const cs = parsePath(d);
+  const map = (q: { x: number; y: number }) => ({ x: (q.x - cx) / size, y: (q.y - cy) / size });
+  for (const c of cs)
+    for (const n of c.nodes) {
+      Object.assign(n, map(n));
+      if (n.hin) n.hin = map(n.hin);
+      if (n.hout) n.hout = map(n.hout);
+    }
+  const l = pathLayer(serializePath(cs), size, name, { x: cx, y: cy, style: st });
+  return l;
+}
+
+/**
+ * Turn the selection into a construction drawing, like a logo presentation:
+ * a tinted copy of the outline with a stroke, a marker on every anchor point,
+ * and guide lines across the artboard at its edges and (for text) at the
+ * font's baseline, x-height, cap height and ascender.
+ */
+export async function constructionSheet() {
+  const s = store.get();
+  const ids = topmost(s.project.layers, s.selection);
+  if (!ids.length) return toast('Select the logo or lettering to draw its construction.');
+  const { doc } = buildScene(s.project);
+  const out = await engine.exportPaths(doc);
+  const paths = out.paths.filter((p) => ids.some((id) => { const n = findNode(s.project.layers, id); return !!n && (n.id === p.id || layersOf(n).some((l) => l.id === p.id) || isGroup(n) && n.id === p.id); }));
+  if (!paths.length) return toast('Nothing to draw: the selection has no outline yet.');
+  const W = s.project.canvas.width;
+  const H = s.project.canvas.height;
+  const d = paths.map((p) => p.d).join('');
+  const b = pathBounds(d)!;
+  const span = Math.max(b[2] - b[0], b[3] - b[1]);
+  const m = Math.max(6, span * 0.012);
+  const line = Math.max(1, span * 0.0018);
+  // Anchor markers: one small square per on-curve point.
+  const marks: string[] = [];
+  const xs = new Set<number>();
+  for (const c of parsePath(d)) {
+    let cx0 = Infinity;
+    let cx1 = -Infinity;
+    for (const n of c.nodes) {
+      cx0 = Math.min(cx0, n.x);
+      cx1 = Math.max(cx1, n.x);
+      // Show corners and curve extremes (horizontal or vertical tangent), like a type designer would.
+      const h = n.hout ?? n.hin;
+      if (h && n.hin && n.hout) {
+        const [ax, ay] = [n.x - n.hin.x, n.y - n.hin.y];
+        const [bx, by] = [n.hout.x - n.x, n.hout.y - n.y];
+        const smooth = Math.abs(ax * by - ay * bx) < 0.02 * Math.hypot(ax, ay) * Math.hypot(bx, by) && ax * bx + ay * by > 0;
+        const tx = h.x - n.x;
+        const ty = h.y - n.y;
+        const extreme = Math.abs(tx) < 0.05 * Math.abs(ty) || Math.abs(ty) < 0.05 * Math.abs(tx);
+        if (smooth && !extreme) continue;
+      }
+      marks.push(`M${n.x - m / 2} ${n.y - m / 2}h${m}v${m}h${-m}Z`);
+    }
+    xs.add(Math.round(cx0));
+    xs.add(Math.round(cx1));
+  }
+  // Guides: verticals at each contour's sides, horizontals at the box and font metrics.
+  const ys = new Set<number>([Math.round(b[1]), Math.round(b[3])]);
+  for (const id of ids) {
+    const n = findNode(s.project.layers, id);
+    if (!n || isGroup(n) || n.content.type !== 'text' || n.rotation) continue;
+    const info = s.fonts.find((f) => f.id === (n.content as Extract<Content, { type: 'text' }>).font)?.info;
+    if (!info) continue;
+    const lay = await engine.textLayout(n.content);
+    const k = n.scale * (n.sy ?? 1);
+    const em = n.content.size / info.unitsPerEm;
+    for (const ln of lay.lines) {
+      const base = n.y + ln.baseline * k;
+      for (const v of [0, info.xHeight, info.capHeight, info.ascender]) if (v) ys.add(Math.round(base - v * em * k));
+      if (info.descender) ys.add(Math.round(base - info.descender * em * k));
+    }
+  }
+  const dedupe = (v: Set<number>) => [...v].sort((a, c) => a - c).filter((x, i, a) => i === 0 || x - a[i - 1] > line * 3);
+  const guides = [
+    ...dedupe(xs).map((x) => `M${x - line / 2} ${-H / 2}h${line}v${H}h${-line}Z`),
+    ...dedupe(ys).map((y) => `M${-W / 2} ${y - line / 2}h${W}v${line}h${-W}Z`),
+  ].join('');
+  const tint = (fill: string, stroke: number) => ({ ...style('flat', { fill }), stroke: { width: stroke, color: CONSTRUCTION, align: 'center' as const, opacity: 1 } });
+  const layers = [
+    artPathLayer(guides, 'Guides', { ...style('flat', { fill: CONSTRUCTION }), opacity: 0.45 }),
+    artPathLayer(d, 'Outline', tint('#e9e4ff', line * 1.6)),
+    artPathLayer(marks.join(''), 'Anchors', tint('#ffffff', line * 1.4)),
+  ].filter((l): l is ShapeLayer => !!l);
+  addNode(group(layers, { name: 'Construction', open: false }), { parent: null });
+  toast(`Construction drawn: ${marks.length} anchors, ${dedupe(xs).length + dedupe(ys).length} guides. Hide the original or keep both.`);
+}
+
+// ---------- drawing ----------
+
+/** Turn the live brush stroke into a layer (points relative to its centre). */
+export function finishDrawing(pts: [number, number, number][]) {
+  const s = store.get();
+  if (!pts.length) return;
+  const b = brushById(s.settings.brush);
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [x, y] of pts) (x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x)), (y1 = Math.max(y1, y));
+  const cx = Math.round((x0 + x1) / 2);
+  const cy = Math.round((y0 + y1) / 2);
+  const points = pts.map(([x, y, p]) => [+(x - cx).toFixed(2), +(y - cy).toFixed(2), +p.toFixed(3)] as [number, number, number]);
+  const l: ShapeLayer = {
+    ...textLayer('', 'archivo'),
+    id: uid(),
+    name: undefined,
+    x: cx,
+    y: cy,
+    content: { type: 'stroke', points, width: s.settings.brushWidth, taper: b.taper, smooth: b.smooth },
+    style: b.style(s.settings.brushColor),
+  };
+  // Drawings stack in order and stay selected so the next stroke can be compared.
+  addNode(l, { parent: null });
 }
 
 // ---------- text ----------
@@ -457,14 +585,22 @@ export function distributeSelected(axis: 'x' | 'y') {
 
 // ---------- styles ----------
 
+/** Give nodes a style. A style without a `stroke` key (a material or preset) keeps each node's own stroke. */
 export function applyStyle(st: Style, ids = store.get().selection) {
+  const put = (n: { style: Style }) => {
+    const prev = n.style;
+    n.style = structuredClone(st);
+    if (!('stroke' in st) && prev?.stroke) n.style.stroke = prev.stroke;
+    if (!('opacity' in st) && prev?.opacity !== undefined) n.style.opacity = prev.opacity;
+    if (!('blend' in st) && prev?.blend) n.style.blend = prev.blend;
+  };
   edit((p) => {
     for (const id of ids) {
       const n = findNode(p.layers, id);
       if (!n) continue;
       // A plain group passes the style to every child; merged groups own it.
-      if (isGroup(n) && !n.merge) for (const l of allLayers(n.children)) l.style = structuredClone(st);
-      else n.style = structuredClone(st);
+      if (isGroup(n) && !n.merge) for (const l of allLayers(n.children)) put(l);
+      else put(n);
     }
   });
 }
@@ -490,7 +626,8 @@ export function copyStyle() {
   const n = primaryNode();
   const st = n && styleOf(n);
   if (st) {
-    styleClipboard = structuredClone(st);
+    // Carry the stroke explicitly so pasting also copies (or clears) it.
+    styleClipboard = { ...structuredClone(st), stroke: st.stroke ? structuredClone(st.stroke) : null, opacity: st.opacity ?? 1, blend: st.blend ?? 'normal' };
     toast('Style copied');
   }
 }
@@ -709,6 +846,54 @@ export async function addSystemFont(path: string, index: number): Promise<FontEn
 
 // ---------- images ----------
 
+/** Bounds of a path's points (handles included, so slightly generous). */
+function pathBounds(d: string): Box | null {
+  let b: Box | null = null;
+  for (const c of parsePath(d))
+    for (const n of c.nodes)
+      for (const q of [n, n.hin, n.hout]) {
+        if (!q) continue;
+        b = b ? [Math.min(b[0], q.x), Math.min(b[1], q.y), Math.max(b[2], q.x), Math.max(b[3], q.y)] : [q.x, q.y, q.x, q.y];
+      }
+  return b;
+}
+
+/** Place a picture as a rectangle filled with the Photo material. */
+export function placePhoto(image: ImageData, name: string) {
+  const c = document.createElement('canvas');
+  c.width = image.width;
+  c.height = image.height;
+  c.getContext('2d')?.putImageData(image, 0, 0);
+  let opaque = true;
+  for (let i = 3; i < image.data.length; i += 4 * 97) if (image.data[i] < 250) (opaque = false), (i = image.data.length);
+  const enc = encodeImage(c, opaque);
+  const id = addImage(enc.data, enc.w, enc.h, name);
+  const p = store.get().project;
+  const aspect = enc.w / enc.h;
+  const side = Math.min(p.canvas.width, p.canvas.height) * 0.7;
+  const l = symbolLayer('roundRect', side, { name, style: style('photo', { image: id }) }, { radius: 0, aspect });
+  addNode(l);
+  toast('Photo placed. Change its shape, or give any other layer the Photo material.');
+}
+
+/** Ask for a picture file and store it; returns its asset id. */
+export async function pickPhoto(): Promise<string | null> {
+  const f = (await platform().open([IMAGE_FILTER]))[0];
+  if (!f) return null;
+  try {
+    const image = await imageDataFrom(f.bytes, f.name);
+    const c = document.createElement('canvas');
+    c.width = image.width;
+    c.height = image.height;
+    c.getContext('2d')?.putImageData(image, 0, 0);
+    const enc = encodeImage(c, !/\.(png|svg|webp)$/i.test(f.name));
+    return addImage(enc.data, enc.w, enc.h, f.name.replace(/\.[^.]+$/, ''));
+  } catch (e) {
+    toast(`Couldn't read ${f.name}: ${errorText(e)}`, 'error');
+    return null;
+  }
+}
+
 export async function imageDataFrom(bytes: Uint8Array, name: string): Promise<ImageData> {
   const type = name.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : '';
   const blob = new Blob([bytes as BlobPart], type ? { type } : {});
@@ -773,6 +958,7 @@ export async function saveProject() {
     const name = store.get().fonts.find((f) => f.id === id)?.name;
     return bytes ? [{ id, name, data: toBase64(bytes) }] : [];
   });
+  p.images = packImages(p);
   const ok = await platform().save(`${slug(p.name)}.morpho`, JSON.stringify(p), PROJECT_FILTER);
   if (ok) toast('Project saved');
 }
@@ -790,7 +976,8 @@ export async function openProject(files?: { name: string; bytes: Uint8Array }[])
       registerCssFont(font.id, bytes);
       registerFonts([{ id: font.id, name: font.name ?? info.family, source: 'imported', info }]);
     }
-    replaceProject({ ...p, fonts: [] });
+    unpackImages(p.images);
+    replaceProject({ ...p, fonts: [], images: undefined });
     window.dispatchEvent(new Event('mt-fit'));
     toast(`Opened ${p.name}`);
   } catch (e) {
@@ -878,7 +1065,13 @@ function svgPaint(st: Style): { fill: string; extra: string; defs: string } {
     case 'extrude':
       return { fill: c('face'), extra: Number(p.outline) > 0 ? ` stroke="${c('outlineColor')}" stroke-width="${Number(p.outline)}"` : '', defs: '' };
     case 'distressed':
+    case 'halftone':
+    case 'riso':
       return { fill: c('ink'), extra: '', defs: '' };
+    case 'emboss':
+      return { fill: c('color'), extra: '', defs: '' };
+    case 'dither':
+      return { fill: c('light'), extra: '', defs: '' };
     default:
       return { fill: '#000000', extra: '', defs: '' };
   }
@@ -905,6 +1098,27 @@ export async function buildSvg(transparent = store.get().settings.exportTranspar
       body.push(`<rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="${f.colors[0] ?? '#000'}"/>`);
     }
   }
+  const pat = p.background.pattern;
+  if (!transparent && pat && pat.opacity > 0) {
+    const s = Math.max(2, pat.size);
+    const w = pat.weight;
+    const attrs = `fill="${pat.color}" fill-opacity="${pat.opacity}"`;
+    const cell =
+      pat.kind === 'grid'
+        ? `<rect x="${-w / 2}" y="0" width="${w}" height="${s}" ${attrs}/><rect x="0" y="${-w / 2}" width="${s}" height="${w}" ${attrs}/>`
+        : pat.kind === 'lines'
+          ? `<rect x="0" y="${-w / 2}" width="${s}" height="${w}" ${attrs}/>`
+          : pat.kind === 'dots'
+            ? `<circle cx="${s / 2}" cy="${s / 2}" r="${w}" ${attrs}/>`
+            : pat.kind === 'checker'
+              ? `<rect width="${s}" height="${s}" ${attrs}/><rect x="${s}" y="${s}" width="${s}" height="${s}" ${attrs}/>`
+              : `<rect x="0" y="${-w / 2}" width="${s * 1.5}" height="${w}" ${attrs}/>`;
+    const size = pat.kind === 'checker' ? s * 2 : s;
+    const rot = pat.kind === 'diagonal' ? ` patternTransform="rotate(-45)"` : '';
+    // The pattern's origin is the artboard centre, as on the canvas.
+    defs.push(`<pattern id="pat" patternUnits="userSpaceOnUse" width="${size}" height="${size}"${rot}>${cell}</pattern>`);
+    body.push(`<rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="url(#pat)"/>`);
+  }
   const t = p.background.tile;
   if (t) {
     const r = (t.size * Math.min(W, H)) / 2;
@@ -914,8 +1128,54 @@ export async function buildSvg(transparent = store.get().settings.exportTranspar
   for (const path of out.paths) {
     const st = objects.find((o) => o.id === path.id)?.style;
     if (!st || !path.d) continue;
+    const mix = (st.opacity ?? 1) < 1 || (st.blend && st.blend !== 'normal');
+    if (mix) body.push(`<g${(st.opacity ?? 1) < 1 ? ` opacity="${st.opacity}"` : ''}${st.blend && st.blend !== 'normal' ? ` style="mix-blend-mode:${st.blend}"` : ''}>`);
+    emitObject(path, st);
+    if (mix) body.push('</g>');
+  }
+  function emitObject(path: { id: string; d: string }, st: Style) {
     const paint = svgPaint(st);
     if (paint.defs) defs.push(paint.defs);
+    const pic = st.effect === 'photo' ? imageAsset(String(st.params.image ?? '')) : undefined;
+    if (pic) {
+      // The picture clipped to the outline, framed like the canvas (cover, zoom, pan).
+      const b = pathBounds(path.d);
+      if (b) {
+        const id = `ph${defs.length}`;
+        // Same framing as the Photo shader: cover the box, then zoom and pan.
+        const z = Math.max(1, Number(st.params.zoom ?? 1));
+        const bw = b[2] - b[0];
+        const bh = b[3] - b[1];
+        const ba = bw / bh;
+        const ia = pic.w / pic.h;
+        const cx = ba < ia ? ba / ia : 1;
+        const cy = ba > ia ? ia / ba : 1;
+        const iw = (bw * z) / cx;
+        const ih = (bh * z) / cy;
+        const u0 = 0.5 - (0.5 * cx) / z + Number(st.params.x ?? 0) * 0.5 * (1 - 1 / z);
+        const v0 = 0.5 - (0.5 * cy) / z + Number(st.params.y ?? 0) * 0.5 * (1 - 1 / z);
+        const ix = b[0] - u0 * iw;
+        const iy = b[1] - v0 * ih;
+        defs.push(`<clipPath id="${id}"><path d="${path.d}"/></clipPath>`);
+        body.push(`<image href="${pic.data}" x="${ix}" y="${iy}" width="${iw}" height="${ih}" preserveAspectRatio="none" clip-path="url(#${id})"/>`);
+        return;
+      }
+    }
+    const sk = st.stroke;
+    if (sk && sk.width > 0 && sk.opacity > 0) {
+      // SVG strokes are centred: outside paints under the fill at twice the width, inside clips to the shape.
+      const w = sk.align === 'center' ? sk.width : sk.width * 2;
+      const attrs = `fill="none" stroke="${sk.color}" stroke-width="${w}" stroke-linejoin="round"${sk.opacity < 1 ? ` stroke-opacity="${sk.opacity}"` : ''}`;
+      if (sk.align === 'outside') body.push(`<path d="${path.d}" ${attrs}/>`);
+      body.push(`<path d="${path.d}" fill="${paint.fill}" fill-rule="nonzero"${paint.extra}/>`);
+      if (sk.align === 'center') body.push(`<path d="${path.d}" ${attrs}/>`);
+      if (sk.align === 'inside') {
+        const id = `clip${defs.length}`;
+        defs.push(`<clipPath id="${id}"><path d="${path.d}"/></clipPath>`);
+        body.push(`<path d="${path.d}" ${attrs} clip-path="url(#${id})"/>`);
+      }
+      return;
+    }
     body.push(`<path d="${path.d}" fill="${paint.fill}" fill-rule="nonzero"${paint.extra}/>`);
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" width="${W}" height="${H}">${defs.length ? `<defs>${defs.join('')}</defs>` : ''}${body.join('')}</svg>`;
@@ -933,5 +1193,5 @@ export async function exportSVG() {
 
 /** CSS for the artboard background (cheap previews outside the GPU). */
 export function backgroundCss(b: Background) {
-  return fillCss(b.fill);
+  return bgCss(b);
 }

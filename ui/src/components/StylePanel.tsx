@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { applyPreset, applyStyle, copyStyle, pasteStyle, selectedNodes, styleOf } from '../app/actions';
+import { applyPreset, applyStyle, pickPhoto, copyStyle, pasteStyle, selectedNodes, styleOf } from '../app/actions';
+import { allImages } from '../state/assets';
 import { shortcutOf } from '../app/commands';
 import { engine } from '../engine/client';
 import { defaultParams, EFFECTS, effectById, PRESETS, type EffectDef, type ParamValues, type Preset } from '../render/effects';
@@ -142,6 +143,15 @@ export function StylePanel() {
               onPick={() => {
                 if (e.id === st.effect) return;
                 const next: Style = { effect: e.id, params: defaultParams(e) };
+                if (e.photo) {
+                  // Reuse the latest picture, or ask for one.
+                  void (async () => {
+                    const id = allImages().at(-1)?.id ?? (await pickPhoto());
+                    if (!id) return;
+                    applyStyle({ ...next, params: { ...next.params, image: id } });
+                  })();
+                  return;
+                }
                 applyStyle(next);
               }}
             />
@@ -158,6 +168,7 @@ export function StylePanel() {
           </button>
         }
       >
+        {def.photo && <PhotoPicker value={String(st.params.image ?? '')} onPick={(id) => setParam('image', id)} />}
         {def.params
           .filter((p) => advanced || !p.advanced)
           .map((p) =>
@@ -185,4 +196,21 @@ function collect(g: import('../state/model').Group): { style: Style }[] {
 export function prewarmThumbs() {
   const idle = (cb: () => void) => ((window as unknown as { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 200)))(cb);
   idle(() => PRESETS.slice(0, 12).forEach((p) => void presetThumb(p)));
+}
+
+/** Pictures in this session, plus a button to add one. */
+function PhotoPicker({ value, onPick }: { value: string; onPick: (id: string) => void }) {
+  const images = allImages();
+  return (
+    <div className="photo-picker">
+      {images.map((a) => (
+        <button key={a.id} className={`photo-thumb ${a.id === value ? 'on' : ''}`} onClick={() => onPick(a.id)} data-tip={a.name ?? 'Picture'} aria-label={a.name ?? 'Picture'}>
+          <img src={a.data} alt="" draggable={false} />
+        </button>
+      ))}
+      <button className="photo-thumb add" onClick={() => void pickPhoto().then((id) => id && onPick(id))} data-tip="Add a picture" aria-label="Add a picture">
+        <Icon name="plus" size={16} />
+      </button>
+    </div>
+  );
 }

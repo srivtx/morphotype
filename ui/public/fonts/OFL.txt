@@ -10,8 +10,14 @@ Bundled fonts — all licensed under the SIL Open Font License 1.1 (full text be
 * Copyright 2022 The Unbounded Project Authors (https://github.com/googlefonts/unbounded)
 * Copyright 2023 The Bungee Project Authors (https://github.com/djrrb/Bungee)
 * Copyright 2020 The Dela Gothic Project Authors (https://github.com/syakuzen/DelaGothic)
+* Copyright 2023 The Young Serif Project Authors (https://github.com/noirblancrouge/YoungSerif)
+* Copyright 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage)
+* Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat) (Caveat and Caveat Brush)
 
 Files are the Latin subsets distributed by Fontsource (https://fontsource.org).
+Young Serif, Bricolage Grotesque, Caveat and Caveat Brush are Latin subsets of the Google Fonts
+releases, converted to WOFF; Bricolage Grotesque keeps its weight and width
+axes with the optical size fixed at 96 pt.
 
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 -----------------------------------------------------------

@@ -58,6 +58,16 @@ pub enum Symbol {
     Moon { #[serde(default = "d::<40>")] phase: f64 },
     /// A smiling mouth: a thick arc with round ends. Negative `curve` frowns.
     Smile { #[serde(default = "d::<50>")] curve: f64, #[serde(default = "d::<35>")] weight: f64 },
+    /// Quarter disc filling the box; the square corner is bottom-left. Modular logos.
+    Quarter,
+    /// Half disc, flat side down, in a 2:1 box.
+    Half,
+    /// Square with a quarter circle taken out of the top-right corner (a concave fillet).
+    Cove,
+    /// Capsule (fully rounded ends): tags, buttons and labels.
+    Pill { #[serde(default = "d::<300>")] aspect: f64 },
+    /// File folder with a tab on the top left.
+    Folder { #[serde(default = "d::<38>")] tab: f64, #[serde(default = "d::<5>")] corner: f64 },
     /// Spiky starburst with alternating long and short rays.
     Rays {
         #[serde(default = "d::<1200>")]
@@ -459,6 +469,42 @@ pub fn build(sym: &Symbol) -> Shape {
             cap(&mut pts, mid - h, false);
             Shape::new(vec![pts])
         }
+        Symbol::Quarter => {
+            let mut pts = vec![pt(-0.5, 0.5)];
+            for k in 0..=64 {
+                let a = -PI / 2.0 + k as f64 / 64.0 * (PI / 2.0);
+                pts.push(pt(-0.5 + a.cos(), 0.5 + a.sin()));
+            }
+            Shape::new(vec![pts])
+        }
+        Symbol::Half => {
+            let mut pts = Vec::new();
+            for k in 0..=128 {
+                let a = PI + k as f64 / 128.0 * PI;
+                pts.push(pt(0.5 * a.cos(), 0.25 + 0.5 * a.sin()));
+            }
+            Shape::new(vec![pts])
+        }
+        Symbol::Cove => {
+            // Corners clockwise from the bottom-left; the arc bites the top-right.
+            let mut pts = vec![pt(-0.5, 0.5), pt(-0.5, -0.5)];
+            for k in 0..=64 {
+                let a = PI + k as f64 / 64.0 * (PI / 2.0);
+                pts.push(pt(0.5 + a.cos(), -0.5 - a.sin()));
+            }
+            pts.push(pt(0.5, 0.5));
+            Shape::new(vec![pts])
+        }
+        Symbol::Pill { aspect } => {
+            let (rx, ry) = aspect_radii(*aspect);
+            Shape::new(vec![rounded_polygon(&rect(0.0, 0.0, rx * 2.0, ry * 2.0), rx.min(ry) * 0.999)])
+        }
+        Symbol::Folder { tab, corner } => {
+            let (top, bottom, th) = (-0.39, 0.39, 0.09);
+            let tw = tab.clamp(0.1, 0.8);
+            let pts = [pt(-0.5, bottom), pt(-0.5, top), pt(-0.5 + tw, top), pt(-0.5 + tw + 0.08, top + th), pt(0.5, top + th), pt(0.5, bottom)];
+            Shape::new(vec![rounded_polygon(&pts, corner.clamp(0.0, 0.2))])
+        }
         Symbol::Rays { rays, short, inner, jitter, seed } => {
             let n = (rays.round() as usize).clamp(3, 48);
             let ri = inner.clamp(0.05, 0.45);
@@ -497,7 +543,7 @@ mod tests {
             {"kind":"star","rounding":0.2},{"kind":"sparkle"},{"kind":"burst"},{"kind":"pin"},{"kind":"cursor"},{"kind":"blob","wobble":1},
             {"kind":"eyes"},{"kind":"heart"},{"kind":"plus"},{"kind":"catHead"},{"kind":"bubble"},{"kind":"spiral"},
             {"kind":"flower"},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1},
-            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3}]"#,
+            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3},{"kind":"folder"},{"kind":"quarter"},{"kind":"half"},{"kind":"cove"},{"kind":"pill"},{"kind":"pill","aspect":0.4},{"kind":"folder","corner":0}]"#,
         )
         .unwrap();
         for s in &all {

@@ -1,7 +1,8 @@
 import { BLUR_FS, FULLSCREEN_VS, HEIGHT_FS, JFA_FS, RECT_VS, SDF_FS, SEED_FS } from './passes';
 import { COMMON_GLSL, type EffectDef, type HeightSpec, type ParamValues } from './effects';
 import { ambientOf, backgroundUniforms, BG_FS } from './background';
-import type { Background } from '../state/model';
+import type { Background, BlendMode, Stroke } from '../state/model';
+import { imageAsset, imageElement, onImagesReady } from '../state/assets';
 import { bindTextures, formats, freeTarget, GLError, hexToRgb, program, setUniforms, target, texture, type Program, type Target, type UniformValue } from './gl';
 
 const EFFECT_FS = (body: string) => /* glsl */ `#version 300 es
@@ -10,8 +11,19 @@ ${COMMON_GLSL}
 in vec2 v_uv;
 out vec4 o;
 ${body}
+uniform float u_strokeW, u_strokeAlign, u_strokeOpacity, u_opacity;
+uniform vec3 u_strokeColor;
 void main() {
   o = effect(v_uv);
+  if (u_strokeW > 0.0) {
+    // A stroke for any material: outside (0), centred (1) or inside (2) the outline.
+    float d = sdfPx(v_uv);
+    float w = u_strokeW * u_k;
+    float lo = u_strokeAlign < 0.5 ? 0.0 : u_strokeAlign < 1.5 ? -0.5 * w : -w;
+    float a = (cover(d - lo - w) - cover(d - lo)) * u_strokeOpacity;
+    o = over(vec4(u_strokeColor * a, a), o);
+  }
+  o *= u_opacity;
 }`;
 
 export interface View {
@@ -31,6 +43,9 @@ export interface SceneItem {
   bbox: Box | null;
   effect: EffectDef;
   params: ParamValues;
+  stroke?: Stroke | null;
+  opacity?: number;
+  blend?: BlendMode;
 }
 
 interface Field {
@@ -83,6 +98,9 @@ export class Renderer {
   checker = true;
   paused = false;
   onError: ((e: Error) => void) | null = null;
+  /** GPU copies of Photo pictures, by asset id. */
+  private photos = new Map<string, WebGLTexture>();
+  private offImages: () => void;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -101,6 +119,29 @@ export class Renderer {
       bg: program(gl, RECT_VS, BG_FS),
     };
     gl.bindVertexArray(gl.createVertexArray());
+    // Redraw once a picture finishes decoding.
+    this.offImages = onImagesReady(() => this.invalidate());
+  }
+
+  /** Texture for a Photo picture (uploaded once, mipmapped for clean downscaling). */
+  private photoTexture(id: string): WebGLTexture | null {
+    const cached = this.photos.get(id);
+    if (cached) return cached;
+    const el = imageElement(id);
+    if (!el) return null;
+    const gl = this.gl;
+    const t = gl.createTexture();
+    if (!t) return null;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, el);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.photos.set(id, t);
+    return t;
   }
 
   setArtboard(w: number, h: number) {
@@ -168,6 +209,9 @@ export class Renderer {
 
   dispose() {
     cancelAnimationFrame(this.raf);
+    this.offImages();
+    for (const t of this.photos.values()) this.gl.deleteTexture(t);
+    this.photos.clear();
     for (const o of this.objs) this.freeField(o);
     this.objs = [];
     if (this.seeds) {
@@ -217,7 +261,9 @@ export class Renderer {
     if (!b || !o.path) return null;
     const { w: W, h: H } = this.art;
     const size = { w: b[2] - b[0], h: b[3] - b[1] };
-    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + 3;
+    const st = o.item.stroke;
+    const stroke = st && st.width > 0 ? st.width * (st.align === 'outside' ? 1 : st.align === 'center' ? 0.5 : 0) : 0;
+    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + 3;
     const x0 = Math.max(0, Math.floor(b[0] + W / 2 - m));
     const y0 = Math.max(0, Math.floor(b[1] + H / 2 - m));
     const x1 = Math.min(W, Math.ceil(b[2] + W / 2 + m));
@@ -334,6 +380,12 @@ export class Renderer {
       const v = o.item.params[def.key] ?? def.default;
       u[`u_${def.key}`] = def.type === 'color' ? hexToRgb(String(v)) : Number(v);
     }
+    const st = o.item.stroke;
+    u.u_strokeW = st && st.opacity > 0 ? st.width : 0;
+    u.u_strokeAlign = st?.align === 'center' ? 1 : st?.align === 'inside' ? 2 : 0;
+    u.u_strokeOpacity = st?.opacity ?? 1;
+    u.u_strokeColor = hexToRgb(st?.color ?? '#000000');
+    u.u_opacity = Math.max(0, Math.min(1, o.item.opacity ?? 1));
     return u;
   }
 
@@ -386,10 +438,19 @@ export class Renderer {
         if (!o.field || !o.region) continue;
         const p = this.effectProgram(o.item.effect);
         gl.useProgram(p.prog);
-        bindTextures(gl, p, { u_mask: o.field.mask, u_sdf: o.field.sdf.tex, u_height: o.field.heightA.tex });
-        setUniforms(gl, p, { ...this.effectUniforms(o), u_rect: rectOf(o.region) });
+        const pic = o.item.effect.photo ? String(o.item.params.image ?? '') : '';
+        const photo = pic ? this.photoTexture(pic) : null;
+        bindTextures(gl, p, { u_mask: o.field.mask, u_sdf: o.field.sdf.tex, u_height: o.field.heightA.tex, ...(o.item.effect.photo ? { u_photo: photo } : {}) });
+        const meta = imageAsset(pic);
+        setUniforms(gl, p, { ...this.effectUniforms(o), u_rect: rectOf(o.region), ...(o.item.effect.photo ? { u_hasPhoto: photo ? 1 : 0, u_imgAspect: meta ? meta.w / meta.h : 1 } : {}) });
+        // Premultiplied blending; multiply and screen keep alpha "over" so transparent exports work.
+        const b = o.item.blend ?? 'normal';
+        if (b === 'multiply') gl.blendFuncSeparate(gl.DST_COLOR, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        else if (b === 'screen') gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_COLOR, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       gl.disable(gl.BLEND);
     };
   }

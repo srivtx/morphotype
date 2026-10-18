@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { addShape } from '../app/actions';
+import { addNode, addShape, placePhoto, setBackground } from '../app/actions';
 import { engine } from '../engine/client';
 import type { TraceOptions, TraceOut } from '../engine/types';
 import { parsePath, serializePath } from '../state/geometry';
-import { pathLayer, style } from '../state/model';
+import { group, pathLayer, style } from '../state/model';
+import { colorPath, drawPixelArt, PALETTES, pixelArt, type PixelArtOptions } from '../state/pixelArt';
 import { edit, store, toast } from '../state/store';
-import { Dialog, Slider, Toggle } from './ui';
+import { Dialog, Segmented, Select, Slider, Toggle } from './ui';
 
 /** Fit a traced outline (1 em box, centred) onto the baseline of a glyph. */
 export function placeOnBaseline(d: string, aspect: number, height = 0.7): { d: string; advance: number } {
@@ -15,7 +16,10 @@ export function placeOnBaseline(d: string, aspect: number, height = 0.7): { d: s
   const w = aspect >= 1 ? 1 : aspect;
   const k = height / h;
   const side = 0.06;
-  const map = (p: { x: number; y: number }) => ({ x: (p.x + w / 2) * k + side, y: (p.y - h / 2) * k });
+  const map = (p: { x: number; y: number }) => ({
+    x: (p.x + w / 2) * k + side,
+    y: (p.y - h / 2) * k,
+  });
   for (const c of cs)
     for (const n of c.nodes) {
       Object.assign(n, map(n));
@@ -26,10 +30,17 @@ export function placeOnBaseline(d: string, aspect: number, height = 0.7): { d: s
 }
 
 export function TraceDialog({ image, name, target }: { image: ImageData; name: string; target: 'layer' | 'glyph' }) {
-  const [opts, setOpts] = useState<TraceOptions>({ threshold: null, invert: false, smooth: 1.5, despeckle: 24, pixel: false });
+  const [opts, setOpts] = useState<TraceOptions>({
+    threshold: null,
+    invert: false,
+    smooth: 1.5,
+    despeckle: 24,
+    pixel: false,
+  });
   const [result, setResult] = useState<TraceOut | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<'photo' | 'outline' | 'pixel'>(target === 'layer' ? 'photo' : 'outline');
   const srcRef = useRef<HTMLCanvasElement>(null);
   const close = () => store.set({ dialog: null });
 
@@ -42,6 +53,8 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
   }, [image]);
 
   useEffect(() => {
+    // Only trace when the Trace view is showing.
+    if (mode !== 'outline') return;
     let live = true;
     setBusy(true);
     const t = setTimeout(() => {
@@ -61,17 +74,66 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
       live = false;
       clearTimeout(t);
     };
-  }, [image, opts]);
+  }, [image, opts, mode]);
 
   const set = (patch: Partial<TraceOptions>) => setOpts((o) => ({ ...o, ...patch }));
+  const [pix, setPix] = useState<PixelArtOptions>({
+    cells: 32,
+    colors: 4,
+    palette: null,
+    dither: 0,
+    shape: 'square',
+  });
+  const [paletteName, setPaletteName] = useState(PALETTES[0].name);
+  const [dropBg, setDropBg] = useState(true);
+  const pixRef = useRef<HTMLCanvasElement>(null);
+  const art = mode === 'pixel' ? pixelArt(image, pix) : null;
+  const bgIndex = art ? art.counts.indexOf(Math.max(...art.counts)) : null;
+  useEffect(() => {
+    if (art && pixRef.current) drawPixelArt(pixRef.current, art, pix.shape, dropBg ? bgIndex : null);
+  });
+  const acceptPixels = () => {
+    if (!art) return;
+    const p = store.get().project;
+    const size = Math.min(p.canvas.width, p.canvas.height) * 0.8;
+    const layers = art.palette
+      .map((c, i) => ({ c, i }))
+      .filter(({ i }) => art.counts[i] > 0 && !(dropBg && i === bgIndex))
+      .map(({ c, i }) =>
+        pathLayer(colorPath(art, i, pix.shape), size, `Ink ${c}`, {
+          style: style('flat', { fill: c }),
+        }),
+      );
+    if (dropBg && bgIndex !== null)
+      setBackground(
+        (b) =>
+          (b.fill = {
+            kind: 'solid',
+            colors: [art.palette[bgIndex]],
+            angle: 180,
+          }),
+      );
+    addNode(group(layers, { name: `${name} pixels`, open: false }));
+    toast(`${layers.length} ink layers, ${art.cols}×${art.rows} pixels. Recolour or restyle each one.`);
+    close();
+  };
   const accept = () => {
+    if (mode === 'pixel') return acceptPixels();
+    if (mode === 'photo') {
+      placePhoto(image, name);
+      return close();
+    }
     if (!result) return;
     if (target === 'glyph') {
       const ch = store.get().glyph;
       const placed = placeOnBaseline(result.d, result.aspect);
       edit((p) => {
         if (!p.type) return;
-        p.type.glyphs[ch] = { ...(p.type.glyphs[ch] ?? {}), d: placed.d, advance: placed.advance };
+        p.type.glyphs[ch] = {
+          ...(p.type.glyphs[ch] ?? {}),
+          d: placed.d,
+          advance: placed.advance,
+        };
         if (!p.type.charset.includes(ch)) p.type.charset += ch;
       });
       toast(`Traced into “${ch}”`);
@@ -83,8 +145,8 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
   };
   return (
     <Dialog
-      title="Trace image"
-      subtitle={target === 'glyph' ? `Becomes the outline of “${store.get().glyph}”.` : 'Turns dark areas of the picture into a smooth vector outline.'}
+      title={target === 'glyph' ? 'Trace image' : 'Add image'}
+      subtitle={target === 'glyph' ? `Becomes the outline of “${store.get().glyph}”.` : mode === 'photo' ? 'Use the picture as it is, inside any shape.' : mode === 'pixel' ? 'Turns the picture into pixel art with a few inks, one layer per colour.' : 'Turns dark areas of the picture into a smooth vector outline.'}
       onClose={close}
       size="lg"
       footer={
@@ -92,8 +154,8 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
           <button className="btn" onClick={close}>
             Cancel
           </button>
-          <button className="btn primary" disabled={!result} onClick={accept}>
-            {target === 'glyph' ? 'Use as glyph' : 'Add as layer'}
+          <button className="btn primary" disabled={mode === 'outline' && !result} onClick={accept}>
+            {target === 'glyph' ? 'Use as glyph' : mode === 'photo' ? 'Place photo' : mode === 'pixel' ? 'Add pixel art' : 'Add as layer'}
           </button>
         </>
       }
@@ -104,20 +166,90 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
             <canvas ref={srcRef} />
             <figcaption>Original</figcaption>
           </figure>
-          <figure>
-            <svg viewBox="-0.55 -0.55 1.1 1.1" className={busy ? 'busy' : ''}>
-              {result && <path d={result.d} fill="currentColor" fillRule="nonzero" />}
-            </svg>
-            <figcaption>{error ?? (result ? `${result.contours} contours` : 'Tracing…')}</figcaption>
-          </figure>
+          {mode === 'photo' ? null : mode === 'pixel' && art ? (
+            <figure>
+              <canvas ref={pixRef} className="pixel-preview" />
+              <figcaption>
+                {art.cols}×{art.rows} · {art.palette.filter((_, i) => art.counts[i] > 0).length} inks
+              </figcaption>
+            </figure>
+          ) : (
+            <figure>
+              <svg viewBox="-0.55 -0.55 1.1 1.1" className={busy ? 'busy' : ''}>
+                {result && <path d={result.d} fill="currentColor" fillRule="nonzero" />}
+              </svg>
+              <figcaption>{error ?? (result ? `${result.contours} contours` : 'Tracing…')}</figcaption>
+            </figure>
+          )}
         </div>
-        <div className="trace-controls">
-          <Toggle label="Automatic threshold" checked={opts.threshold === null} onChange={(v) => set({ threshold: v ? null : 0.5 })} />
-          {opts.threshold !== null && <Slider label="Threshold" value={opts.threshold} min={0.01} max={0.99} step={0.01} onChange={(v) => set({ threshold: v })} />}
-          <Toggle label="Invert (trace light areas)" checked={opts.invert} onChange={(v) => set({ invert: v })} />
-          <Toggle label="Keep hard pixel edges" checked={opts.pixel} onChange={(v) => set({ pixel: v })} />
-          {!opts.pixel && <Slider label="Smoothing" value={opts.smooth} min={0} max={12} step={0.1} onChange={(v) => set({ smooth: v })} />}
-          <Slider label="Ignore specks" value={opts.despeckle} min={0} max={2000} step={1} suffix="px²" onChange={(v) => set({ despeckle: v })} />
+        <div className="trace-side">
+          {target === 'layer' && (
+            <Segmented
+              value={mode}
+              options={[
+                { value: 'photo', label: 'Photo' },
+                { value: 'outline', label: 'Trace' },
+                { value: 'pixel', label: 'Pixel art' },
+              ]}
+              onChange={setMode}
+            />
+          )}
+          {mode === 'photo' ? (
+            <div className="trace-controls">
+              <p className="hint">Places the picture as a rectangle with the Photo material. Swap the shape for any other (a circle, a star, your text) and the photo stays inside; Style has zoom, pan, duotone and grain.</p>
+            </div>
+          ) : mode === 'pixel' ? (
+            <div className="trace-controls">
+              <Slider label="Pixels across" value={pix.cells} min={4} max={160} step={1} onChange={(v) => setPix({ ...pix, cells: Math.round(v) })} />
+              <div className="field">
+                <span>Palette</span>
+                <Select
+                  value={paletteName}
+                  options={PALETTES.map((p) => ({
+                    value: p.name,
+                    label: p.name,
+                  }))}
+                  onChange={(v) => {
+                    setPaletteName(v);
+                    setPix({
+                      ...pix,
+                      palette: PALETTES.find((p) => p.name === v)?.colors ?? null,
+                    });
+                  }}
+                />
+              </div>
+              {!pix.palette && <Slider label="Colours" value={pix.colors} min={2} max={8} step={1} onChange={(v) => setPix({ ...pix, colors: Math.round(v) })} />}
+              <Slider label="Dither" value={pix.dither} min={0} max={1} step={0.01} onChange={(v) => setPix({ ...pix, dither: v })} />
+              <div className="field">
+                <span>Cells</span>
+                <Segmented
+                  size="sm"
+                  value={pix.shape}
+                  options={[
+                    { value: 'square', label: 'Squares' },
+                    { value: 'dot', label: 'Dots' },
+                  ]}
+                  onChange={(v) =>
+                    setPix({
+                      ...pix,
+                      shape: v,
+                      cells: v === 'dot' ? Math.min(pix.cells, 90) : pix.cells,
+                    })
+                  }
+                />
+              </div>
+              <Toggle label="Use the most common colour as the background" checked={dropBg} onChange={setDropBg} />
+            </div>
+          ) : (
+            <div className="trace-controls">
+              <Toggle label="Automatic threshold" checked={opts.threshold === null} onChange={(v) => set({ threshold: v ? null : 0.5 })} />
+              {opts.threshold !== null && <Slider label="Threshold" value={opts.threshold} min={0.01} max={0.99} step={0.01} onChange={(v) => set({ threshold: v })} />}
+              <Toggle label="Invert (trace light areas)" checked={opts.invert} onChange={(v) => set({ invert: v })} />
+              <Toggle label="Keep hard pixel edges" checked={opts.pixel} onChange={(v) => set({ pixel: v })} />
+              {!opts.pixel && <Slider label="Smoothing" value={opts.smooth} min={0} max={12} step={0.1} onChange={(v) => set({ smooth: v })} />}
+              <Slider label="Ignore specks" value={opts.despeckle} min={0} max={2000} step={1} suffix="px²" onChange={(v) => set({ despeckle: v })} />
+            </div>
+          )}
         </div>
       </div>
     </Dialog>

@@ -23,6 +23,9 @@ fn one() -> f64 {
 fn yes() -> bool {
     true
 }
+fn default_brush() -> f64 {
+    8.0
+}
 fn default_size() -> f64 {
     200.0
 }
@@ -90,6 +93,16 @@ pub enum Content {
         #[serde(default = "default_size")]
         size: f64,
     },
+    /// Freehand brush stroke: points `[x, y, pressure]` in layer pixels.
+    Stroke {
+        points: Vec<[f64; 3]>,
+        #[serde(default = "default_brush")]
+        width: f64,
+        #[serde(default)]
+        taper: f64,
+        #[serde(default)]
+        smooth: f64,
+    },
     /// Morph between two other layers' shapes.
     Morph {
         a: String,
@@ -139,6 +152,14 @@ impl Layer {
         match &self.content {
             Content::Text { size, .. } | Content::Symbol { size, .. } | Content::Path { size, .. } => size.abs().max(1.0),
             Content::Morph { .. } => 200.0,
+            // Modifiers on a stroke scale with the drawing's size.
+            Content::Stroke { points, width, .. } => {
+                let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                for p in points {
+                    (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+                }
+                ((x1 - x0).max(y1 - y0).max(0.0) + width.abs()).max(10.0)
+            }
         }
     }
 }
@@ -649,6 +670,10 @@ impl Engine {
                 let mut poly = flatten_curves(&cs, size.abs().max(1.0) / 2000.0).cleaned(1e-9);
                 normalize_winding(&mut poly);
                 (Geo { poly, curves: None }, em)
+            }
+            Content::Stroke { points, width, taper, smooth } => {
+                let cell = em / quality.clamp(24.0, 1024.0) * 0.5;
+                (Geo::poly_only(crate::stroke::outline(points, *width, *taper, *smooth, cell)), em)
             }
             Content::Morph { a, b, t } => {
                 let find = |id: &str| doc.layers.iter().find(|l| l.id == id).cloned();

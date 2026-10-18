@@ -3,7 +3,7 @@ import { addSystemFont } from '../app/actions';
 import { platform, type SystemFont } from '../platform';
 import { projectScene } from '../render/thumbs';
 import { useThumb } from '../render/thumbs';
-import { TEMPLATES, type Template } from '../state/templates';
+import { recipeOf, TEMPLATES, type Template } from '../state/templates';
 import { replaceProject, store, toast, useStore } from '../state/store';
 import { CommandPalette } from './CommandPalette';
 import { HelpDialog } from './HelpDialog';
@@ -55,6 +55,9 @@ function TemplateCard({ t, onPick }: { t: Template; onPick: () => void }) {
       </span>
       <strong>{t.name}</strong>
       <span>{t.hint}</span>
+      <span className="template-recipe" title="What it's made with">
+        {recipeOf(p).slice(0, 5).join(' · ')}
+      </span>
     </button>
   );
 }

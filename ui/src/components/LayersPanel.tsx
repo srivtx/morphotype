@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { addShape, importImage, moveNodes, startText, toggleLocked, toggleVisible, updateNode } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
 import type { SymbolKind } from '../engine/types';
-import { fillCss } from '../render/background';
+import { backgroundCss, fillCss } from '../render/background';
 import { viewBoxOf } from '../render/thumbs';
 import { isGroup, morphLayer, nodeLabel, symbolLayer, type Group, type Node } from '../state/model';
 import { edit, select, store, useStore } from '../state/store';
@@ -64,7 +64,7 @@ function BackgroundRow() {
     >
       <span className="row-caret" />
       <span className="row-kind">
-        <span className="bg-swatch" style={{ background: fillCss(bg.fill) }}>
+        <span className="bg-swatch" style={{ background: backgroundCss(bg, 0.05) }}>
           {bg.tile && <span style={{ background: fillCss(bg.tile.fill) }} />}
         </span>
       </span>

@@ -15,7 +15,7 @@ const SECTIONS: string[][] = [
   ['cut', 'copy', 'paste', 'duplicate', 'delete'],
   ['group', 'merge', 'ungroup'],
   ['front', 'forward', 'backward', 'back'],
-  ['points', 'add-warp', 'outline', 'break'],
+  ['points', 'add-warp', 'outline', 'break', 'construction'],
   ['copy-style', 'paste-style'],
   ['flip-h', 'flip-v', 'lock', 'hide'],
 ];

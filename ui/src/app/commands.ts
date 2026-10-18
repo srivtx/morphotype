@@ -6,7 +6,7 @@ import type { IconName } from '../components/icons';
 import { platform } from '../platform';
 import { PRESETS } from '../render/effects';
 import { CANVAS_PRESETS, isGroup, newModifier, SYMBOL_UI, symbolLayer } from '../state/model';
-import { edit, redo, select, setSettings, store, undo } from '../state/store';
+import { edit, redo, select, setSettings, store, toast, undo } from '../state/store';
 import { ancestors } from '../state/tree';
 import {
   addShape,
@@ -45,6 +45,7 @@ import {
   toggleVisible,
   ungroupSelected,
   updateNode,
+  constructionSheet,
 } from './actions';
 
 export interface Command {
@@ -76,7 +77,7 @@ export function commands(): Command[] {
     { id: 'open', title: 'Open project…', group: 'File', icon: 'open', keys: ['mod+o'], run: () => void openProject() },
     { id: 'save', title: 'Save project…', group: 'File', icon: 'save', keys: ['mod+s'], run: () => void saveProject() },
     { id: 'import-fonts', title: 'Import fonts…', group: 'File', icon: 'font', run: () => void importFonts() },
-    { id: 'trace', title: 'Trace an image…', group: 'File', icon: 'image', keys: ['shift+mod+i'], keywords: 'import picture photo logo vectorize', run: () => void importImage() },
+    { id: 'trace', title: 'Add an image… (photo, trace or pixel art)', group: 'File', icon: 'image', keys: ['shift+mod+i'], keywords: 'import picture photo logo vectorize', run: () => void importImage() },
     { id: 'export-png', title: 'Export PNG', group: 'Export', icon: 'export', keys: ['mod+e'], run: () => void exportPNG() },
     { id: 'export-png-4', title: 'Export PNG at 4×', group: 'Export', icon: 'export', run: () => void exportPNG(4) },
     { id: 'export-jpg', title: 'Export JPG (for social posts)', group: 'Export', icon: 'export', keywords: 'instagram thumbnail jpeg', run: () => void exportJPG() },
@@ -115,6 +116,10 @@ export function commands(): Command[] {
     { id: 'tool-hand', title: 'Hand tool (pan)', group: 'Tools', icon: 'hand', keys: ['h'], run: () => store.set({ tool: 'hand' }) },
     // Add
     { id: 'tool-text', title: 'Text tool (click the canvas to type)', group: 'Tools', icon: 'text', keys: ['t'], keywords: 'type write words', run: () => store.set({ tool: 'text', editing: null }) },
+    { id: 'construction', title: 'Draw construction (guides and anchor points)', group: 'Shape', icon: 'points', keywords: 'blueprint presentation logo grid guides anchors spec sheet', when: hasSel, run: () => void constructionSheet() },
+    { id: 'tool-draw', title: 'Draw tool (pen, marker, pencil, highlighter)', group: 'Tools', icon: 'brush', keys: ['b'], keywords: 'brush pencil freehand scribble sketch marker paint', run: () => store.set({ tool: 'draw', editing: null }) },
+    { id: 'brush-smaller', title: 'Smaller brush', group: 'Tools', icon: 'brush', keys: ['['], run: () => setSettings({ brushWidth: Math.max(1, Math.round(store.get().settings.brushWidth / 1.25)) }) },
+    { id: 'brush-bigger', title: 'Bigger brush', group: 'Tools', icon: 'brush', keys: [']'], run: () => setSettings({ brushWidth: Math.min(200, Math.round(store.get().settings.brushWidth * 1.25 + 0.5)) }) },
     { id: 'add-text', title: 'Add text in the middle', group: 'Add', icon: 'text', keywords: 'type write words', run: () => startText() },
     { id: 'add-squircle', title: 'Add squircle', group: 'Add', icon: 'tile', keys: ['r'], run: () => addShape(symbolLayer('squircle')) },
     { id: 'add-circle', title: 'Add circle', group: 'Add', icon: 'shapes', keys: ['o'], run: () => addShape(symbolLayer('circle')) },
@@ -180,6 +185,19 @@ export function commands(): Command[] {
     { id: 'zoom-out', title: 'Zoom out', group: 'View', icon: 'zoomOut', keys: ['mod+-'], run: () => fire('mt-zoom', { by: 0.8 }) },
     { id: 'zoom-sel', title: 'Zoom to selection', group: 'View', keys: ['shift+2'], when: hasSel, run: () => fire('mt-zoom', { selection: true }) },
     { id: 'grid', title: 'Show / hide grid', group: 'View', icon: 'grid', keys: ["mod+'"], run: () => setSettings({ grid: !store.get().settings.grid }) },
+    {
+      id: 'snap-grid',
+      title: 'Snap to grid',
+      group: 'View',
+      icon: 'grid',
+      keys: ["shift+mod+'"],
+      run: () => {
+        const on = !store.get().settings.snapGrid;
+        // Snapping to an invisible grid is confusing, so turning it on shows the grid.
+        setSettings(on ? { snapGrid: true, grid: true } : { snapGrid: false });
+        toast(on ? `Snapping to a ${store.get().settings.gridSize} px grid` : 'Grid snapping off');
+      },
+    },
     { id: 'snap', title: 'Snapping on / off', group: 'View', icon: 'magnet', keys: ['mod+;'], run: () => setSettings({ snap: !store.get().settings.snap }) },
     { id: 'advanced', title: 'Simple / advanced controls', group: 'View', icon: 'settings', keys: ['mod+\\'], keywords: 'expert pro', run: () => setSettings({ advanced: !store.get().settings.advanced }) },
     { id: 'mode-design', title: 'Design mode', group: 'View', icon: 'design', keys: ['mod+1'], keywords: 'logo canvas', run: () => store.set({ mode: 'design', editing: null }) },

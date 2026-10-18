@@ -14,9 +14,31 @@ export type Modifier =
   | { kind: 'arc'; bend: number }
   | { kind: 'wobble'; amount: number; scale: number; seed: number }
   | { kind: 'melt'; amount: number; scale: number; seed: number }
-  | { kind: 'pixelate'; size: number; shape: PixelShape; gap: number }
+  | { kind: 'pixelate'; size: number; shape: PixelShape; gap: number; dissolve?: number; angle?: number; seed?: number }
   | { kind: 'perspective'; amount: number }
-  | { kind: 'warp'; style: WarpStyle; bend: number; points: [number, number][] };
+  | { kind: 'warp'; style: WarpStyle; bend: number; points: [number, number][] }
+  | { kind: 'slice'; count: number; gap: number; angle: number; ring: number; hole: number; jitter: number; seed: number; soften: number; x?: number; y?: number }
+  | {
+      kind: 'repeat';
+      mode: RepeatMode;
+      count: number;
+      radius: number;
+      sweep: number;
+      orient: number;
+      cols: number;
+      rows: number;
+      gapX: number;
+      gapY: number;
+      dx: number;
+      dy: number;
+      grow: number;
+      spin: number;
+    }
+  | { kind: 'echo'; count: number; spacing: number; width: number }
+  | { kind: 'fuse'; amount: number }
+  | { kind: 'fitCircle'; amount: number };
+
+export type RepeatMode = 'radial' | 'grid' | 'trail';
 
 export type PixelShape = 'square' | 'dot' | 'rounded';
 export type WarpStyle = 'custom' | 'arch' | 'arc' | 'arcLower' | 'bulge' | 'flag' | 'rise' | 'fish' | 'inflate' | 'squeeze' | 'twist';
@@ -47,7 +69,12 @@ export type SymbolSpec =
   | { kind: 'bolt' }
   | { kind: 'moon'; phase: number }
   | { kind: 'smile'; curve: number; weight: number }
-  | { kind: 'rays'; rays: number; short: number; inner: number; jitter: number; seed: number };
+  | { kind: 'rays'; rays: number; short: number; inner: number; jitter: number; seed: number }
+  | { kind: 'quarter' }
+  | { kind: 'half' }
+  | { kind: 'cove' }
+  | { kind: 'pill'; aspect: number }
+  | { kind: 'folder'; tab: number; corner: number };
 
 export type SymbolKind = SymbolSpec['kind'];
 
@@ -72,7 +99,9 @@ export type Content =
     }
   | { type: 'symbol'; symbol: SymbolSpec; size: number }
   | { type: 'path'; d: string; size: number; name?: string }
-  | { type: 'morph'; a: string; b: string; t: number };
+  | { type: 'morph'; a: string; b: string; t: number }
+  /** Freehand brush stroke; points are [x, y, pressure] in layer pixels. */
+  | { type: 'stroke'; points: [number, number, number][]; width: number; taper: number; smooth: number };
 
 /** What the engine needs to know about a layer. */
 export interface EngineLayer {

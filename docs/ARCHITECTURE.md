@@ -24,13 +24,15 @@ text ─► shape (rustybuzz) ─► glyph outlines (em units, cached per font/a
                          └─► morph? glyph pairs (cached correspondence) at t
 symbol params ─► polylines
 traced/imported path ─► parse SVG path data
+brush stroke points ─► swept-circle distance field ─► outline
             │
             ▼
       modifier stack (layer em units)
             │   affine (slant, stretch): curves stay exact
             │   point maps (wave, arc, warp, wobble, melt, perspective): densify, then displace
-            │   field ops (weight, round, outline, ink): narrow-band SDF → iso-contour
-            │   pixels: nonzero raster → block outlines, dots or rounded tiles
+            │   field ops (weight, round, outline, ink, fuse, slice, echo): SDF → iso-contour
+            │   pixels: nonzero raster → block outlines, dots or rounded tiles (dissolve drops cells)
+            │   repeat (radial, grid, trail): affine copies, so curves stay exact
             ▼
       layer transform (translate · rotate · scale · stretch)
             ▼
@@ -46,7 +48,9 @@ traced/imported path ─► parse SVG path data
 Key algorithms:
 
 - **Winding normalisation.** Contours are oriented by nesting depth (solids positive, holes negative), so fonts with TrueType or PostScript conventions, overlapping contours and imported SVGs all behave the same.
-- **Narrow-band signed distance.** Exact segment distances are computed only within the band an operation needs; the sign comes from a nonzero scanline raster. Iso-contours come from oriented marching squares (inside on the right, with saddle cells resolved by the cell average), so output loops come out correctly wound with no post-processing.
+- **Narrow-band signed distance.** Exact segment distances are computed only within the band an operation needs; the sign comes from a nonzero scanline raster. Iso-contours come from oriented marching squares (inside on the right, with saddle cells resolved by the cell average), so output loops come out correctly wound with no post-processing. Bands wider than 8 cells (big Weight, Fuse or Echo values) switch to a dead-reckoning distance transform: exact nearest points within 2.5 cells of the outline, then two raster passes that hand each neighbour's nearest point on, which is linear in the grid size instead of sweeping the band once per edge (Echo rings went from ~320 ms to ~11 ms). Marching squares keeps dense per-edge links but stores crossing points compactly.
+- **Slice and Echo.** Slice subtracts a cut field: distance to rays from a movable centre (plus an optional ring and hole) minus half the gap, then an opening (shrink, grow) softens the pieces' corners without closing the gaps, which a plain Round would. Echo keeps the inside and adds rings where the outside distance is near a multiple of the spacing, sampled at a resolution set by the ring width rather than the shape's size.
+- **Brush strokes.** A stroke is a polyline with a radius per point (pen pressure, tapered ends). Input is smoothed with Chaikin corner cutting, resampled to the field spacing, and each segment stamps the distance to its tapered capsule into a grid, comparing squared distances first. The zero level is the outline, so self-crossing scribbles stay filled with round ends. A 2000-point scribble builds in about 5 ms. While drawing, the UI only updates one SVG path; the engine runs once on release.
 - **Morph correspondence.** Contours are paired solid-to-solid and hole-to-hole by minimum cost (exact search up to 7 contours, greedy above). Unpaired contours grow from or shrink to their own centroid. Pairs are aligned with a rigid start-point shift, then refined with banded dynamic time warping on position and tangent. Both contours are sampled at a shared parameter set that includes every original vertex of either contour, so t = 0 and t = 1 are exact.
 - **Curve fitting.** Schneider's algorithm, with corners detected on an RDP-simplified copy and nearly straight fits emitted as lines.
 - **Warp.** A bicubic Bezier patch over the input's bounding box. With evenly spaced control points it reproduces the identity, so a preset (Arch, Flag, Bulge…) is just a table of control-point offsets scaled by `bend`, and hand-dragged points add to it. The UI mirrors the same table to draw the net.
@@ -55,13 +59,15 @@ Key algorithms:
 
 ## Documents (`ui/src/state`)
 
-A project is a tree of **layers** (text, symbol, outline, morph) and **groups**. Every layer has its own style (an effect and its parameters). `tree.ts` turns the tree into an engine document:
+A project is a tree of **layers** (text, symbol, outline, morph, drawing) and **groups**. Every layer has its own style (an effect and its parameters). `tree.ts` turns the tree into an engine document:
 
 - each visible layer becomes one render (one styled object on the GPU);
 - a layer or group set to **Cut** or **Mask** doesn't render. Its layers are appended, with that op, to the renders of the nearest non-clipping sibling below it (to every render inside it, if that sibling is a group), like clipping masks;
 - a **merged** group is a single render: its descendants combine with their ops, then the group's own modifiers run on the union, and it uses the group's style.
 
-UI-only fields (names, locks, styles) are stripped before the document reaches the engine, so a style edit never triggers a geometry rebuild. The background (page fill, app-icon tile, grain) belongs to the project, not to an effect. Version 1 files, which had one effect for the whole document, are migrated into a merged group that keeps that effect, with the backdrop moved to the canvas.
+UI-only fields (names, locks, styles) are stripped before the document reaches the engine, so a style edit never triggers a geometry rebuild. The background (page fill, pattern, app-icon tile, grain) belongs to the project, not to an effect. A style can also carry a stroke (outside, centre or inside, drawn by the renderer over any material), an opacity and a blend mode.
+
+Pictures for the Photo material live in an asset store (`assets.ts`) outside the project, keyed by a hash of their data. Edits deep-copy the project for undo, so keeping megabytes of image data out of it keeps every edit and every undo step cheap; `.morpho` files embed the pictures in use when saved and restore them on open. Version 1 files, which had one effect for the whole document, are migrated into a merged group that keeps that effect, with the backdrop moved to the canvas.
 
 ## Renderer (`ui/src/render`)
 
@@ -75,6 +81,8 @@ Each object gets its own field, cropped to its bounding box plus how far its eff
 6. **Effect**: one fragment shader reads mask, SDF and height, computes normals by central differences, and returns premultiplied colour. The same shader renders the preview (with a viewport transform) and exports (into an FBO at up to 8K).
 
 Preview cards and template thumbnails use a second, off-screen renderer with the same shaders, so they always match the canvas.
+
+Every effect shader is wrapped with the same epilogue: an optional stroke from the SDF (so strokes work on chrome, puffy or halftone alike) and the style's opacity. Blend modes are fixed-function: Multiply uses `DST_COLOR, ONE_MINUS_SRC_ALPHA` and Screen `ONE, ONE_MINUS_SRC_COLOR` on premultiplied colour, with alpha kept "over" so transparent exports still work. Photo binds the picture as a mipmapped texture, uploaded once per renderer and redrawn when it finishes decoding.
 
 Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI generates its controls from the schema, and a unit test checks that every parameter is consumed by either the shader or the height pass.
 
@@ -93,6 +101,6 @@ Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI gen
 1. **Kerning carry-over**: interpolate pair kerning from GPOS/kern of both sources; add a class-based kerning editor.
 2. **Variable font export**: export the morph axis (and weight/round) as a real `fvar`/`gvar` variable font. The morph correspondence is already point-compatible, which is the hard part.
 3. **WOFF2 import** via a pure-Rust Brotli decoder.
-4. **More effects**: video loop export for animated chrome and neon, and image layers with halftone and duotone filters.
+4. **More effects**: video loop export for animated chrome and neon; refractive "liquid glass" and ASCII materials, which need the renderer to sample what is behind an object.
 5. **Metal path**: if profiling on Apple silicon shows WebGL overhead, move the SDF and effects to `wgpu`, which the Rust core can call directly.
 6. **Signing and notarisation** for the `.dmg` in CI once an Apple Developer ID is available.

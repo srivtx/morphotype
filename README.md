@@ -1,6 +1,6 @@
 # Morphotype
 
-A Mac-first type and logo lab. Morph one typeface into another, reshape lettering with a stack of modifiers, trace images into vector marks, compile the result into a real installable font, and render it as liquid chrome, glow glass, puffy 3D, app icons, distressed print or neon, all in real time on the GPU.
+A Mac-first type and logo lab. Morph one typeface into another, reshape lettering with a stack of modifiers, draw by hand, put photos inside any shape, trace images into vector marks, compile the result into a real installable font, and render it as liquid chrome, glow glass, puffy 3D, halftone, dither, rubber stamp or neon, all in real time on the GPU.
 
 ![Templates rendered by Morphotype](docs/images/gallery.png)
 
@@ -14,11 +14,14 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 
 **Design mode**
 - **Type on the canvas.** Press T and click anywhere to type, or double-click any text to edit it in place, with a real caret and selection and a small bar for font, size, colour and alignment.
+- **Draw.** Press B for pen, marker, pencil or highlighter strokes, with pen pressure and tapered ends. Drawings stay editable vector layers.
+- **Photos.** Drop in a picture and place it inside any shape or text (zoom, pan, duotone, grain), trace it into an outline, or turn it into pixel art with a few inks and optional dithering.
 - **Direct editing.** Click to select, drag to move, and use the handles to resize, stretch or rotate (⇧ keeps proportions, as in Figma). Smart guides snap to the artboard and other layers, hold ⌥ to measure distances, and drags show live readouts. Also marquee selection, multi-select, align and distribute, flip, lock, hide, groups and right-click menus.
-- **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed, Letterpress, Halftone, Risograph and Flat/gradient with print texture. There are 43 presets with GPU-rendered previews, and the Design tab recolours any material from a single colour.
+- **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed (with rubber-stamp grain), Letterpress, Halftone (with 3D light and misregistration), Risograph, Dither, Photo and Flat/gradient with print texture and hard shadows. There are over 60 presets with GPU-rendered previews, and the Design tab recolours any material from a single colour. Every layer can also have a stroke (outside, centre or inside), opacity and a Multiply or Screen blend.
 - **Shapes that work like a logo tool.** Cut and Mask clip into the layer directly below, Merge fuses layers into one outline with one material, and Break apart splits text or traced images into one layer per letter.
-- **Reshape anything.** Quick looks (Bitmap, Dot matrix, Soft pixel, Tiles, Arch, Flag, Melting…) apply a whole modifier stack in one click. Warp gives Photoshop-style envelope presets plus 16 draggable points. Edit points gives real bezier editing. The modifiers are Weight, Round, Outline, Pixels (blocks, dots, soft tiles), Slant, Stretch, Warp, Arc, Wave, Perspective, Wobble, Melt and Ink bleed.
-- **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, and an app-icon tile with gloss, shadow and a holographic rim, set up for macOS (rounded tile in the artwork) or iOS and Android (full square, with a preview of the system mask). The background is the bottom row in Layers and a chip in the dock. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons, business cards, ID badges and more.
+- **Reshape anything.** Quick looks (Bitmap, Sun rays, Blob dots, Echo stack, Fused band, All the way round…) apply a whole modifier stack in one click. Warp gives Photoshop-style envelope presets plus 16 draggable points. Edit points gives real bezier editing. The modifiers are Weight, Round, Outline, Pixels (blocks, dots, soft tiles, dissolve), Slice, Fuse, Repeat (around, grid, trail), Echo lines, Slant, Stretch, Warp, Fit in circle, Arc (up to a full circle), Wave, Perspective, Wobble, Melt and Ink bleed.
+- **Construction sheets.** Draw construction turns a logo into a presentation drawing: tinted outline, anchor markers and guides at its edges and the font's metric lines.
+- **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, patterns (grid paper, dot grid, lines, stripes, checks), and an app-icon tile with gloss, shadow and a holographic rim, set up for macOS (rounded tile in the artwork) or iOS and Android (full square, with a preview of the system mask). The background is the bottom row in Layers and a chip in the dock. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons, business cards, ID badges and more.
 - **Fonts.** TTF, OTF, TTC and WOFF, shaped with a HarfBuzz port, with variable axes. Text can morph into another font glyph by glyph.
 - **Image tracing.** PNG, JPG, WebP or SVG become smooth vector outlines, or keep hard pixel edges.
 
@@ -60,7 +63,7 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 - **Latest-wins scheduling.** While the engine is busy, only the newest document is queued. If the WebAssembly module ever traps, the worker restarts, reloads fonts and retries.
 - **Small native app.** Tauri uses the system WKWebView rather than bundling Chromium.
 
-Typical timings (release build, a 10-letter word): plain text under 0.5 ms, weight about 8 ms, rounding about 20 ms, ink about 25 ms. Cached rebuilds when only another layer changed take about 0.3 ms. See `cargo run --release -p morpho-core --example bench`.
+Typical timings (release build, a 10-letter word): plain text under 0.5 ms, weight about 5 ms, rounding about 20 ms, ink about 25 ms, slice about 10 ms. A 2000-point brush scribble takes about 5 ms and seven echo rings around a shape about 11 ms. Cached rebuilds when only another layer changed take about 0.3 ms. See `cargo run --release -p morpho-core --example bench`.
 
 More detail is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -90,7 +93,8 @@ CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-
 | | |
 | --- | --- |
 | ⌘K | Search every command |
-| V / H / T / O / R | Select, hand, text tool, circle, squircle |
+| V / H / T / B / O / R | Select, hand, text tool, draw, circle, squircle |
+| [ / ] | Smaller / bigger brush |
 | Enter / ⇧Enter | Edit the selected text or enter a group / select the parent group |
 | Hold ⌥ | Measure distances from the selection |
 | P / W | Edit points / warp |
@@ -102,6 +106,7 @@ CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-
 | ⌘E / ⇧⌘E / ⇧⌘C | Export PNG / SVG / copy image |
 | ⌘1 / ⌘2 | Design / Type mode |
 | ⌘0, ⇧0, ⇧2 | Fit, 100%, zoom to selection |
+| ⌘' / ⇧⌘' | Show grid / snap to grid |
 | Arrows (⇧ for 10 px), Tab | Nudge, cycle layers |
 | ? / ⌘, | Help and all shortcuts / settings |
 
@@ -122,7 +127,7 @@ scripts              WASM build and end-to-end test
 
 ## Fonts and licences
 
-The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk, Playfair Display, Rubik Mono One, Pacifico, Silkscreen, Unbounded, Bungee, Dela Gothic One) are under the SIL Open Font License; see `ui/public/fonts/OFL.txt`. A font you make from an OFL font is a derivative: give it a new family name and keep it under the OFL.
+The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk, Playfair Display, Rubik Mono One, Pacifico, Silkscreen, Unbounded, Bungee, Dela Gothic One, Young Serif, Bricolage Grotesque, Caveat, Caveat Brush) are under the SIL Open Font License; see `ui/public/fonts/OFL.txt`. A font you make from an OFL font is a derivative: give it a new family name and keep it under the OFL.
 
 ## Known limitations
 

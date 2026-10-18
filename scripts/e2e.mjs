@@ -270,6 +270,59 @@ try {
   await settle(300);
   check(!layersOf(await state()).some((l) => l.content?.type === 'text' && !l.content.text.trim()), 'an empty text is removed when typing ends');
 
+  // ---- drawing, photos, construction, patterns, new modifiers ----
+  await openTemplate('Blank canvas');
+  await page.keyboard.press('b');
+  check((await state()).tool === 'draw' && (await page.locator('.brush-bar').count()) === 1, 'B opens the draw tool and brush bar');
+  const cx = vb.x + vb.width / 2;
+  const cy = vb.y + vb.height / 2;
+  await page.mouse.move(cx - 150, cy);
+  await page.mouse.down();
+  for (let k = 0; k <= 60; k++) await page.mouse.move(cx - 150 + k * 5, cy + 60 * Math.sin(k / 6));
+  await page.mouse.up();
+  check(await until((st) => layersOf(st).some((l) => l.content?.type === 'stroke' && l.content.points.length > 20) && st.build?.layers.some((o) => o.bbox && !o.error)), 'drawing a stroke makes an editable drawing layer');
+  await page.keyboard.press('Escape');
+  check((await state()).tool === 'select', 'Esc leaves the draw tool');
+  await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 320;
+    c.height = 200;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ff7a1a';
+    g.fillRect(0, 0, 320, 200);
+    g.fillStyle = '#2b6bff';
+    g.fillRect(40, 40, 120, 120);
+    window.morphotype.store.set({ dialog: { kind: 'trace', image: g.getImageData(0, 0, 320, 200), name: 'Swatch', target: 'layer' } });
+  });
+  await page.getByRole('button', { name: 'Place photo' }).click();
+  s = await state();
+  const photo = layersOf(s).find((l) => l.style?.effect === 'photo');
+  check(!!photo && typeof photo.style.params.image === 'string', 'an image can be placed as a photo inside a shape');
+  await page.evaluate(() => {
+    const m = window.morphotype;
+    const p = structuredClone(m.store.get().project);
+    p.background.pattern = { kind: 'grid', size: 80, weight: 3, color: '#000000', opacity: 0.5 };
+    p.layers.push({
+      ...structuredClone(p.layers.find((l) => l.content?.type !== 'stroke')),
+      id: 'mods-test',
+      content: { type: 'symbol', symbol: { kind: 'circle' }, size: 300 },
+      style: { effect: 'flat', params: { fill: '#111111' } },
+      modifiers: [
+        { kind: 'slice', count: 8, gap: 0.05, angle: 0, ring: 0.3, hole: 0, jitter: 0, seed: 1, soften: 0.02, on: true, uid: 'm1' },
+        { kind: 'echo', count: 2, spacing: 0.06, width: 0.02, on: true, uid: 'm2' },
+        { kind: 'repeat', mode: 'radial', count: 3, radius: 0.4, sweep: 360, orient: 1, cols: 1, rows: 1, gapX: 0, gapY: 0, dx: 0, dy: 0, grow: 1, spin: 0, on: true, uid: 'm3' },
+      ],
+    });
+    m.store.set({ project: p, selection: ['mods-test'] });
+  });
+  check(await until((st) => st.build?.layers.some((o) => o.id === 'mods-test' && o.bbox && !o.error)), 'slice, echo and repeat build together');
+  await page.keyboard.press(`${mod}+k`);
+  await page.keyboard.type('Draw construction');
+  await page.keyboard.press('Enter');
+  check(await until((st) => st.project.layers.some((n) => n.type === 'group' && n.name === 'Construction')), 'construction sheet draws guides and anchors');
+  await settle(800);
+  await page.screenshot({ path: path.join(out, 'new-01-draw-photo-construction.png') });
+
   // ---- Type mode ----
   await page.keyboard.press(`${mod}+2`);
   await page.waitForSelector('.type-start', { timeout: 15_000 });

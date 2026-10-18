@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { duplicateSelected, editPoints, editText, endTextEdit, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
+import { duplicateSelected, editPoints, editText, endTextEdit, finishDrawing, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
 import type { Box } from '../../engine/types';
 import { effectById } from '../../render/effects';
 import { Renderer, type SceneItem } from '../../render/renderer';
@@ -18,7 +18,8 @@ type Drag =
   | { kind: 'marquee'; a: Pt; b: Pt; additive: boolean; base: string[] }
   | { kind: 'move'; start: Pt; moved: boolean; layers: Map<string, Pt>; box: Box | null; ids: string[] }
   | { kind: 'scale'; handle: Handle; start: Pt; layers: Map<string, Xform>; box: Box; single: { id: string; local: Box } | null }
-  | { kind: 'rotate'; center: Pt; startAngle: number; layers: Map<string, Xform> };
+  | { kind: 'rotate'; center: Pt; startAngle: number; layers: Map<string, Xform> }
+  | { kind: 'draw' };
 
 const xf = (l: ShapeLayer): Xform => ({ x: l.x, y: l.y, rotation: l.rotation, scale: l.scale, sx: l.sx ?? 1, sy: l.sy ?? 1 });
 
@@ -30,7 +31,7 @@ export function syncScene(r: Renderer) {
   const items: SceneItem[] = [];
   for (const o of objects) {
     const out = renders.get(o.id);
-    if (out) items.push({ id: o.id, d: out.d, bbox: out.bbox, effect: effectById(o.style.effect), params: o.style.params });
+    if (out) items.push({ id: o.id, d: out.d, bbox: out.bbox, effect: effectById(o.style.effect), params: o.style.params, stroke: o.style.stroke, opacity: o.style.opacity, blend: o.style.blend });
   }
   r.setScene(items);
   r.setBackground(s.project.background);
@@ -218,6 +219,24 @@ export function Viewport() {
   }, []);
 
   const drag = useRef<Drag | null>(null);
+  // The live brush stroke is drawn straight into one SVG path (no React
+  // renders, no engine work); the engine builds the real outline on release.
+  const strokePts = useRef<[number, number, number][]>([]);
+  const previewRef = useRef<SVGPathElement>(null);
+  const drawPreview = () => {
+    const r = rendererRef.current;
+    const el = previewRef.current;
+    if (!r || !el) return;
+    const s = store.get().settings;
+    let d = '';
+    for (const [x, y] of strokePts.current) {
+      const q = r.toScreen(x, y);
+      d += `${d ? 'L' : 'M'}${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
+    }
+    el.setAttribute('d', d);
+    el.setAttribute('stroke', s.brushColor);
+    el.setAttribute('stroke-width', String(Math.max(1, s.brushWidth * r.view.zoom)));
+  };
 
   const local = (e: { clientX: number; clientY: number }) => {
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -306,6 +325,14 @@ export function Viewport() {
     }
     const a = r.toArt(p.x, p.y);
     let s = store.get();
+    if (s.tool === 'draw') {
+      e.preventDefault();
+      if (s.editing?.kind === 'text') endTextEdit();
+      drag.current = { kind: 'draw' };
+      strokePts.current = [[a.x, a.y, e.pointerType === 'pen' ? e.pressure : 0]];
+      drawPreview();
+      return;
+    }
     if (s.tool === 'text') {
       // Keep the browser from moving focus back to the canvas after this click.
       e.preventDefault();
@@ -370,6 +397,23 @@ export function Viewport() {
     const d = drag.current;
     const p = local(e);
     const a = r.toArt(p.x, p.y);
+    if (d?.kind === 'draw') {
+      // Coalesced events keep fast strokes smooth; points closer than ~1.5 screen px are skipped.
+      const pts = strokePts.current;
+      const rect = (e.currentTarget as Element).getBoundingClientRect();
+      const native = e.nativeEvent as PointerEvent;
+      const evs = native.getCoalescedEvents?.() ?? [];
+      let added = false;
+      for (const ev of evs.length ? evs : [native]) {
+        const q = r.toArt(ev.clientX - rect.left, ev.clientY - rect.top);
+        const prev = pts[pts.length - 1];
+        if (Math.hypot(q.x - prev[0], q.y - prev[1]) * r.view.zoom < 1.5) continue;
+        pts.push([q.x, q.y, ev.pointerType === 'pen' ? ev.pressure : 0]);
+        added = true;
+      }
+      if (added) drawPreview();
+      return;
+    }
     if (!d) {
       if (spaceHeld || store.get().tool === 'hand') return;
       const s = store.get();
@@ -551,6 +595,13 @@ export function Viewport() {
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
+    if (d?.kind === 'draw') {
+      const pts = strokePts.current;
+      strokePts.current = [];
+      previewRef.current?.setAttribute('d', '');
+      finishDrawing(pts);
+      return;
+    }
     setGuides([]);
     setHint(null);
     setMarquee(null);
@@ -611,7 +662,7 @@ export function Viewport() {
       className={`viewport ${panning ? 'panning' : ''}`}
       ref={wrapRef}
       tabIndex={-1}
-      style={{ cursor: panning ? (cursor === 'grabbing' ? 'grabbing' : 'grab') : tool === 'text' ? 'text' : cursor }}
+      style={{ cursor: panning ? (cursor === 'grabbing' ? 'grabbing' : 'grab') : tool === 'text' ? 'text' : tool === 'draw' ? 'crosshair' : cursor }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -621,6 +672,9 @@ export function Viewport() {
       onContextMenu={onContextMenu}
     >
       <canvas ref={canvasRef} />
+      <svg className="draw-preview" aria-hidden>
+        <path ref={previewRef} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
+      </svg>
       {r && <Overlay renderer={r} tick={tick} guides={guides} marquee={marquee} editing={editing} onHandle={beginHandle} onCursor={setCursor} measure={altHeld && !drag.current} />}
       {hint && (
         <div className="drag-hint" style={{ left: hint.x + 16, top: hint.y + 18 }}>

@@ -23,7 +23,16 @@ const GUIDE: { title: string; steps: string[] }[] = [
       'Quick looks in the Design tab apply a whole modifier stack in one click: Bitmap, Dot matrix, Soft pixel, Arch, Melting…',
       'Warp (W) bends the selection with presets like Arch, Flag and Bulge. Drag its 16 points on the canvas for a hand-made envelope.',
       'Edit points (P or double-click) turns text or a shape into an outline you can edit point by point. Double-click a line to add a point, double-click a point to make it smooth or sharp, ⌫ deletes.',
-      'Trace an image (⇧⌘I) to turn a logo or lettering into vectors, then Break apart (⇧⌘B) to get one layer per letter.',
+      'Add an image (⇧⌘I) as a Photo inside any shape, Trace it into vectors, or turn it into Pixel art with a few inks.',
+      'Slice cuts rays and wedges, Repeat copies around a circle or in a trail, Echo lines draws contour rings, Fuse melts letters together.',
+    ],
+  },
+  {
+    title: 'Draw and present',
+    steps: [
+      'Press B and draw with a pen, marker, pencil or highlighter. [ and ] change the size; strokes stay editable.',
+      'Give any layer a stroke, opacity or a Multiply blend in Appearance, and a pattern to the background (grid paper, dot grid…).',
+      'Right-click a logo and choose Draw construction for guides, anchor points and metric lines, ready for a presentation.',
     ],
   },
   {

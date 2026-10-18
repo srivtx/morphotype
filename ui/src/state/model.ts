@@ -8,10 +8,32 @@ export interface ProjectFont {
   name?: string;
 }
 
-/** How an object is shaded: an effect and its parameters. */
+export type StrokeAlign = 'outside' | 'center' | 'inside';
+
+/** A line around the outline, drawn over any material. */
+export interface Stroke {
+  /** Artboard px. */
+  width: number;
+  color: string;
+  align: StrokeAlign;
+  opacity: number;
+}
+
+export type BlendMode = 'normal' | 'multiply' | 'screen';
+
+/** How an object is shaded: an effect and its parameters, plus an optional stroke. */
 export interface Style {
   effect: string;
   params: ParamValues;
+  stroke?: Stroke | null;
+  /** 0..1, default 1. */
+  opacity?: number;
+  /** How it mixes with what's below (multiply for overprinted inks). */
+  blend?: BlendMode;
+}
+
+export function stroke(width = 6, color = '#0a0a0a', align: StrokeAlign = 'outside'): Stroke {
+  return { width, color, align, opacity: 1 };
 }
 
 /** A shape on the canvas: text, symbol, outline or morph, with its own style. */
@@ -76,10 +98,24 @@ export interface Tile {
   holo: boolean;
 }
 
+export type PatternKind = 'grid' | 'dots' | 'lines' | 'diagonal' | 'checker';
+
+/** A repeating pattern over the page fill: grid paper, dot grid, stripes… */
+export interface Pattern {
+  kind: PatternKind;
+  /** Cell size in artboard px. */
+  size: number;
+  /** Line width or dot radius in px. */
+  weight: number;
+  color: string;
+  opacity: number;
+}
+
 export interface Background {
   fill: Fill;
   grain: number;
   tile: Tile | null;
+  pattern?: Pattern | null;
 }
 
 /** A font being designed in Type mode. */
@@ -116,6 +152,8 @@ export interface Project {
   background: Background;
   layers: Node[];
   fonts: ProjectFont[];
+  /** Pictures used by Photo materials; only present in saved files (see assets.ts). */
+  images?: { id: string; data: string; w: number; h: number; name?: string }[];
   type?: TypeProject;
 }
 
@@ -139,8 +177,13 @@ export const MODIFIER_DEFAULTS: Record<ModifierKind, Modifier> = {
   warp: { kind: 'warp', style: 'arch', bend: 0.5, points: [] },
   wobble: { kind: 'wobble', amount: 0.03, scale: 0.6, seed: 1 },
   melt: { kind: 'melt', amount: 0.3, scale: 0.4, seed: 1 },
-  pixelate: { kind: 'pixelate', size: 0.07, shape: 'square', gap: 0 },
+  pixelate: { kind: 'pixelate', size: 0.07, shape: 'square', gap: 0, dissolve: 0, angle: 180, seed: 1 },
   perspective: { kind: 'perspective', amount: 0.3 },
+  slice: { kind: 'slice', count: 8, gap: 0.035, angle: 0, ring: 0, hole: 0, jitter: 0, seed: 1, soften: 0.02, x: 0, y: 0 },
+  repeat: { kind: 'repeat', mode: 'radial', count: 6, radius: 0.6, sweep: 360, orient: 1, cols: 3, rows: 1, gapX: 0.1, gapY: 0.1, dx: 0.06, dy: 0.06, grow: 1, spin: 0 },
+  echo: { kind: 'echo', count: 3, spacing: 0.06, width: 0.015 },
+  fuse: { kind: 'fuse', amount: 0.08 },
+  fitCircle: { kind: 'fitCircle', amount: 1 },
 };
 
 export interface NumberField {
@@ -152,12 +195,22 @@ export interface NumberField {
   integer?: boolean;
   /** Only shown in advanced mode. */
   advanced?: boolean;
+  /** A 0/1 value shown as a switch. */
+  toggle?: boolean;
+  /** Only shown while other fields have these values. */
+  show?: Record<string, string>;
 }
 
 export interface ChoiceField {
   key: string;
   label: string;
   options: { value: string; label: string }[];
+  show?: Record<string, string>;
+}
+
+/** Whether a field applies given the modifier's current values. */
+export function fieldShown(f: Field, values: Record<string, unknown>): boolean {
+  return !f.show || Object.entries(f.show).every(([k, v]) => values[k] === v);
 }
 
 export type Field = NumberField | ChoiceField;
@@ -208,6 +261,66 @@ export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
       },
       { key: 'size', label: 'Pixel size', min: 0.01, max: 0.3, step: 0.001 },
       { key: 'gap', label: 'Gap', min: 0, max: 0.8, step: 0.01 },
+      { key: 'dissolve', label: 'Dissolve', min: 0, max: 1, step: 0.01 },
+      { key: 'angle', label: 'Dissolve toward', min: 0, max: 360, step: 1, advanced: true },
+      { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1, integer: true, advanced: true },
+    ],
+  },
+  slice: {
+    label: 'Slice',
+    blurb: 'Cut rays or pie wedges out from the centre',
+    group: 'Shape',
+    fields: [
+      { key: 'count', label: 'Cuts', min: 0, max: 48, step: 1, integer: true },
+      { key: 'gap', label: 'Gap', min: 0.005, max: 0.2, step: 0.001 },
+      { key: 'ring', label: 'Ring', min: 0, max: 1, step: 0.005 },
+      { key: 'hole', label: 'Hole', min: 0, max: 1, step: 0.005 },
+      { key: 'soften', label: 'Soft corners', min: 0, max: 0.15, step: 0.001 },
+      { key: 'angle', label: 'Rotate', min: -180, max: 180, step: 0.5 },
+      { key: 'x', label: 'Centre X', min: -1, max: 1, step: 0.005, advanced: true },
+      { key: 'y', label: 'Centre Y', min: -1, max: 1, step: 0.005, advanced: true },
+      { key: 'jitter', label: 'Irregular', min: 0, max: 1, step: 0.01, advanced: true },
+      { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1, integer: true, advanced: true },
+    ],
+  },
+  echo: {
+    label: 'Echo lines',
+    blurb: 'Concentric outline rings around the shape',
+    group: 'Shape',
+    fields: [
+      { key: 'count', label: 'Rings', min: 1, max: 20, step: 1, integer: true },
+      { key: 'spacing', label: 'Spacing', min: 0.005, max: 0.3, step: 0.001 },
+      { key: 'width', label: 'Line width', min: 0.002, max: 0.15, step: 0.001 },
+    ],
+  },
+  fuse: { label: 'Fuse', blurb: 'Melt nearby letters into one solid form', group: 'Shape', fields: [{ key: 'amount', label: 'Close gaps', min: 0, max: 0.4, step: 0.001 }] },
+  repeat: {
+    label: 'Repeat',
+    blurb: 'Copies around a circle or in a grid',
+    group: 'Shape',
+    fields: [
+      {
+        key: 'mode',
+        label: 'Layout',
+        options: [
+          { value: 'radial', label: 'Around' },
+          { value: 'grid', label: 'Grid' },
+          { value: 'trail', label: 'Trail' },
+        ],
+      },
+      { key: 'count', label: 'Copies', min: 1, max: 48, step: 1, integer: true, show: { mode: 'radial' } },
+      { key: 'count', label: 'Copies', min: 1, max: 48, step: 1, integer: true, show: { mode: 'trail' } },
+      { key: 'dx', label: 'Step X', min: -1, max: 1, step: 0.002, show: { mode: 'trail' } },
+      { key: 'dy', label: 'Step Y', min: -1, max: 1, step: 0.002, show: { mode: 'trail' } },
+      { key: 'grow', label: 'Scale per step', min: 0.5, max: 1.5, step: 0.005, show: { mode: 'trail' } },
+      { key: 'spin', label: 'Turn per step', min: -45, max: 45, step: 0.5, show: { mode: 'trail' } },
+      { key: 'radius', label: 'Radius', min: 0, max: 4, step: 0.01, show: { mode: 'radial' } },
+      { key: 'orient', label: 'Face outward', min: 0, max: 1, step: 1, toggle: true, show: { mode: 'radial' } },
+      { key: 'sweep', label: 'Sweep', min: -360, max: 360, step: 1, advanced: true, show: { mode: 'radial' } },
+      { key: 'cols', label: 'Columns', min: 1, max: 30, step: 1, integer: true, show: { mode: 'grid' } },
+      { key: 'rows', label: 'Rows', min: 1, max: 30, step: 1, integer: true, show: { mode: 'grid' } },
+      { key: 'gapX', label: 'Gap X', min: -1, max: 2, step: 0.005, show: { mode: 'grid' } },
+      { key: 'gapY', label: 'Gap Y', min: -1, max: 2, step: 0.005, show: { mode: 'grid' } },
     ],
   },
   slant: { label: 'Slant', blurb: 'Italic lean', group: 'Distort', fields: [{ key: 'angle', label: 'Angle', min: -45, max: 45, step: 0.5 }] },
@@ -229,7 +342,8 @@ export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
       { key: 'bend', label: 'Bend', min: -1, max: 1, step: 0.01 },
     ],
   },
-  arc: { label: 'Arc', blurb: 'Set text on a circle', group: 'Distort', fields: [{ key: 'bend', label: 'Bend', min: -1, max: 1, step: 0.01 }] },
+  arc: { label: 'Arc', blurb: 'Set text on a circle; 2 goes all the way round', group: 'Distort', fields: [{ key: 'bend', label: 'Bend', min: -2, max: 2, step: 0.01 }] },
+  fitCircle: { label: 'Fit in circle', blurb: 'Squeeze into a round badge or ellipse', group: 'Distort', fields: [{ key: 'amount', label: 'Amount', min: 0, max: 1.5, step: 0.01 }] },
   wave: {
     label: 'Wave',
     blurb: 'Wavy baseline',
@@ -305,6 +419,11 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   catHead: { kind: 'catHead', ears: 0.3 },
   smile: { kind: 'smile', curve: 0.5, weight: 0.35 },
   rays: { kind: 'rays', rays: 12, short: 0.55, inner: 0.18, jitter: 0, seed: 0 },
+  pill: { kind: 'pill', aspect: 3 },
+  quarter: { kind: 'quarter' },
+  half: { kind: 'half' },
+  cove: { kind: 'cove' },
+  folder: { kind: 'folder', tab: 0.38, corner: 0.05 },
 };
 
 export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Badge' | 'Mascot'; fields: NumberField[] }> = {
@@ -365,6 +484,18 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
   heart: { label: 'Heart', group: 'Badge', fields: [] },
   moon: { label: 'Moon', group: 'Badge', fields: [{ key: 'phase', label: 'Fullness', min: 0, max: 1, step: 0.01 }] },
   bolt: { label: 'Bolt', group: 'Badge', fields: [] },
+  pill: { label: 'Pill', group: 'Basic', fields: [{ key: 'aspect', label: 'Aspect', min: 0.2, max: 8, step: 0.01 }] },
+  quarter: { label: 'Quarter circle', group: 'Basic', fields: [] },
+  half: { label: 'Half circle', group: 'Basic', fields: [] },
+  cove: { label: 'Cove', group: 'Basic', fields: [] },
+  folder: {
+    label: 'Folder',
+    group: 'Mascot',
+    fields: [
+      { key: 'tab', label: 'Tab', min: 0.1, max: 0.8, step: 0.005 },
+      { key: 'corner', label: 'Corners', min: 0, max: 0.2, step: 0.005 },
+    ],
+  },
   arrow: {
     label: 'Arrow',
     group: 'Basic',
@@ -475,6 +606,11 @@ export function pathLayer(d: string, size: number, name: string, extra: Partial<
   return layer({ type: 'path', d, size, name }, { name, ...extra });
 }
 
+/** A freehand stroke through points relative to the layer position. */
+export function strokeLayer(points: [number, number][], width = 8, extra: Partial<ShapeLayer> = {}, opts: { taper?: number; smooth?: number } = {}): ShapeLayer {
+  return layer({ type: 'stroke', points: points.map(([x, y]) => [x, y, 0] as [number, number, number]), width, taper: opts.taper ?? 0, smooth: opts.smooth ?? 0.5 }, { name: 'Drawing', ...extra });
+}
+
 export function morphLayer(a: string, b: string): ShapeLayer {
   return layer({ type: 'morph', a, b, t: 0.5 });
 }
@@ -496,6 +632,8 @@ export function nodeLabel(n: Node): string {
       return c.name ?? 'Outline';
     case 'morph':
       return 'Morph';
+    case 'stroke':
+      return 'Drawing';
   }
 }
 
@@ -505,6 +643,10 @@ export function fill(kind: FillKind, ...colors: string[]): Fill {
 
 export function background(f: Fill = fill('solid', '#0b0b0d'), extra: Partial<Background> = {}): Background {
   return { fill: f, grain: 0, tile: null, ...extra };
+}
+
+export function pattern(kind: PatternKind, color = '#000000', extra: Partial<Pattern> = {}): Pattern {
+  return { kind, size: kind === 'dots' ? 40 : 100, weight: kind === 'dots' ? 3 : 3, color, opacity: 1, ...extra };
 }
 
 export function tile(f: Fill, extra: Partial<Tile> = {}): Tile {

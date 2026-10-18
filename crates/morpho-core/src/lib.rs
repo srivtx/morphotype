@@ -15,6 +15,7 @@ pub mod geom;
 pub mod modifiers;
 pub mod morph;
 pub mod noise;
+pub mod stroke;
 pub mod svg;
 pub mod symbols;
 pub mod trace;

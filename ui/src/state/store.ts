@@ -52,7 +52,7 @@ export interface State {
   settings: Settings;
   /** Right panel tab. */
   tab: 'design' | 'style';
-  tool: 'select' | 'hand' | 'text';
+  tool: 'select' | 'hand' | 'text' | 'draw';
 }
 
 type Listener = () => void;

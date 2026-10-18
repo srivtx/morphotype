@@ -27,6 +27,8 @@ export interface EffectDef {
   animated?: (p: ParamValues) => boolean;
   /** How far (artboard px) the effect paints outside the shape. */
   reach: (p: ParamValues, size: { w: number; h: number }) => number;
+  /** Samples a picture (style param `image`) bound as `u_photo`. */
+  photo?: boolean;
 }
 
 const num = (key: string, label: string, min: number, max: number, step: number, def: number, advanced = false): ParamDef => ({
@@ -484,12 +486,13 @@ const distressed: EffectDef = {
     num('speckle', 'Speckle', 0, 1, 0.01, 0.45),
     num('grain', 'Grain', 0, 1, 0.01, 0.6),
     num('lines', 'Scan lines', 0, 1, 0.01, 0.4),
+    num('tooth', 'Stamp grain', 0, 1, 0.01, 0),
     num('seed', 'Seed', 0, 100, 1, 7, true),
   ],
   reach: (p) => n(p, 'roughness') * 3 + Math.max(0, n(p, 'bleed')) + 2,
   glsl: /* glsl */ `
 uniform vec3 u_ink;
-uniform float u_roughness, u_scale, u_bleed, u_speckle, u_grain, u_lines, u_seed;
+uniform float u_roughness, u_scale, u_bleed, u_speckle, u_grain, u_lines, u_tooth, u_seed;
 vec4 effect(vec2 uv) {
   vec2 p = artPx(uv);
   float s = max(u_scale, 0.05);
@@ -502,6 +505,12 @@ vec4 effect(vec2 uv) {
   float sp = fbm(p / (2.6 * s) + 31.0 + u_seed);
   float hole = smoothstep(1.0 - u_speckle * 0.42, 1.03 - u_speckle * 0.42, sp) * smoothstep(-1.0, -5.0, dd);
   cov *= 1.0 - hole;
+  if (u_tooth > 0.0) {
+    // Paper tooth: fine specks where the stamp missed, denser near the edges.
+    float t = vnoise(p / (1.15 * s) + u_seed * 3.1) * 0.62 + fbm3(p / (9.0 * s) - u_seed) * 0.38;
+    float thr = 1.0 - u_tooth * (0.3 + 0.32 * exp(min(dd, 0.0) / (5.0 * s)));
+    cov *= 1.0 - smoothstep(thr, thr + 0.05, t);
+  }
   float line = pow(0.5 + 0.5 * sin(p.y * 6.2831 / 46.0), 60.0);
   vec3 ink = u_ink * (1.0 - u_grain * 0.3 * g0) * (1.0 - u_lines * 0.45 * line);
   return vec4(ink * cov, cov);
@@ -554,16 +563,19 @@ const flat: EffectDef = {
     num('shadowOpacity', 'Shadow', 0, 1, 0.01, 0),
     num('shadowX', 'Shadow X', -100, 100, 1, 0, true),
     num('shadowY', 'Shadow Y', -100, 100, 1, 12, true),
-    num('shadowBlur', 'Shadow blur', 0.5, 100, 0.5, 14, true),
+    num('shadowBlur', 'Shadow blur', 0, 100, 0.5, 14, true),
+    col('shadowColor', 'Shadow colour', '#000000', true),
     num('texture', 'Print texture', 0, 1, 0.01, 0),
   ],
   reach: (p) => n(p, 'outline') + Math.max(Math.abs(n(p, 'shadowX')), Math.abs(n(p, 'shadowY'))) + n(p, 'shadowBlur') * 2,
   glsl: /* glsl */ `
-uniform vec3 u_fill, u_fill2, u_outlineColor;
+uniform vec3 u_fill, u_fill2, u_outlineColor, u_shadowColor;
 uniform float u_gradient, u_angle, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture;
 vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
-  vec4 f = dropShadow(uv, vec2(u_shadowX, u_shadowY), u_outline, u_shadowBlur, u_shadowOpacity);
+  // Blur 0 gives a hard offset shadow, as in flat "neo-brutalist" graphics.
+  vec4 f = dropShadow(uv, vec2(u_shadowX, u_shadowY), u_outline, max(u_shadowBlur, 0.75 / u_k), u_shadowOpacity);
+  f.rgb = u_shadowColor * f.a;
   if (u_outline > 0.0) {
     float ring = cover(dt - u_outline * u_k);
     f = over(vec4(u_outlineColor * ring, ring), f);
@@ -637,19 +649,36 @@ const halftone: EffectDef = {
     num('edge', 'Grow towards the middle', 0, 1, 0.01, 0, true),
     num('min', 'Smallest dot', 0, 1, 0.01, 0.08, true),
     num('max', 'Largest dot', 0, 1.5, 0.01, 1.15, true),
+    num('shade', '3D light', 0, 1, 0.01, 0),
+    num('bevel', 'Roundness', 4, 300, 1, 90, true),
+    col('paper', 'Paper', '#ffffff'),
+    num('paperOn', 'Paper under dots', 0, 1, 0.01, 0),
+    num('offsetX', 'Misregister X', -40, 40, 0.5, 0, true),
+    num('offsetY', 'Misregister Y', -40, 40, 0.5, 0, true),
   ],
-  reach: () => 2,
+  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: 10 }),
+  reach: (p) => 2 + Math.max(Math.abs(n(p, 'offsetX')), Math.abs(n(p, 'offsetY'))),
   glsl: /* glsl */ `
-uniform vec3 u_ink;
-uniform float u_cell, u_angle, u_lines, u_ramp, u_rampAngle, u_edge, u_min, u_max;
+uniform vec3 u_ink, u_paper;
+uniform float u_cell, u_angle, u_lines, u_ramp, u_rampAngle, u_edge, u_min, u_max, u_shade, u_paperOn, u_offsetX, u_offsetY;
 vec4 effect(vec2 uv) {
+  // Paper (optional) sits where the shape is; the dots print slightly off it.
+  float pc = cover(sdfPx(uv)) * u_paperOn;
+  vec4 paper = vec4(u_paper * pc, pc);
+  uv -= offsetUv(vec2(u_offsetX, u_offsetY));
   float dt = sdfPx(uv);
   float cov = cover(dt);
-  if (cov <= 0.0) return vec4(0.0);
+  if (cov <= 0.0) return paper;
   float ra = radians(u_rampAngle);
   float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(ra), -cos(ra))) + 0.5, 0.0, 1.0);
   float tone = mix(1.0, g, u_ramp);
   tone *= mix(1.0, smoothstep(0.0, u_cell * 4.0, -dt / u_k), u_edge);
+  if (u_shade > 0.0) {
+    // Dots grow on the side facing away from the light, like printed shading.
+    vec3 nrm = normalAt(uv, 1.0);
+    float lit = clamp(dot(nrm, normalize(vec3(-0.5, -0.6, 0.62))) * 0.9 + 0.15, 0.0, 1.0);
+    tone *= mix(1.0, 1.0 - lit, u_shade);
+  }
   tone = mix(u_min, u_max, tone);
   vec2 p = artPx(uv);
   float a = radians(u_angle);
@@ -659,7 +688,7 @@ vec4 effect(vec2 uv) {
   d *= u_cell * u_k;
   float m = clamp(0.5 - d / max(fwidth(d), 1e-3), 0.0, 1.0);
   float a2 = m * cov;
-  return vec4(u_ink * a2, a2);
+  return over(vec4(u_ink * a2, a2), paper);
 }`,
 };
 
@@ -696,7 +725,104 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso];
+const dither: EffectDef = {
+  id: 'dither',
+  name: 'Dither',
+  description: 'One-bit dithering: light and gradients drawn with two inks in a pixel pattern.',
+  params: [
+    col('ink', 'Ink', '#0a0a0a'),
+    col('light', 'Light', '#e9ff3b'),
+    num('cell', 'Pixel size', 1, 24, 0.5, 4),
+    num('shade', '3D light', 0, 1, 0.01, 0.7),
+    num('ramp', 'Gradient', 0, 1, 0.01, 0.35),
+    num('angle', 'Gradient angle', 0, 360, 1, 160, true),
+    num('levels', 'Tone', -1, 1, 0.01, 0),
+    num('bevel', 'Roundness', 4, 300, 1, 80, true),
+    num('noise', 'Noise pattern', 0, 1, 1, 0),
+    num('shadow', 'Dithered shadow', 0, 1, 0.01, 0),
+  ],
+  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: 8 }),
+  reach: (p) => (n(p, 'shadow') > 0 ? 60 : 1),
+  glsl: /* glsl */ `
+uniform vec3 u_ink, u_light;
+uniform float u_cell, u_shade, u_ramp, u_angle, u_levels, u_noise, u_shadow;
+float bayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+float bayer8(vec2 a) {
+  float b4 = bayer2(0.25 * a) * 0.0625 + bayer2(0.5 * a) * 0.25 + bayer2(a);
+  return fract(b4);
+}
+float threshold(vec2 px) {
+  vec2 c = floor(px / max(u_cell, 1.0));
+  return u_noise > 0.5 ? hash12(c) : bayer8(c);
+}
+vec4 effect(vec2 uv) {
+  vec2 px = artPx(uv);
+  float th = threshold(px);
+  vec4 shadow = vec4(0.0);
+  if (u_shadow > 0.0) {
+    float sd = sdfArt(uv - offsetUv(vec2(0.0, 22.0)));
+    float s = exp(-max(sd, 0.0) / 26.0) * u_shadow;
+    if (s > th) shadow = vec4(u_ink, 1.0) * clamp(1.0 - cover(sdfPx(uv)), 0.0, 1.0);
+  }
+  float dt = sdfPx(uv);
+  float cov = cover(dt);
+  if (cov <= 0.0) return shadow;
+  vec3 nrm = normalAt(uv, 1.0);
+  vec3 L = normalize(vec3(-0.45, -0.65, 0.62));
+  float lit = clamp(dot(nrm, L) * 0.75 + 0.3, 0.0, 1.0);
+  float a = radians(u_angle);
+  float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(a), -cos(a))) + 0.5, 0.0, 1.0);
+  float tone = mix(1.0, lit, u_shade) * mix(1.0, g, u_ramp);
+  tone = clamp(tone + u_levels * 0.5, 0.0, 1.0);
+  vec3 c = tone > th ? u_light : u_ink;
+  return over(vec4(c * cov, cov), shadow);
+}`,
+};
+
+const photo: EffectDef = {
+  id: 'photo',
+  name: 'Photo',
+  description: 'A picture inside the shape, framed to fill it, with optional duotone, contrast and grain.',
+  photo: true,
+  params: [
+    num('zoom', 'Zoom', 1, 6, 0.01, 1),
+    num('x', 'Pan X', -1, 1, 0.01, 0),
+    num('y', 'Pan Y', -1, 1, 0.01, 0),
+    num('duotone', 'Duotone', 0, 1, 0.01, 0),
+    col('dark', 'Shadows', '#14102e'),
+    col('light', 'Highlights', '#ff8a1f'),
+    num('contrast', 'Contrast', 0, 2, 0.01, 1),
+    num('brightness', 'Brightness', -1, 1, 0.01, 0),
+    num('saturation', 'Saturation', 0, 2, 0.01, 1, true),
+    num('grain', 'Grain', 0, 1, 0.01, 0),
+  ],
+  reach: () => 1,
+  glsl: /* glsl */ `
+uniform sampler2D u_photo;
+uniform float u_hasPhoto, u_imgAspect, u_zoom, u_x, u_y, u_duotone, u_contrast, u_brightness, u_saturation, u_grain;
+uniform vec3 u_dark, u_light;
+vec4 effect(vec2 uv) {
+  float cov = cover(sdfPx(uv));
+  if (cov <= 0.0) return vec4(0.0);
+  vec2 box = (u_bbox.zw - u_bbox.xy) * u_region.zw;
+  float ba = box.x / max(box.y, 1e-3);
+  vec2 q = boxUv(uv) - 0.5;
+  // Cover: fill the shape's box, cropping the picture's longer side.
+  if (ba > u_imgAspect) q.y *= u_imgAspect / ba; else q.x *= ba / u_imgAspect;
+  float z = max(u_zoom, 1.0);
+  q = q / z + 0.5 + vec2(u_x, u_y) * 0.5 * (1.0 - 1.0 / z);
+  vec3 c = u_hasPhoto > 0.5 ? texture(u_photo, q).rgb : mix(vec3(0.55), vec3(0.7), step(0.5, fract((q.x + q.y) * 8.0)));
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  c = mix(vec3(l), c, u_saturation);
+  c = (c - 0.5) * u_contrast + 0.5 + u_brightness * 0.5;
+  l = clamp(dot(c, vec3(0.299, 0.587, 0.114)), 0.0, 1.0);
+  c = mix(c, mix(u_dark, u_light, smoothstep(0.0, 1.0, l)), u_duotone);
+  c += (hash12(floor(artPx(uv) * u_k)) - 0.5) * u_grain * 0.25;
+  return vec4(clamp(c, 0.0, 1.0) * cov, cov);
+}`,
+};
+
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;
@@ -748,9 +874,20 @@ export const PRESETS: Preset[] = [
   { name: 'Paper deboss', effect: 'emboss', params: { color: '#efe8dc', match: 1, depth: -1.6, bevel: 12 }, bg: '#efe8dc', tags: 'letterpress white paper stationery' },
   { name: 'Printed ink', effect: 'flat', params: { fill: '#f4ead8', texture: 0.8 }, bg: '#e8442e', tags: 'paper print texture card cream' },
   { name: 'Comic dots', effect: 'halftone', params: {}, bg: '#ffd23f', tags: 'halftone pop art print dots' },
+  { name: 'Printed 3D', effect: 'halftone', params: { ink: '#5b4fe0', cell: 7, ramp: 0.25, rampAngle: 200, shade: 1, min: 0.02, max: 1.25, paper: '#ffffff', paperOn: 1, offsetX: -7, offsetY: 6 }, bg: '#0aa84f', tags: 'halftone 3d shading screen print misregistered dots illustration' },
   { name: 'Pink halftone', effect: 'halftone', params: { ink: '#ff3d7f', cell: 10, ramp: 1, rampAngle: 135 }, bg: '#fff3e6', tags: 'halftone gradient dots print' },
   { name: 'Line screen', effect: 'halftone', params: { ink: '#2b6bff', lines: 1, cell: 9, ramp: 0.85, angle: 0 }, bg: '#f4f1ea', tags: 'halftone lines engraving print' },
   { name: 'Riso pink + blue', effect: 'riso', params: {}, bg: '#f4f1ea', tags: 'risograph print overprint zine' },
+  { name: 'Voxel blue', effect: 'extrude', params: { face: '#1f63f0', side: '#0a3fb8', depth: 30, angle: 150, shade: 0.45, outline: 0 }, bg: '#ffffff', tags: 'voxel cubes 3d blocks pixel minecraft' },
+  { name: 'Pixel pop', effect: 'extrude', params: { face: '#e2ff2e', side: '#23203f', depth: 22, angle: 135, shade: 0, outline: 9, outlineColor: '#23203f' }, bg: '#6129ff', tags: 'pixel game logo 3d shadow outline lime' },
+  { name: 'Acid dither', effect: 'dither', params: {}, bg: '#0a0a0a', tags: 'dither 1-bit bitmap pixel shading lime' },
+  { name: 'Blue dither', effect: 'dither', params: { ink: '#0b3fd9', light: '#e3e6eb', cell: 5, shade: 0.8, ramp: 0.2 }, bg: '#e3e6eb', tags: 'dither 1-bit pixel blue poster' },
+  { name: 'Mono dither', effect: 'dither', params: { ink: '#111111', light: '#f2f0ea', cell: 3, noise: 1, shade: 0.6, ramp: 0.5 }, bg: '#f2f0ea', tags: 'dither noise grain 1-bit black white' },
+  { name: 'Rubber stamp', effect: 'distressed', params: { ink: '#e3120b', roughness: 1.2, speckle: 0.12, grain: 0.15, lines: 0, tooth: 0.55, bleed: 0 }, bg: '#ffffff', tags: 'stamp lino print grain red crayon' },
+  { name: 'Lino black', effect: 'distressed', params: { ink: '#141414', roughness: 2, speckle: 0.2, grain: 0.3, lines: 0, tooth: 0.4, bleed: 0.4 }, bg: '#22b25a', tags: 'stamp linocut print grain rough' },
+  { name: 'Neo-brutal', effect: 'flat', params: { fill: '#9b4ff0', outline: 6, outlineColor: '#0a0a0a', shadowOpacity: 1, shadowX: 14, shadowY: 14, shadowBlur: 0, shadowColor: '#0a0a0a' }, bg: '#0d7a2c', tags: 'brutalist outline hard shadow flat illustration' },
+  { name: 'Cream label', effect: 'flat', params: { fill: '#f2ebe2', outline: 5, outlineColor: '#0a0a0a', shadowOpacity: 1, shadowX: 0, shadowY: 10, shadowBlur: 0, shadowColor: '#0a0a0a' }, bg: '#0d7a2c', tags: 'brutalist pill button tag outline' },
+  { name: 'Pop offset', effect: 'flat', params: { fill: '#ff4a1c', outline: 0, shadowOpacity: 1, shadowX: 10, shadowY: 10, shadowBlur: 0, shadowColor: '#1b1bff' }, bg: '#f4f1ea', tags: 'offset shadow flat pop colour' },
   { name: 'Riso orange + green', effect: 'riso', params: { ink: '#ff7a1a', ink2: '#1a8a6a', offsetX: -6, offsetY: 6 }, bg: '#f4f1ea', tags: 'risograph print overprint poster' },
   { name: 'Distressed', effect: 'distressed', params: {}, bg: '#0b0b0b', tags: 'grunge print' },
   { name: 'Neon pink', effect: 'neon', params: {}, bg: '#07030d', tags: 'glow' },

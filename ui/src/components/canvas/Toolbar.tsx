@@ -3,7 +3,7 @@ import { addShape, importImage, primaryNode } from '../../app/actions';
 import { run, shortcutOf } from '../../app/commands';
 import { isGroup, symbolLayer } from '../../state/model';
 import { select, store, useStore } from '../../state/store';
-import { fillCss } from '../../render/background';
+import { backgroundCss, fillCss } from '../../render/background';
 import { BackgroundEditor } from '../Inspector';
 import { Icon } from '../icons';
 import { ShapePicker } from '../pickers';
@@ -30,6 +30,7 @@ export function Toolbar({ zoom, onFit, onZoom }: { zoom: number; onFit: () => vo
       <span className="dock-sep" />
       <div className="dock-group">
         <IconButton icon="text" title="Text: click the canvas to type" kbd="T" active={tool === 'text' || editing?.kind === 'text'} onClick={() => store.set({ tool: tool === 'text' ? 'select' : 'text', editing: null })} />
+        <IconButton icon="brush" title="Draw: pen, marker, pencil or highlighter" kbd="B" active={tool === 'draw'} onClick={() => store.set({ tool: tool === 'draw' ? 'select' : 'draw', editing: null })} />
         <button ref={shapesBtn} className={`icon-btn ${shapes ? 'on' : ''}`} aria-label="Shapes" data-tip="Shapes" onClick={() => setShapes(!shapes)}>
           <Icon name="shapes" />
           <Icon name="chevronDown" size={10} className="caret" />
@@ -44,7 +45,7 @@ export function Toolbar({ zoom, onFit, onZoom }: { zoom: number; onFit: () => vo
       <span className="dock-sep" />
       <div className="dock-group">
         <button ref={bgBtn} className={`icon-btn bg-dock ${bgOpen ? 'on' : ''}`} aria-label="Background" data-tip="Background" onClick={() => setBgOpen(!bgOpen)}>
-          <span className="bg-swatch" style={{ background: fillCss(bg.fill) }}>
+          <span className="bg-swatch" style={{ background: backgroundCss(bg, 0.05) }}>
             {bg.tile && <span style={{ background: fillCss(bg.tile.fill) }} />}
           </span>
         </button>

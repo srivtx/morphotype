@@ -23,6 +23,7 @@ export const COLOR_ROLES: Record<string, Record<string, ColorRole>> = {
   emboss: { color: 'base' },
   halftone: { ink: 'base' },
   riso: { ink: 'base', ink2: 'accent' },
+  dither: { light: 'base', ink: 'shadow' },
 };
 
 // ---------- OKLCH ----------

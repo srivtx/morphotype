@@ -26,6 +26,10 @@ export interface Settings {
   welcomed: boolean;
   /** Seen the Type mode tour. */
   typeTour: boolean;
+  /** Draw tool. */
+  brush: string;
+  brushWidth: number;
+  brushColor: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -48,6 +52,9 @@ export const DEFAULT_SETTINGS: Settings = {
   keepRatio: false,
   iconMask: false,
   welcomed: false,
+  brush: 'marker',
+  brushWidth: 18,
+  brushColor: '#ff6fb5',
   typeTour: false,
 };
 

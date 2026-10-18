@@ -105,8 +105,13 @@ pub fn rasterize(s: &Shape, g: &Grid) -> Vec<u8> {
 /// Signed distance (negative inside) that is exact within `band` of the
 /// outline and clamped to ±band beyond it.
 pub fn signed_distance(s: &Shape, g: &Grid, band: f64) -> Vec<f32> {
-    let mask = rasterize(s, g);
     let band = band.max(g.cell * 1.5);
+    // Wide bands: exact near the outline, then propagate (linear time instead
+    // of every edge sweeping the whole band).
+    if band > g.cell * 8.0 {
+        return signed_distance_wide(s, g, band);
+    }
+    let mask = rasterize(s, g);
     let mut d2 = vec![(band * band) as f32; g.len()];
     let inv = 1.0 / g.cell;
     for c in &s.contours {
@@ -154,6 +159,111 @@ pub fn signed_distance(s: &Shape, g: &Grid, band: f64) -> Vec<f32> {
         .collect()
 }
 
+/// Dead-reckoning distance transform (Grevera 2004): every sample within a few
+/// cells of the outline gets its exact nearest outline point; two raster
+/// passes then hand nearest points on to neighbours. Distances stay within a
+/// small fraction of a cell of exact, at O(samples) cost.
+fn signed_distance_wide(s: &Shape, g: &Grid, band: f64) -> Vec<f32> {
+    let mask = rasterize(s, g);
+    let seed = g.cell * 2.5;
+    let n = g.len();
+    let c = g.cell as f32;
+    // Per sample: offset to its nearest outline point (f32) and that distance squared.
+    let mut off = vec![(f32::NAN, f32::NAN); n];
+    let mut dd = vec![f32::INFINITY; n];
+    let inv = 1.0 / g.cell;
+    for ct in &s.contours {
+        let m = ct.len();
+        if m < 2 {
+            continue;
+        }
+        for k in 0..m {
+            let a = ct[k];
+            let b = ct[(k + 1) % m];
+            let ab = b - a;
+            let l2 = ab.len2();
+            let i0 = (((a.x.min(b.x) - seed - g.origin.x) * inv - 0.5).floor().max(0.0)) as usize;
+            let i1 = (((a.x.max(b.x) + seed - g.origin.x) * inv - 0.5).ceil().max(0.0) as usize).min(g.w.saturating_sub(1));
+            let j0 = (((a.y.min(b.y) - seed - g.origin.y) * inv - 0.5).floor().max(0.0)) as usize;
+            let j1 = (((a.y.max(b.y) + seed - g.origin.y) * inv - 0.5).ceil().max(0.0) as usize).min(g.h.saturating_sub(1));
+            if i0 > i1 || j0 > j1 {
+                continue;
+            }
+            for j in j0..=j1 {
+                let py = g.origin.y + (j as f64 + 0.5) * g.cell;
+                for i in i0..=i1 {
+                    let p = pt(g.origin.x + (i as f64 + 0.5) * g.cell, py);
+                    let ap = p - a;
+                    let t = if l2 > 1e-18 { (ap.dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                    let q = a + ab * t - p;
+                    let d = q.len2() as f32;
+                    let k = j * g.w + i;
+                    if d < dd[k] {
+                        dd[k] = d;
+                        off[k] = (q.x as f32, q.y as f32);
+                    }
+                }
+            }
+        }
+    }
+    let (w, h) = (g.w, g.h);
+    let relax = |k: usize, nk: usize, sx: f32, sy: f32, off: &mut [(f32, f32)], dd: &mut [f32]| {
+        let (ox, oy) = off[nk];
+        if ox.is_nan() {
+            return;
+        }
+        // Neighbour at (+sx, +sy) cells: its nearest point seen from here.
+        let (qx, qy) = (ox + sx * c, oy + sy * c);
+        let d = qx * qx + qy * qy;
+        if d < dd[k] {
+            dd[k] = d;
+            off[k] = (qx, qy);
+        }
+    };
+    for j in 0..h {
+        for i in 0..w {
+            let k = j * w + i;
+            if j > 0 {
+                if i > 0 {
+                    relax(k, k - w - 1, -1.0, -1.0, &mut off, &mut dd);
+                }
+                relax(k, k - w, 0.0, -1.0, &mut off, &mut dd);
+                if i + 1 < w {
+                    relax(k, k - w + 1, 1.0, -1.0, &mut off, &mut dd);
+                }
+            }
+            if i > 0 {
+                relax(k, k - 1, -1.0, 0.0, &mut off, &mut dd);
+            }
+        }
+    }
+    for j in (0..h).rev() {
+        for i in (0..w).rev() {
+            let k = j * w + i;
+            if i + 1 < w {
+                relax(k, k + 1, 1.0, 0.0, &mut off, &mut dd);
+            }
+            if j + 1 < h {
+                if i > 0 {
+                    relax(k, k + w - 1, -1.0, 1.0, &mut off, &mut dd);
+                }
+                relax(k, k + w, 0.0, 1.0, &mut off, &mut dd);
+                if i + 1 < w {
+                    relax(k, k + w + 1, 1.0, 1.0, &mut off, &mut dd);
+                }
+            }
+        }
+    }
+    let cap = band as f32;
+    dd.iter()
+        .zip(mask.iter())
+        .map(|(&v, &m)| {
+            let d = v.sqrt().min(cap);
+            if m != 0 { -d } else { d }
+        })
+        .collect()
+}
+
 /// Marching squares on `v` at `level`; inside is `v < level`.
 /// Output loops keep the inside on their right, i.e. solids have positive area.
 pub fn iso_contours(v: &[f32], g: &Grid, level: f32) -> Shape {
@@ -172,8 +282,11 @@ pub fn iso_contours(v: &[f32], g: &Grid, level: f32) -> Shape {
     // Edge ids: horizontal edge from (i,j) to (i+1,j) = 2*(j*w+i); vertical (i,j)-(i,j+1) = +1.
     let hid = |i: usize, j: usize| 2 * (j * w + i);
     let vid = |i: usize, j: usize| 2 * (j * w + i) + 1;
+    // Dense per-edge links and point slots (u32 each); the points themselves
+    // are stored compactly, since only edges the outline crosses get one.
     let mut next: Vec<u32> = vec![u32::MAX; 2 * w * h];
-    let mut points: Vec<Pt> = vec![Pt::default(); 2 * w * h];
+    let mut slot: Vec<u32> = vec![u32::MAX; 2 * w * h];
+    let mut points: Vec<Pt> = Vec::new();
     let mut starts: Vec<u32> = Vec::new();
     let interp = |pa: Pt, pb: Pt, va: f32, vb: f32| -> Pt {
         let t = (va / (va - vb)) as f64;
@@ -213,8 +326,12 @@ pub fn iso_contours(v: &[f32], g: &Grid, level: f32) -> Shape {
             let mut link = |from: usize, to: usize| {
                 let (eid, p, _) = xs[from];
                 let (tid, tp, _) = xs[to];
-                points[eid] = p;
-                points[tid] = tp;
+                for (id, q) in [(eid, p), (tid, tp)] {
+                    if slot[id] == u32::MAX {
+                        slot[id] = points.len() as u32;
+                        points.push(q);
+                    }
+                }
                 next[eid] = tid as u32;
                 starts.push(eid as u32);
             };
@@ -241,7 +358,7 @@ pub fn iso_contours(v: &[f32], g: &Grid, level: f32) -> Shape {
         let mut cur = s;
         let mut guard = 0usize;
         while next[cur] != u32::MAX && guard < 4 * w * h {
-            loop_pts.push(points[cur]);
+            loop_pts.push(points[slot[cur] as usize]);
             let nx = next[cur] as usize;
             next[cur] = u32::MAX;
             cur = nx;

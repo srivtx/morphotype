@@ -1,6 +1,6 @@
 // Artboard background: page fill (solid, linear, radial or aura mesh), an
 // optional app-icon tile with gloss, shadow and rim light, and film grain.
-import type { Background, Fill } from '../state/model';
+import type { Background, Fill, Pattern } from '../state/model';
 import { hexToRgb, type UniformValue } from './gl';
 
 export const BG_FS = /* glsl */ `#version 300 es
@@ -13,6 +13,8 @@ uniform vec3 u_p0, u_p1, u_p2, u_p3;
 uniform float u_tOn, u_tShape, u_tSize, u_tRadius, u_tKind, u_tN, u_tAngle, u_tGloss, u_tShadow, u_tRim, u_tHolo;
 uniform vec3 u_t0, u_t1, u_t2, u_t3, u_tRimColor;
 uniform float u_grain, u_checker, u_k;
+uniform float u_patKind, u_patSize, u_patWeight, u_patOpacity;
+uniform vec3 u_patColor;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -51,6 +53,32 @@ vec3 fillColor(float kind, float n, float angle, vec3 a, vec3 b, vec3 c, vec3 d,
   if (n > 3.5) col = mix(col, d, blob(q, C, vec2(0.22, 0.24)) * 0.7);
   return col;
 }
+/** Coverage of the page pattern at artboard pixel px (centred on the artboard). */
+float patternAt(vec2 px) {
+  if (u_patKind < 0.5) return 0.0;
+  float s = max(u_patSize, 2.0);
+  vec2 q = px - 0.5 * u_art;
+  float aa = 0.75 / u_k;
+  float w = u_patWeight * 0.5;
+  if (u_patKind < 1.5) {
+    vec2 g = abs(fract(q / s + 0.5) - 0.5) * s;
+    return 1.0 - smoothstep(w - aa, w + aa, min(g.x, g.y));
+  }
+  if (u_patKind < 2.5) {
+    vec2 v = (fract(q / s) - 0.5) * s;
+    return 1.0 - smoothstep(u_patWeight - aa, u_patWeight + aa, length(v));
+  }
+  if (u_patKind < 3.5) {
+    float g = abs(fract(q.y / s + 0.5) - 0.5) * s;
+    return 1.0 - smoothstep(w - aa, w + aa, g);
+  }
+  if (u_patKind < 4.5) {
+    float g = abs(fract(dot(q, vec2(0.70711)) / s + 0.5) - 0.5) * s;
+    return 1.0 - smoothstep(w - aa, w + aa, g);
+  }
+  vec2 c = floor(q / s);
+  return mod(c.x + c.y, 2.0) < 1.0 ? 1.0 : 0.0;
+}
 float tileSd(vec2 c, float r) {
   if (u_tShape < 0.5) {
     float e = mix(12.0, 3.2, u_tRadius);
@@ -74,6 +102,8 @@ void main() {
   } else {
     col = vec4(fillColor(u_pKind, u_pN, u_pAngle, u_p0, u_p1, u_p2, u_p3, v_uv, u_art.x / u_art.y), 1.0);
   }
+  float pat = patternAt(px) * u_patOpacity;
+  if (pat > 0.0) col = vec4(mix(col.rgb, u_patColor, pat), max(col.a, pat));
   if (u_tOn > 0.5) {
     vec2 c = px - 0.5 * u_art;
     float r = u_tSize * 0.5 * min(u_art.x, u_art.y);
@@ -103,6 +133,7 @@ void main() {
 }`;
 
 const KIND = { none: 0, solid: 1, linear: 2, radial: 3, aura: 4 } as const;
+const PATTERN = { grid: 1, dots: 2, lines: 3, diagonal: 4, checker: 5 } as const;
 
 function fillUniforms(prefix: 'p' | 't', f: Fill): Record<string, UniformValue> {
   const cs = f.colors.length ? f.colors : ['#000000'];
@@ -120,7 +151,17 @@ function fillUniforms(prefix: 'p' | 't', f: Fill): Record<string, UniformValue> 
 
 export function backgroundUniforms(bg: Background): Record<string, UniformValue> {
   const t = bg.tile;
-  const u: Record<string, UniformValue> = { ...fillUniforms('p', bg.fill), u_grain: bg.grain, u_tOn: !!t };
+  const pt = bg.pattern;
+  const u: Record<string, UniformValue> = {
+    ...fillUniforms('p', bg.fill),
+    u_grain: bg.grain,
+    u_tOn: !!t,
+    u_patKind: pt ? PATTERN[pt.kind] : 0,
+    u_patSize: pt?.size ?? 40,
+    u_patWeight: pt?.weight ?? 1,
+    u_patOpacity: pt?.opacity ?? 0,
+    u_patColor: hexToRgb(pt?.color ?? '#000000'),
+  };
   if (t) {
     Object.assign(u, fillUniforms('t', t.fill), {
       u_tShape: t.shape === 'squircle' ? 0 : t.shape === 'rounded' ? 1 : 2,
@@ -142,6 +183,32 @@ export function ambientOf(bg: Background): [number, number, number] {
   if (f.kind === 'none' || !f.colors.length) return [0.1, 0.1, 0.1];
   const rgb = f.colors.map(hexToRgb);
   return [0, 1, 2].map((i) => rgb.reduce((s, c) => s + c[i], 0) / rgb.length) as [number, number, number];
+}
+
+/** CSS layers for a pattern, scaled down by `scale` for small previews. */
+export function patternCss(pt: Pattern | null | undefined, scale = 0.12): string {
+  if (!pt || pt.opacity <= 0) return '';
+  const s = Math.max(4, pt.size * scale);
+  const w = Math.max(1, pt.weight * scale);
+  const c = pt.color;
+  switch (pt.kind) {
+    case 'grid':
+      return `linear-gradient(${c} ${w}px, transparent ${w}px) 0 0 / ${s}px ${s}px, linear-gradient(90deg, ${c} ${w}px, transparent ${w}px) 0 0 / ${s}px ${s}px`;
+    case 'lines':
+      return `linear-gradient(${c} ${w}px, transparent ${w}px) 0 0 / ${s}px ${s}px`;
+    case 'dots':
+      return `radial-gradient(circle, ${c} ${w}px, transparent ${w + 0.5}px) 0 0 / ${s}px ${s}px`;
+    case 'diagonal':
+      return `repeating-linear-gradient(45deg, ${c} 0 ${w}px, transparent ${w}px ${s}px)`;
+    case 'checker':
+      return `repeating-conic-gradient(${c} 0 25%, transparent 0 50%) 0 0 / ${s * 2}px ${s * 2}px`;
+  }
+}
+
+/** CSS for a whole page background: pattern over fill. */
+export function backgroundCss(b: Background, scale?: number): string {
+  const p = patternCss(b.pattern, scale);
+  return p ? `${p}, ${fillCss(b.fill)}` : fillCss(b.fill);
 }
 
 /** CSS for the same background (used in thumbnails and pickers). */

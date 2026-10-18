@@ -8,6 +8,7 @@ import { prewarmThumbs, StylePanel } from '../components/StylePanel';
 import { TopBar } from '../components/TopBar';
 import { TypeMode } from '../components/type/TypeMode';
 import { Tooltips } from '../components/ui';
+import { BrushBar } from '../components/canvas/BrushBar';
 import { Viewport } from '../components/canvas/Viewport';
 import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
@@ -174,6 +175,7 @@ function DesignMode() {
             </button>
           </div>
         )}
+        {tool === 'draw' && <BrushBar />}
         {editing && editing.kind !== 'text' && (
           <div className="edit-pill" role="status">
             <Icon name={editing.kind === 'warp' ? 'warp' : 'points'} size={14} />

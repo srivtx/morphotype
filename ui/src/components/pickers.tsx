@@ -42,13 +42,17 @@ const SAMPLE_MOD: Partial<Record<ModifierKind, object>> = {
   weight: { amount: 0.05 },
   round: { radius: 0.05 },
   outline: { width: 0.05 },
-  pixelate: { size: 0.09, shape: 'square', gap: 0 },
   wave: { amplitude: 0.1, wavelength: 1.4, phase: 0 },
   arc: { bend: 0.6 },
   warp: { style: 'arch', bend: 0.6, points: [] },
   ink: { amount: 0.03, scale: 0.4, seed: 2 },
   melt: { amount: 0.5, scale: 0.35, seed: 3 },
   wobble: { amount: 0.05, scale: 0.4, seed: 1 },
+  slice: { count: 6, gap: 0.07 },
+  repeat: { count: 5, radius: 0.75 },
+  fuse: { amount: 0.16 },
+  echo: { count: 2, spacing: 0.08, width: 0.03 },
+  pixelate: { size: 0.07, shape: 'square', gap: 0.12, dissolve: 0.7 },
 };
 
 function ModThumb({ kind, font }: { kind: ModifierKind; font: string }) {

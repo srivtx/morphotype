@@ -112,6 +112,8 @@ textarea {
   position: relative;
   z-index: 5;
 }
+/* Room for the macOS window buttons; tauri.conf.json's trafficLightPosition
+   (y 23) centres them on this 44 px bar. */
 .topbar.traffic {
   padding-left: 82px;
 }
@@ -2036,10 +2038,18 @@ button.row-caret:hover {
 .template strong {
   font-weight: 600;
 }
-.template span:last-child {
+.template > span:not(.template-img) {
   color: var(--faint);
   font-size: 11.5px;
   line-height: 1.4;
+}
+.template > .template-recipe {
+  color: var(--accent-2);
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+}
+.template > .template-recipe:empty {
+  display: none;
 }
 .template.blank .template-img {
   color: var(--faint);
@@ -2553,6 +2563,7 @@ button.row-caret:hover {
   background: var(--raised);
 }
 .material-thumb {
+  position: relative;
   width: 28px;
   height: 28px;
   border-radius: 6px;
@@ -3143,4 +3154,124 @@ button.row-caret:hover {
 .intent span {
   color: var(--faint);
   font-size: 11px;
+}
+
+/* ---------- stroke ---------- */
+.stroke-add {
+  margin-top: 10px;
+}
+.stroke-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.stroke-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stroke-head > span {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.stroke-head .numbox {
+  width: 74px;
+}
+.pixel-preview {
+  image-rendering: pixelated;
+}
+.trace-side {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+/* ---------- photo ---------- */
+.photo-picker {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.photo-thumb {
+  aspect-ratio: 1;
+  border-radius: var(--r-sm);
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--raised);
+  color: var(--dim);
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  display: grid;
+  place-items: center;
+}
+.photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.photo-thumb.on {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.photo-thumb.add:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.blend-row {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.draw-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.brush-bar {
+  gap: 12px;
+  padding: 6px 8px 6px 10px;
+}
+.brush-kinds {
+  display: flex;
+  gap: 4px;
+}
+.brush-width {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.brush-width input {
+  width: 90px;
+  accent-color: var(--accent);
+}
+.brush-width span {
+  width: 22px;
+}
+.brush-colors {
+  display: grid;
+  grid-template-columns: repeat(8, 16px);
+  gap: 4px;
+}
+.edit-pill.brush-bar {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.edit-pill.brush-bar .link-btn {
+  color: var(--text);
+  background: var(--hover);
+}
+.edit-pill.brush-bar kbd {
+  color: var(--dim);
 }

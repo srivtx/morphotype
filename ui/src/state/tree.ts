@@ -121,7 +121,7 @@ export interface SceneObject {
 
 /** Strip UI-only fields so style edits don't trigger geometry rebuilds. */
 /** Modifiers that move letters around; paused while typing on the canvas so the caret lines up. */
-export const POSITIONAL = new Set(['slant', 'stretch', 'wave', 'arc', 'warp', 'perspective']);
+export const POSITIONAL = new Set(['slant', 'stretch', 'wave', 'arc', 'warp', 'perspective', 'fitCircle', 'repeat']);
 
 function engineLayer(l: ShapeLayer, visible: boolean, typing = false): EngineLayer {
   return {

@@ -15,6 +15,33 @@ fn one() -> f64 {
 fn yes() -> bool {
     true
 }
+fn d180() -> f64 {
+    180.0
+}
+fn eight() -> f64 {
+    8.0
+}
+fn six() -> f64 {
+    6.0
+}
+fn three() -> f64 {
+    3.0
+}
+fn slice_gap() -> f64 {
+    0.035
+}
+fn half() -> f64 {
+    0.5
+}
+fn full_turn() -> f64 {
+    360.0
+}
+fn echo_gap() -> f64 {
+    0.06
+}
+fn echo_width() -> f64 {
+    0.02
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -40,7 +67,7 @@ pub enum Modifier {
         #[serde(default)]
         phase: f64,
     },
-    /// Bend along a circular arc; 1 = upper half circle, −1 = lower.
+    /// Bend along a circular arc; 1 = upper half circle, 2 = a full circle, −1/−2 below.
     Arc { #[serde(default)] bend: f64 },
     /// Smooth random displacement of the outline.
     Wobble { #[serde(default)] amount: f64, #[serde(default = "one")] scale: f64, #[serde(default)] seed: u32 },
@@ -55,6 +82,14 @@ pub enum Modifier {
         shape: PixelShape,
         #[serde(default)]
         gap: f64,
+        /// Drop cells toward one side, 0 = none, 1 = across the whole shape.
+        #[serde(default)]
+        dissolve: f64,
+        /// Direction the dissolve fades toward, in degrees (180 = down).
+        #[serde(default = "d180")]
+        angle: f64,
+        #[serde(default)]
+        seed: u32,
     },
     /// Bezier envelope warp over the shape's bounding box: a preset `style`
     /// scaled by `bend`, plus 16 free control-point offsets (row-major, as
@@ -69,6 +104,96 @@ pub enum Modifier {
     },
     /// Keystone: narrows the top (+) or the bottom (−).
     Perspective { #[serde(default)] amount: f64 },
+    /// Cut straight gaps `gap` em wide outward from the centre, like a sliced
+    /// pie or sun rays. `ring` adds a circular gap at that fraction of the
+    /// half size (rays start there); `hole` removes a disc from the centre.
+    Slice {
+        #[serde(default = "eight")]
+        count: f64,
+        #[serde(default = "slice_gap")]
+        gap: f64,
+        #[serde(default)]
+        angle: f64,
+        #[serde(default)]
+        ring: f64,
+        #[serde(default)]
+        hole: f64,
+        #[serde(default)]
+        jitter: f64,
+        #[serde(default)]
+        seed: u32,
+        /// Round the pieces' corners by this many em without closing the gaps.
+        #[serde(default)]
+        soften: f64,
+        /// Move the centre, as a fraction of the half size (+x right, +y down).
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+    },
+    /// Copies around a circle (radial) or in a grid, centred on the original.
+    Repeat {
+        #[serde(default)]
+        mode: RepeatMode,
+        /// Radial: number of copies.
+        #[serde(default = "six")]
+        count: f64,
+        /// Radial: circle radius in em.
+        #[serde(default = "half")]
+        radius: f64,
+        /// Radial: degrees covered (360 = all the way round).
+        #[serde(default = "full_turn")]
+        sweep: f64,
+        /// Radial: 1 turns each copy to face outward, 0 keeps it upright.
+        #[serde(default = "one")]
+        orient: f64,
+        /// Grid: columns and rows.
+        #[serde(default = "three")]
+        cols: f64,
+        #[serde(default = "one")]
+        rows: f64,
+        /// Grid: space between copies in em.
+        #[serde(default, rename = "gapX")]
+        gap_x: f64,
+        #[serde(default, rename = "gapY")]
+        gap_y: f64,
+        /// Trail: step between copies in em, scale per step and turn per step (degrees).
+        #[serde(default)]
+        dx: f64,
+        #[serde(default)]
+        dy: f64,
+        #[serde(default = "one")]
+        grow: f64,
+        #[serde(default)]
+        spin: f64,
+    },
+    /// Concentric outline rings around the shape ("echo" lines).
+    Echo {
+        #[serde(default = "three")]
+        count: f64,
+        /// Distance between rings in em.
+        #[serde(default = "echo_gap")]
+        spacing: f64,
+        /// Ring thickness in em.
+        #[serde(default = "echo_width")]
+        width: f64,
+    },
+    /// Close gaps narrower than `amount` em, fusing nearby letters or shapes
+    /// into one solid form while keeping the outside shape.
+    Fuse { #[serde(default)] amount: f64 },
+    /// Squeeze the shape's box into an ellipse (a circle for a square box),
+    /// like lettering filling a round badge. `amount` blends 0..1.
+    FitCircle { #[serde(default = "one")] amount: f64 },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepeatMode {
+    #[default]
+    Radial,
+    Grid,
+    /// Copies stepping away from the original, each moved, scaled and turned a little more.
+    Trail,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,7 +372,7 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             Geo::poly_only(map_points(&s, |p| Pt { x: p.x, y: p.y + a * (p.x * k + phase).sin() }))
         }
         Modifier::Arc { bend } => {
-            let b = bend.clamp(-1.0, 1.0);
+            let b = bend.clamp(-2.0, 2.0);
             if b.abs() < 1e-3 || bbox.is_empty() {
                 return geo;
             }
@@ -256,7 +381,9 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             let r = w / theta;
             let cx = bbox.center().x;
             let yb = bbox.center().y;
-            let center = Pt { x: cx, y: yb + r };
+            // Past a half circle the ring drifts toward the text's centre, so a
+            // full circle (|bend| = 2) is centred where the text was.
+            let center = Pt { x: cx, y: yb + r - r * (b.abs() - 1.0).max(0.0) };
             let s = densified(&geo.poly, fine);
             Geo::poly_only(map_points(&s, |p| {
                 let ang = (p.x - cx) / r;
@@ -303,7 +430,7 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
                 Pt { x: cx + (p.x - cx) * (1.0 - a * up), y: p.y }
             }))
         }
-        Modifier::Pixelate { size, shape, gap } => {
+        Modifier::Pixelate { size, shape, gap, dissolve, angle, seed } => {
             let cell = size.abs() * em;
             if cell < em / 400.0 || bbox.is_empty() {
                 return geo;
@@ -317,7 +444,10 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
                 return geo;
             }
             let g = Grid { w, h, origin: Pt { x: ox, y: oy }, cell };
-            let mask = rasterize(&geo.poly, &g);
+            let mut mask = rasterize(&geo.poly, &g);
+            if dissolve > 1e-4 {
+                dissolve_cells(&mut mask, &g, bbox, dissolve.min(1.0), angle, seed);
+            }
             let gap = gap.clamp(0.0, 0.9);
             if shape == PixelShape::Square && gap < 1e-4 {
                 return Geo::poly_only(block_contours(&mask, w, h, g.origin, cell));
@@ -339,6 +469,113 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             }
             Geo::poly_only(Shape::new(cs))
         }
+        Modifier::Slice { count, gap, angle, ring, hole, jitter, seed, soften, x, y } => {
+            let cut = slice(geo, ctx, count, gap, angle, ring, hole, jitter, seed, (x, y));
+            // Opening only: rounds every piece's corners but can't bridge a gap.
+            let r = soften.abs().min(gap.abs() * 2.0) * em;
+            if r < 1e-6 {
+                return cut;
+            }
+            Geo::poly_only(offset(&offset(&cut.poly, -r, ctx), r, ctx))
+        }
+        Modifier::Echo { count, spacing, width } => {
+            let n = (count.round() as usize).clamp(0, 40);
+            let (sp, hw) = (spacing.abs().max(0.002) * em, (width.abs() * em * 0.5).max(1e-6));
+            if n == 0 {
+                return geo;
+            }
+            let (sp32, hw32, n32) = (sp as f32, hw as f32, n as f32);
+            // Rings only need sampling fine enough for their own width, which
+            // matters when they spread far beyond a small shape.
+            let fine = Ctx { em, quality: em / ctx.cell().max(hw * 0.55) };
+            Geo::poly_only(field_map(&geo.poly, &fine, sp * n as f64 + hw, false, move |_, v| {
+                if v <= 0.0 {
+                    return v;
+                }
+                let k = (v / sp32).round().clamp(1.0, n32);
+                v.min((v - k * sp32).abs() - hw32)
+            }))
+        }
+        Modifier::Repeat { mode, count, radius, sweep, orient, cols, rows, gap_x, gap_y, dx, dy, grow, spin } => {
+            if bbox.is_empty() {
+                return geo;
+            }
+            let c = bbox.center();
+            let mut xf = Vec::new();
+            match mode {
+                RepeatMode::Radial => {
+                    let n = (count.round() as usize).clamp(1, 120);
+                    let r = radius * em;
+                    let sw = sweep.clamp(-360.0, 360.0).to_radians();
+                    // A full turn spaces copies evenly without doubling the first one.
+                    let step = if (sw.abs() - std::f64::consts::TAU).abs() < 1e-6 || n == 1 { sw / n as f64 } else { sw / (n - 1) as f64 };
+                    let start = if (sw.abs() - std::f64::consts::TAU).abs() < 1e-6 { 0.0 } else { -sw * 0.5 };
+                    for k in 0..n {
+                        let a = start + step * k as f64;
+                        let spin = Affine::translate(c.x, c.y).then(Affine::rotate(a * orient.clamp(0.0, 1.0))).then(Affine::translate(-c.x, -c.y));
+                        // Copy 0 sits at the top; the ring is centred on the original.
+                        xf.push(Affine::translate(r * a.sin(), -r * a.cos()).then(spin));
+                    }
+                }
+                RepeatMode::Trail => {
+                    let n = (count.round() as usize).clamp(1, 120);
+                    for k in 0..n {
+                        let f = k as f64;
+                        let s = grow.clamp(0.2, 3.0).powf(f);
+                        let local = Affine::translate(c.x, c.y).then(Affine::rotate((spin * f).to_radians())).then(Affine::scale(s, s)).then(Affine::translate(-c.x, -c.y));
+                        xf.push(Affine::translate(dx * em * f, dy * em * f).then(local));
+                    }
+                }
+                RepeatMode::Grid => {
+                    let (nc, nr) = ((cols.round() as usize).clamp(1, 60), (rows.round() as usize).clamp(1, 60));
+                    let (sx, sy) = (bbox.width() + gap_x * em, bbox.height() + gap_y * em);
+                    for j in 0..nr {
+                        for i in 0..nc {
+                            let dx = (i as f64 - (nc - 1) as f64 * 0.5) * sx;
+                            let dy = (j as f64 - (nr - 1) as f64 * 0.5) * sy;
+                            xf.push(Affine::translate(dx, dy));
+                        }
+                    }
+                }
+            }
+            if xf.len() * geo.poly.contours.len() > 20000 {
+                return geo;
+            }
+            let mut out = Geo { poly: Shape::default(), curves: geo.curves.as_ref().map(|_| Vec::new()) };
+            for m in &xf {
+                let mut g = geo.clone();
+                g.transform(m);
+                out.poly.contours.extend(g.poly.contours);
+                if let (Some(dst), Some(src)) = (&mut out.curves, g.curves) {
+                    dst.extend(src);
+                }
+            }
+            out
+        }
+        Modifier::Fuse { amount } => {
+            let r = amount.abs() * em * 0.5;
+            if r < 1e-6 {
+                return geo;
+            }
+            Geo::poly_only(offset(&offset(&geo.poly, r, ctx), -r, ctx))
+        }
+        Modifier::FitCircle { amount } => {
+            let t = amount.clamp(0.0, 1.5);
+            if t < 1e-4 || bbox.is_empty() {
+                return geo;
+            }
+            let c = bbox.center();
+            let (hw, hh) = (bbox.width().max(1e-9) * 0.5, bbox.height().max(1e-9) * 0.5);
+            let s = densified(&geo.poly, fine * 0.75);
+            Geo::poly_only(map_points(&s, |p| {
+                // Elliptical grid mapping: the box's edges land on the ellipse.
+                let u = ((p.x - c.x) / hw).clamp(-1.5, 1.5);
+                let v = ((p.y - c.y) / hh).clamp(-1.5, 1.5);
+                let mu = u * (1.0 - v * v * 0.5).max(0.0).sqrt();
+                let mv = v * (1.0 - u * u * 0.5).max(0.0).sqrt();
+                Pt { x: c.x + (u + (mu - u) * t) * hw, y: c.y + (v + (mv - v) * t) * hh }
+            }))
+        }
         Modifier::Warp { style, bend, ref points } => {
             if bbox.is_empty() {
                 return geo;
@@ -357,6 +594,83 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             }))
         }
     }
+}
+
+#[inline]
+fn cell_hash(i: i64, j: i64, seed: u32) -> f64 {
+    let mut h = (i as u32).wrapping_mul(0x8da6_b343) ^ (j as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f).wrapping_add(0x9e37_79b9);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297a_2d39);
+    h ^= h >> 15;
+    h as f64 / u32::MAX as f64
+}
+
+/// Randomly clear pixel cells, more of them toward the `angle` side of the box.
+fn dissolve_cells(mask: &mut [u8], g: &Grid, bbox: Rect, amount: f64, angle: f64, seed: u32) {
+    let a = angle.to_radians();
+    let dir = Pt { x: a.sin(), y: -a.cos() };
+    let c = bbox.center();
+    let ext = (0.5 * (dir.x.abs() * bbox.width() + dir.y.abs() * bbox.height())).max(1e-9);
+    // Hash by absolute cell index so neighbouring glyphs dissolve consistently.
+    let (bi, bj) = ((g.origin.x / g.cell).round() as i64, (g.origin.y / g.cell).round() as i64);
+    for j in 0..g.h {
+        for i in 0..g.w {
+            let k = j * g.w + i;
+            if mask[k] == 0 {
+                continue;
+            }
+            let p = Pt { x: g.origin.x + (i as f64 + 0.5) * g.cell, y: g.origin.y + (j as f64 + 0.5) * g.cell };
+            let t = (((p.x - c.x) * dir.x + (p.y - c.y) * dir.y) / ext * 0.5 + 0.5).clamp(0.0, 1.0);
+            let drop = ((t - (1.0 - amount)) / amount).clamp(0.0, 1.0);
+            if cell_hash(bi + i as i64, bj + j as i64, seed) < drop {
+                mask[k] = 0;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slice(geo: Geo, ctx: &Ctx, count: f64, gap: f64, angle: f64, ring: f64, hole: f64, jitter: f64, seed: u32, shift: (f64, f64)) -> Geo {
+    let bbox = geo.poly.bbox();
+    let g = (gap.abs() * ctx.em * 0.5) as f32;
+    let n = (count.round() as usize).clamp(0, 64);
+    if bbox.is_empty() || (n == 0 && ring <= 0.0 && hole <= 0.0) {
+        return geo;
+    }
+    let half = bbox.width().min(bbox.height()) * 0.5;
+    let c = Pt { x: bbox.center().x + shift.0.clamp(-1.0, 1.0) * half, y: bbox.center().y + shift.1.clamp(-1.0, 1.0) * half };
+    let rr = ring.clamp(0.0, 2.0) * half;
+    let rh = hole.clamp(0.0, 2.0) * half;
+    let r0 = rr.max(rh);
+    let base = angle.to_radians() - std::f64::consts::FRAC_PI_2;
+    let dirs: Vec<Pt> = (0..n)
+        .map(|k| {
+            let j = jitter.clamp(0.0, 1.0) * 0.45 * crate::noise::noise2(k as f64 * 1.73 + 0.3, 0.7, seed);
+            let a = base + (k as f64 + j) / n as f64 * std::f64::consts::TAU;
+            Pt { x: a.cos(), y: a.sin() }
+        })
+        .collect();
+    Geo::poly_only(field_map(&geo.poly, ctx, g as f64, false, |p, v| {
+        let q = Pt { x: p.x - c.x, y: p.y - c.y };
+        let r = (q.x * q.x + q.y * q.y).sqrt();
+        // Signed distance to the cut region (negative inside a cut).
+        let mut cut = f64::INFINITY;
+        for u in &dirs {
+            let t = q.x * u.x + q.y * u.y;
+            let d = if t >= r0 { (q.x * u.y - q.y * u.x).abs() } else { ((q.x - u.x * r0).powi(2) + (q.y - u.y * r0).powi(2)).sqrt() };
+            cut = cut.min(d);
+        }
+        let mut cut = cut as f32 - g;
+        if rr > 0.0 {
+            cut = cut.min((r - rr).abs() as f32 - g);
+        }
+        if rh > 0.0 {
+            cut = cut.min((r - rh) as f32);
+        }
+        v.max(-cut)
+    }))
 }
 
 fn circle(c: Pt, r: f64, n: usize) -> Vec<Pt> {
@@ -524,7 +838,7 @@ mod tests {
                 pt(50.0 * a.cos(), 50.0 * a.sin())
             })
             .collect();
-        let g = apply(Geo::poly_only(Shape::new(vec![circle])), &Modifier::Pixelate { size: 0.1, shape: PixelShape::Square, gap: 0.0 }, &CTX);
+        let g = apply(Geo::poly_only(Shape::new(vec![circle])), &Modifier::Pixelate { size: 0.1, shape: PixelShape::Square, gap: 0.0, dissolve: 0.0, angle: 180.0, seed: 0 }, &CTX);
         for c in &g.poly.contours {
             for i in 0..c.len() {
                 let d = c[(i + 1) % c.len()] - c[i];
@@ -536,7 +850,7 @@ mod tests {
 
     #[test]
     fn dot_pixels_are_separate_circles() {
-        let g = apply(Geo::poly_only(square(100.0)), &Modifier::Pixelate { size: 0.2, shape: PixelShape::Dot, gap: 0.1 }, &CTX);
+        let g = apply(Geo::poly_only(square(100.0)), &Modifier::Pixelate { size: 0.2, shape: PixelShape::Dot, gap: 0.1, dissolve: 0.0, angle: 180.0, seed: 0 }, &CTX);
         assert_eq!(g.poly.contours.len(), 25);
         let r = 0.2 * 100.0 * 0.9 * 0.5;
         let expect = 25.0 * std::f64::consts::PI * r * r;
@@ -573,9 +887,93 @@ mod tests {
     }
 
     #[test]
+    fn slice_cuts_pieces() {
+        // Four cuts through a square leave four separate quarters.
+        let g = apply(Geo::poly_only(square(100.0)), &Modifier::Slice { count: 4.0, gap: 0.06, angle: 0.0, ring: 0.0, hole: 0.0, jitter: 0.0, seed: 0, soften: 0.0, x: 0.0, y: 0.0 }, &CTX);
+        assert_eq!(g.poly.contours.len(), 4, "{}", g.poly.contours.len());
+        let lost = 10000.0 - g.poly.area();
+        // Two 6-unit gaps across a 100-unit square, minus the overlap.
+        assert!((lost - (2.0 * 6.0 * 100.0 - 36.0)).abs() < 60.0, "{lost}");
+        // A ring and a hole: a central disc is removed and the rest split.
+        let g = apply(Geo::poly_only(square(100.0)), &Modifier::Slice { count: 6.0, gap: 0.04, angle: 0.0, ring: 0.0, hole: 0.4, jitter: 0.0, seed: 0, soften: 0.03, x: 0.0, y: 0.0 }, &CTX);
+        assert_eq!(g.poly.contours.len(), 6);
+        assert!(g.poly.area() < 10000.0 - std::f64::consts::PI * 400.0);
+    }
+
+    #[test]
+    fn repeat_radial_and_grid() {
+        let mut g = Geo::poly_only(square(10.0));
+        g.curves = Some(crate::geom::poly_to_curves(&g.poly));
+        let r = apply(g.clone(), &Modifier::Repeat { mode: RepeatMode::Radial, count: 8.0, radius: 0.5, sweep: 360.0, orient: 1.0, cols: 1.0, rows: 1.0, gap_x: 0.0, gap_y: 0.0, dx: 0.0, dy: 0.0, grow: 1.0, spin: 0.0 }, &CTX);
+        assert_eq!(r.poly.contours.len(), 8);
+        assert!(r.curves.as_ref().map(|c| c.len()) == Some(8), "affine copies keep curves");
+        // Centred on the original square's centre (5, 5).
+        let c = r.poly.bbox().center();
+        assert!((c.x - 5.0).abs() < 1e-6 && (c.y - 5.0).abs() < 1e-6, "{c:?}");
+        let gr = apply(g, &Modifier::Repeat { mode: RepeatMode::Grid, count: 1.0, radius: 0.0, sweep: 360.0, orient: 0.0, cols: 3.0, rows: 2.0, gap_x: 0.1, gap_y: 0.0, dx: 0.0, dy: 0.0, grow: 1.0, spin: 0.0 }, &CTX);
+        assert_eq!(gr.poly.contours.len(), 6);
+        let b = gr.poly.bbox();
+        assert!((b.width() - 50.0).abs() < 1e-6 && (b.height() - 20.0).abs() < 1e-6, "{b:?}");
+    }
+
+    #[test]
+    fn trail_steps_and_echo_rings() {
+        let t = apply(Geo::poly_only(square(10.0)), &Modifier::Repeat { mode: RepeatMode::Trail, count: 4.0, radius: 0.0, sweep: 360.0, orient: 0.0, cols: 1.0, rows: 1.0, gap_x: 0.0, gap_y: 0.0, dx: 0.1, dy: 0.0, grow: 1.0, spin: 0.0 }, &CTX);
+        assert_eq!(t.poly.contours.len(), 4);
+        assert!((t.poly.bbox().width() - 40.0).abs() < 1e-6);
+        let e = apply(Geo::poly_only(square(100.0)), &Modifier::Echo { count: 3.0, spacing: 0.1, width: 0.02 }, &CTX);
+        // The shape plus three rings, each an outer and inner contour.
+        assert_eq!(e.poly.contours.len(), 7, "{}", e.poly.contours.len());
+        assert!((e.poly.bbox().width() - 162.0).abs() < 3.0, "{:?}", e.poly.bbox());
+    }
+
+    #[test]
+    fn fuse_bridges_gaps() {
+        let two = Shape::new(vec![square(40.0).contours[0].clone(), square(40.0).transformed(&Affine::translate(46.0, 0.0)).contours[0].clone()]);
+        let g = apply(Geo::poly_only(two), &Modifier::Fuse { amount: 0.1 }, &CTX);
+        assert_eq!(g.poly.contours.len(), 1);
+        assert!(g.poly.area() > 2.0 * 1600.0 + 200.0);
+    }
+
+    #[test]
+    fn fit_circle_rounds_the_box() {
+        let g = apply(Geo::poly_only(square(100.0)), &Modifier::FitCircle { amount: 1.0 }, &CTX);
+        let circle = std::f64::consts::PI * 2500.0;
+        assert!((g.poly.area() - circle).abs() / circle < 0.02, "{}", g.poly.area());
+        let b = g.poly.bbox();
+        assert!((b.width() - 100.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn dissolve_drops_cells_toward_the_bottom() {
+        let full = apply(Geo::poly_only(square(100.0)), &Modifier::Pixelate { size: 0.05, shape: PixelShape::Square, gap: 0.1, dissolve: 0.0, angle: 180.0, seed: 1 }, &CTX);
+        let g = apply(Geo::poly_only(square(100.0)), &Modifier::Pixelate { size: 0.05, shape: PixelShape::Square, gap: 0.1, dissolve: 0.6, angle: 180.0, seed: 1 }, &CTX);
+        assert!(g.poly.contours.len() < full.poly.contours.len());
+        let top = g.poly.contours.iter().filter(|c| c[0].y < 30.0).count();
+        let bottom = g.poly.contours.iter().filter(|c| c[0].y > 70.0).count();
+        assert!(top > bottom * 2, "top {top} bottom {bottom}");
+    }
+
+    #[test]
+    fn full_circle_arc() {
+        let wide = Shape::new(vec![vec![pt(0.0, 0.0), pt(600.0, 0.0), pt(600.0, 20.0), pt(0.0, 20.0)]]);
+        let g = apply(Geo::poly_only(wide), &Modifier::Arc { bend: 2.0 }, &CTX);
+        let b = g.poly.bbox();
+        // 600 units around a full turn: radius ≈ 95, so roughly square,
+        // and centred where the text was (y = 10).
+        assert!((b.width() - b.height()).abs() < 10.0, "{b:?}");
+        assert!((b.center().y - 10.0).abs() < 6.0, "{b:?}");
+    }
+
+    #[test]
     fn modifiers_deserialize_with_defaults() {
         let m: Vec<ModEntry> = serde_json::from_str(r#"[{"kind":"weight","amount":0.05},{"kind":"stretch","x":1.2,"on":false}]"#).unwrap();
         assert!(m[0].on);
         assert_eq!(m[1].m, Modifier::Stretch { x: 1.2, y: 1.0 });
+        // Older projects' pixel modifiers have no dissolve fields.
+        let p: Modifier = serde_json::from_str(r#"{"kind":"pixelate","size":0.1,"shape":"dot"}"#).unwrap();
+        assert!(matches!(p, Modifier::Pixelate { dissolve, angle, .. } if dissolve == 0.0 && angle == 180.0));
+        let r: Modifier = serde_json::from_str(r#"{"kind":"repeat","mode":"grid","cols":4,"gapX":0.1}"#).unwrap();
+        assert!(matches!(r, Modifier::Repeat { mode: RepeatMode::Grid, gap_x, .. } if gap_x == 0.1));
     }
 }

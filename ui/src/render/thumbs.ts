@@ -75,7 +75,7 @@ export async function projectScene(p: Project, px: number) {
   const out = await engine.buildExact(doc);
   const items: SceneItem[] = objects.flatMap((o) => {
     const r = out.renders.find((x) => x.id === o.id);
-    return r ? [{ id: o.id, d: r.d, bbox: r.bbox, effect: effectById(o.style.effect), params: o.style.params }] : [];
+    return r ? [{ id: o.id, d: r.d, bbox: r.bbox, effect: effectById(o.style.effect), params: o.style.params, stroke: o.style.stroke, opacity: o.style.opacity, blend: o.style.blend }] : [];
   });
   return { items, background: p.background, w: p.canvas.width, h: p.canvas.height, px };
 }
