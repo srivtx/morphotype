@@ -1,5 +1,5 @@
 import type { Request, RequestBody, Response } from './protocol';
-import type { BuildOut, EngineDocument, FontInfo, FontSpec, SvgOptions, TraceOptions, TraceOut } from './types';
+import type { BakeOut, BuildOut, EngineDocument, FontInfo, FontSpec, GlyphOut, GlyphPreview, PathsOut, PieceOut, SvgOptions, TraceOptions, TraceOut } from './types';
 
 export type BuildResult = BuildOut & { ms: number };
 
@@ -18,7 +18,7 @@ interface Pending {
  *   is reloaded before the failed request is retried once.
  */
 export class EngineClient {
-  private worker!: Worker;
+  private worker: Worker | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private fonts = new Map<string, { bytes: Uint8Array; index: number }>();
@@ -28,9 +28,7 @@ export class EngineClient {
   private lastResult: BuildResult | null = null;
   private restarting: Promise<void> | null = null;
 
-  constructor() {
-    this.spawn();
-  }
+  // The worker starts on first use, so importing this module is side-effect free.
 
   private spawn() {
     this.worker = new Worker(new URL('./engine.worker.ts', import.meta.url), { type: 'module' });
@@ -59,7 +57,7 @@ export class EngineClient {
     if (this.restarting) return this.restarting;
     console.warn('Restarting engine:', reason.message);
     this.restarting = (async () => {
-      this.worker.terminate();
+      this.worker?.terminate();
       const stranded = [...this.pending.values()];
       this.pending.clear();
       this.spawn();
@@ -78,7 +76,8 @@ export class EngineClient {
     const rid = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(rid, { resolve: resolve as (v: unknown) => void, reject, body });
-      this.worker.postMessage({ ...body, rid } as Request, transfer);
+      if (!this.worker) this.spawn();
+      this.worker!.postMessage({ ...body, rid } as Request, transfer);
     });
   }
 
@@ -117,6 +116,11 @@ export class EngineClient {
     });
   }
 
+  /** Build exactly this document, outside the latest-wins queue (previews, exports). */
+  buildExact(doc: EngineDocument): Promise<BuildResult> {
+    return this.post<BuildResult>({ type: 'build', doc: JSON.stringify(doc) });
+  }
+
   private run(doc: string, waiters: ((r: BuildResult | Error) => void)[]) {
     this.building = true;
     this.post<BuildResult>({ type: 'build', doc })
@@ -140,6 +144,31 @@ export class EngineClient {
 
   exportSvg(doc: EngineDocument, opts: SvgOptions = {}): Promise<string> {
     return this.post({ type: 'exportSvg', doc: JSON.stringify(doc), opts: JSON.stringify(opts) });
+  }
+
+  exportPaths(doc: EngineDocument): Promise<PathsOut> {
+    return this.post({ type: 'exportPaths', doc: JSON.stringify(doc) });
+  }
+
+  bake(doc: EngineDocument, id: string): Promise<BakeOut> {
+    return this.post({ type: 'bake', doc: JSON.stringify(doc), id });
+  }
+
+  split(doc: EngineDocument, id: string): Promise<PieceOut[]> {
+    return this.post({ type: 'split', doc: JSON.stringify(doc), id });
+  }
+
+  glyphPath(font: string, axes: Record<string, number>, ch: string): Promise<GlyphOut> {
+    return this.post({ type: 'glyphPath', font, axes: JSON.stringify(axes), ch });
+  }
+
+  fontPreview(spec: FontSpec, chars: string): Promise<GlyphPreview[]> {
+    return this.post({ type: 'fontPreview', spec: JSON.stringify(spec), chars });
+  }
+
+  /** Whether a font id is loaded in the engine. */
+  hasFont(id: string): boolean {
+    return this.fonts.has(id);
   }
 
   exportFont(spec: FontSpec): Promise<Uint8Array> {

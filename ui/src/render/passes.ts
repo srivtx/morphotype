@@ -51,10 +51,11 @@ export const JFA_FS = /* glsl */ `#version 300 es
 precision highp float;
 uniform sampler2D u_seeds;
 uniform float u_step;
+uniform vec2 u_size;
 out vec4 o;
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
-  ivec2 s = textureSize(u_seeds, 0);
+  ivec2 s = ivec2(u_size);
   vec2 best = vec2(-1.0);
   float bd = 1e20;
   int st = int(u_step);

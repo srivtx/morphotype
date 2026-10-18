@@ -1,5 +1,6 @@
-// End-to-end smoke test: serves dist/, opens it in headless Chromium, applies
-// every template and saves a screenshot of each. Fails on any page error.
+// End-to-end test: serves dist/, drives the app in headless Chromium through
+// templates, editing, styling, Type mode and exports. Fails on any page error
+// or broken expectation, and saves screenshots along the way.
 //
 //   npm run build && npm run test:e2e [-- --out screenshots]
 //
@@ -35,6 +36,12 @@ const browser = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
 });
 const errors = [];
+const check = (ok, msg) => {
+  if (ok) console.log(`✓ ${msg}`);
+  else errors.push(`✗ ${msg}`);
+};
+const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+
 try {
   await mkdir(out, { recursive: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, acceptDownloads: true });
@@ -42,36 +49,166 @@ try {
   page.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
   await page.goto(`http://127.0.0.1:${port}/`);
   await page.waitForSelector('.stat', { timeout: 30_000 });
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(600);
   await page.screenshot({ path: path.join(out, '00-start.png') });
 
-  await page.getByRole('button', { name: 'File' }).click();
-  await page.getByRole('button', { name: 'New from template…' }).click();
-  const buttons = page.locator('.template');
-  const count = await buttons.count();
-  if (count === 0) throw new Error('No templates rendered');
+  const state = () => page.evaluate(() => window.morphotype.store.get());
+  const layersOf = (s) => {
+    const all = [];
+    const walk = (ns) => ns.forEach((n) => (n.type === 'group' ? (all.push(n), walk(n.children)) : all.push(n)));
+    walk(s.project.layers);
+    return all;
+  };
+  const settle = (ms = 700) => page.waitForTimeout(ms);
+  /** Poll until `fn(state)` is true (software GL frames can be slow). */
+  const until = async (fn, timeout = 20_000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) {
+      if (fn(await state())) return true;
+      await page.waitForTimeout(150);
+    }
+    return false;
+  };
+  const vp = page.locator('.viewport');
+  const vb = await vp.boundingBox();
+  const openTemplate = async (name) => {
+    await page.keyboard.press(`${mod}+n`);
+    await page.locator('.templates').waitFor({ timeout: 10_000 });
+    await page.locator('.template', { hasText: name }).first().click();
+    await settle(900);
+  };
+
+  // ---- every template renders ----
+  await page.keyboard.press(`${mod}+n`);
+  const names = (await page.locator('.template strong').allTextContents()).filter((n) => n !== 'Blank canvas');
   await page.keyboard.press('Escape');
-  for (let i = 0; i < count; i++) {
-    await page.getByRole('button', { name: 'File' }).click();
-    await page.getByRole('button', { name: 'New from template…' }).click();
-    const tpl = page.locator('.template').nth(i);
-    const label = (await tpl.locator('strong').textContent()) ?? `t${i}`;
-    const before = await page.locator('.stat').textContent();
-    await tpl.click();
-    await page.waitForFunction((prev) => document.querySelector('.stat')?.textContent !== prev, before, { timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(700);
-    const file = `${String(i + 1).padStart(2, '0')}-${label.toLowerCase().replace(/\W+/g, '-')}.png`;
+  check(names.length >= 15, `${names.length} templates listed`);
+  for (const [i, name] of names.entries()) {
+    await openTemplate(name);
+    const file = `${String(i + 1).padStart(2, '0')}-${name.toLowerCase().replace(/\W+/g, '-')}.png`;
     await page.screenshot({ path: path.join(out, file) });
-    // A clean shot of the artboard alone (no selection box or view tools).
-    const vp = page.locator('.viewport');
-    const box = await vp.boundingBox();
-    await page.mouse.click(box.x + 6, box.y + 6);
-    const hide = await page.addStyleTag({ content: '.view-tools,.sel-box{display:none!important}' });
+    await page.mouse.click(vb.x + 6, vb.y + 6);
+    const hide = await page.addStyleTag({ content: '.dock,.overlay,.stat,.edit-pill{display:none!important}' });
     await vp.screenshot({ path: path.join(out, `art-${file}`) });
     await hide.evaluate((el) => el.remove());
-    console.log(`✓ ${label}`);
+    const s = await state();
+    const errs = (s.build?.layers ?? []).filter((l) => l.error);
+    if (errs.length) errors.push(`${name}: ${errs.map((e) => e.error).join('; ')}`);
   }
-  // Exports: PNG, SVG and a compiled font must all download and look valid.
+  check(true, 'templates rendered');
+
+  // ---- per-layer styles: styling the eyes must not restyle the body ----
+  await openTemplate('Chat mascot');
+  await page.locator('.row', { hasText: 'Eyes' }).click();
+  await page.getByRole('tab', { name: 'Style' }).click();
+  await page.getByPlaceholder(/Search looks/).fill('neon');
+  await page.locator('.preset-card', { hasText: 'Neon pink' }).click();
+  await settle();
+  let s = await state();
+  const eyes = layersOf(s).find((l) => l.content?.symbol?.kind === 'eyes');
+  const bubble = layersOf(s).find((l) => l.content?.symbol?.kind === 'bubble');
+  check(eyes.style.effect === 'neon' && bubble.style.effect === 'sticker', 'a preset applies only to the selected layer');
+  await page.screenshot({ path: path.join(out, 'edit-01-styled-eyes.png') });
+
+  // ---- select, move, resize on the canvas ----
+  await page.getByRole('tab', { name: 'Design' }).click();
+  await openTemplate('Glow glass');
+  await page.mouse.click(vb.x + vb.width / 2, vb.y + vb.height / 2 - 40);
+  s = await state();
+  check(s.selection.length === 1, 'clicking a shape selects it');
+  const before = layersOf(s)[0];
+  await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2 - 40);
+  await page.mouse.down();
+  await page.mouse.move(vb.x + vb.width / 2 + 80, vb.y + vb.height / 2 - 40, { steps: 8 });
+  await page.mouse.up();
+  s = await state();
+  check(layersOf(s)[0].x > before.x + 30, 'dragging moves the layer');
+  const handle = await page.locator('.handle.edge').nth(1).boundingBox();
+  await page.mouse.move(handle.x + 4, handle.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 90, handle.y + 4, { steps: 6 });
+  await page.mouse.up();
+  s = await state();
+  check(layersOf(s)[0].sx > 1.1, 'the side handle stretches the layer');
+  await page.keyboard.press(`${mod}+z`);
+  s = await state();
+  check(Math.abs(layersOf(s)[0].sx - 1) < 1e-6, 'undo restores the stretch');
+
+  // ---- add shapes, group, reorder by dragging in the layers panel ----
+  await page.keyboard.press('o');
+  await settle(300);
+  await page.keyboard.press('r');
+  await settle(300);
+  s = await state();
+  check(s.project.layers.length === 3, 'shortcuts add shapes');
+  await page.keyboard.press(`${mod}+a`);
+  await page.keyboard.press(`${mod}+g`);
+  await settle(300);
+  s = await state();
+  check(s.project.layers.length === 1 && s.project.layers[0].type === 'group', 'select all + group');
+  await page.keyboard.press(`Shift+${mod}+g`);
+  await settle(300);
+  s = await state();
+  check(s.project.layers.length === 3, 'ungroup');
+  const rows = page.locator('.row');
+  await rows.nth(0).click();
+  await until((st) => st.selection.length === 1);
+  const topId = (await state()).project.layers.at(-1).id;
+  const from = await rows.nth(0).boundingBox();
+  const to = await rows.nth(2).boundingBox();
+  await page.mouse.move(from.x + 60, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 60, to.y + to.height - 3, { steps: 8 });
+  await page.mouse.up();
+  check(await until((st) => st.project.layers.length === 3 && st.project.layers[0].id === topId), 'dragging the top row to the bottom reorders layers');
+  await page.screenshot({ path: path.join(out, 'edit-02-layers.png') });
+
+  // ---- break apart and edit points ----
+  await openTemplate('Glow glass');
+  await page.mouse.click(vb.x + vb.width / 2, vb.y + vb.height / 2 - 40);
+  await page.keyboard.press(`Shift+${mod}+b`);
+  await settle(900);
+  s = await state();
+  const g = s.project.layers[0];
+  check(g.type === 'group' && g.children.length === 3, `break apart "lab" gives 3 letters (${g.children?.length})`);
+  await page.keyboard.press('Escape');
+  await openTemplate('Neon script');
+  await page.locator('.row', { hasText: 'Night' }).click();
+  await page.keyboard.press('p');
+  await settle(900);
+  check((await page.locator('.pe-node').count()) > 20, 'edit points shows the outline nodes');
+  s = await state();
+  const d0 = layersOf(s)[0].content.d;
+  const node = await page.locator('.pe-node').nth(5).boundingBox();
+  await page.mouse.move(node.x + 4, node.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(node.x + 40, node.y - 30, { steps: 5 });
+  await page.mouse.up();
+  s = await state();
+  check(layersOf(s)[0].content.d !== d0, 'dragging a point edits the path');
+  await page.screenshot({ path: path.join(out, 'edit-03-points.png') });
+  await page.keyboard.press('Escape');
+
+  // ---- command palette and settings search ----
+  await page.keyboard.press(`${mod}+k`);
+  await page.keyboard.type('instagram story');
+  await settle(200);
+  await page.keyboard.press('Enter');
+  check(await until((st) => st.project.canvas.width === 1080 && st.project.canvas.height === 1920 && !st.dialog), 'palette runs a canvas preset');
+  await page.keyboard.press(`${mod}+,`);
+  await page.getByPlaceholder('Search settings and shortcuts…').waitFor();
+  await page.keyboard.type('nudge');
+  let labels = 0;
+  for (let i = 0; i < 40 && labels !== 2; i++) {
+    await page.waitForTimeout(150);
+    labels = await page.locator('.settings-section .setting-label').count();
+  }
+  check(labels === 2, `settings search filters to the nudge settings (${labels})`);
+  await page.screenshot({ path: path.join(out, 'edit-04-settings.png') });
+  await page.keyboard.press('Escape');
+  check(await until((st) => !st.dialog), 'Escape closes the settings');
+
+  // ---- exports ----
   const download = async (open, click) => {
     const wait = page.waitForEvent('download', { timeout: 60_000 });
     await open();
@@ -81,22 +218,45 @@ try {
     await d.saveAs(file);
     return readFile(file);
   };
+  await openTemplate('Chat mascot');
   const exportMenu = () => page.getByRole('button', { name: 'Export', exact: true }).click();
-  const png = await download(exportMenu, () => page.getByRole('button', { name: /^PNG 1×/ }).click());
-  if (png.subarray(1, 4).toString() !== 'PNG' || png.length < 10_000) errors.push(`PNG export looks wrong (${png.length} bytes)`);
-  else console.log(`✓ PNG export (${(png.length / 1024).toFixed(0)} KB)`);
-  const svg = await download(exportMenu, () => page.getByRole('button', { name: /^SVG/ }).click());
-  if (!svg.toString().startsWith('<svg') || !svg.toString().includes(' d="M')) errors.push('SVG export looks wrong');
-  else console.log(`✓ SVG export (${(svg.length / 1024).toFixed(0)} KB)`);
-  const ttf = await download(
-    () => page.getByRole('button', { name: 'Make font' }).click(),
-    () => page.getByRole('button', { name: 'Export .ttf' }).click(),
-  );
-  if (ttf.readUInt32BE(0) !== 0x00010000 || ttf.length < 5_000) errors.push(`Font export looks wrong (${ttf.length} bytes)`);
-  else console.log(`✓ Font export (${(ttf.length / 1024).toFixed(0)} KB)`);
+  const png = await download(exportMenu, () => page.getByRole('menuitem', { name: /^PNG 1×/ }).click());
+  check(png.subarray(1, 4).toString() === 'PNG' && png.length > 10_000, `PNG export (${(png.length / 1024).toFixed(0)} KB)`);
+  const svg = (await download(exportMenu, () => page.getByRole('menuitem', { name: /^SVG/ }).click())).toString();
+  check(svg.startsWith('<svg') && (svg.match(/<path /g) ?? []).length >= 2, 'SVG export has one path per object');
+  const jpg = await download(exportMenu, () => page.getByRole('menuitem', { name: /^JPG/ }).click());
+  check(jpg[0] === 0xff && jpg[1] === 0xd8, 'JPG export');
 
-  const layerErrors = await page.locator('.layer-warn').count();
-  if (layerErrors) errors.push(`${layerErrors} layer(s) reported engine errors`);
+  // ---- Type mode ----
+  await page.keyboard.press(`${mod}+2`);
+  await page.waitForSelector('.glyph-cell svg path', { timeout: 30_000 });
+  await settle(1500);
+  check((await page.locator('.glyph-cell').count()) > 80, 'glyph grid lists the character set');
+  await page.locator('.look', { hasText: 'Dot matrix' }).click();
+  await settle(1800);
+  await page.screenshot({ path: path.join(out, 'type-01-dots.png') });
+  await page.locator('.glyph-cell', { hasText: 'B' }).first().click();
+  await page.getByRole('button', { name: 'Edit points' }).click();
+  await settle(900);
+  check((await page.locator('.glyph-canvas .pe-node').count()) > 4, 'glyph point editor opens');
+  await page.locator('.add-chars input').fill('★');
+  await page.keyboard.press('Enter');
+  await settle(1000);
+  s = await state();
+  check(s.project.type.charset.includes('★') && s.glyph === '★', 'adding a character outside the base font');
+  await page.getByRole('button', { name: 'Draw it' }).click();
+  await settle(600);
+  const woff = await download(async () => {}, () => page.getByRole('button', { name: '.woff (web)' }).click());
+  check(woff.subarray(0, 4).toString() === 'wOFF', `WOFF export (${(woff.length / 1024).toFixed(0)} KB)`);
+  const kit = await download(async () => {}, () => page.getByRole('button', { name: /Web font kit/ }).click());
+  check(kit[0] === 0x50 && kit[1] === 0x4b && kit.includes(Buffer.from('@font-face')), 'web font kit zip with CSS');
+  const ttf = await download(async () => {}, () => page.getByRole('button', { name: '.ttf' }).click());
+  check(ttf.readUInt32BE(0) === 0x00010000, `TTF export (${(ttf.length / 1024).toFixed(0)} KB)`);
+  await page.screenshot({ path: path.join(out, 'type-02-star.png') });
+} catch (e) {
+  errors.push(`crashed: ${e.message.split('\n')[0]}`);
+  const pages = browser.contexts().flatMap((c) => c.pages());
+  if (pages[0]) await pages[0].screenshot({ path: path.join(out, 'failure.png') }).catch(() => {});
 } finally {
   await browser.close();
   server.close();

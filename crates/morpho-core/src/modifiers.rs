@@ -46,16 +46,64 @@ pub enum Modifier {
     Wobble { #[serde(default)] amount: f64, #[serde(default = "one")] scale: f64, #[serde(default)] seed: u32 },
     /// Downward drips, stronger toward the bottom of the shape.
     Melt { #[serde(default)] amount: f64, #[serde(default = "one")] scale: f64, #[serde(default)] seed: u32 },
-    /// Snap to a square grid with cells `size` em wide.
-    Pixelate { #[serde(default)] size: f64 },
+    /// Snap to a grid with cells `size` em wide. Cells become squares, dots or
+    /// rounded squares; `gap` (fraction of a cell) separates them.
+    Pixelate {
+        #[serde(default)]
+        size: f64,
+        #[serde(default)]
+        shape: PixelShape,
+        #[serde(default)]
+        gap: f64,
+    },
+    /// Bezier envelope warp over the shape's bounding box: a preset `style`
+    /// scaled by `bend`, plus 16 free control-point offsets (row-major, as
+    /// fractions of the box) for hand-made warps.
+    Warp {
+        #[serde(default)]
+        style: WarpStyle,
+        #[serde(default)]
+        bend: f64,
+        #[serde(default)]
+        points: Vec<[f64; 2]>,
+    },
     /// Keystone: narrows the top (+) or the bottom (−).
     Perspective { #[serde(default)] amount: f64 },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PixelShape {
+    #[default]
+    Square,
+    Dot,
+    Rounded,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WarpStyle {
+    #[default]
+    Custom,
+    Arch,
+    Arc,
+    ArcLower,
+    Bulge,
+    Flag,
+    Rise,
+    Fish,
+    Inflate,
+    Squeeze,
+    Twist,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModEntry {
     #[serde(default = "yes")]
     pub on: bool,
+    /// UI identity; reported back with warp frames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     #[serde(flatten)]
     pub m: Modifier,
 }
@@ -255,7 +303,7 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
                 Pt { x: cx + (p.x - cx) * (1.0 - a * up), y: p.y }
             }))
         }
-        Modifier::Pixelate { size } => {
+        Modifier::Pixelate { size, shape, gap } => {
             let cell = size.abs() * em;
             if cell < em / 400.0 || bbox.is_empty() {
                 return geo;
@@ -270,14 +318,160 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             }
             let g = Grid { w, h, origin: Pt { x: ox, y: oy }, cell };
             let mask = rasterize(&geo.poly, &g);
-            Geo::poly_only(block_contours(&mask, w, h, g.origin, cell))
+            let gap = gap.clamp(0.0, 0.9);
+            if shape == PixelShape::Square && gap < 1e-4 {
+                return Geo::poly_only(block_contours(&mask, w, h, g.origin, cell));
+            }
+            let side = cell * (1.0 - gap);
+            let mut cs = Vec::new();
+            for j in 0..h {
+                for i in 0..w {
+                    if mask[j * w + i] == 0 {
+                        continue;
+                    }
+                    let c = Pt { x: ox + (i as f64 + 0.5) * cell, y: oy + (j as f64 + 0.5) * cell };
+                    cs.push(match shape {
+                        PixelShape::Dot => circle(c, side * 0.5, 20),
+                        PixelShape::Rounded => rounded_square(c, side, side * 0.28),
+                        PixelShape::Square => square_at(c, side),
+                    });
+                }
+            }
+            Geo::poly_only(Shape::new(cs))
+        }
+        Modifier::Warp { style, bend, ref points } => {
+            if bbox.is_empty() {
+                return geo;
+            }
+            let net = warp_net(style, bend, points);
+            if net.iter().all(|o| o[0].abs() < 1e-9 && o[1].abs() < 1e-9) {
+                return geo;
+            }
+            let (w, h) = (bbox.width().max(1e-9), bbox.height().max(1e-9));
+            let s = densified(&geo.poly, fine * 0.75);
+            Geo::poly_only(map_points(&s, |p| {
+                let u = (p.x - bbox.x0) / w;
+                let v = (p.y - bbox.y0) / h;
+                let o = eval_net(&net, u, v);
+                Pt { x: p.x + o[0] * w, y: p.y + o[1] * h }
+            }))
         }
     }
 }
 
+fn circle(c: Pt, r: f64, n: usize) -> Vec<Pt> {
+    (0..n)
+        .map(|k| {
+            let a = k as f64 / n as f64 * std::f64::consts::TAU;
+            Pt { x: c.x + r * a.cos(), y: c.y + r * a.sin() }
+        })
+        .collect()
+}
+
+fn square_at(c: Pt, side: f64) -> Vec<Pt> {
+    let h = side * 0.5;
+    vec![Pt { x: c.x - h, y: c.y - h }, Pt { x: c.x + h, y: c.y - h }, Pt { x: c.x + h, y: c.y + h }, Pt { x: c.x - h, y: c.y + h }]
+}
+
+fn rounded_square(c: Pt, side: f64, r: f64) -> Vec<Pt> {
+    let h = side * 0.5;
+    let r = r.min(h);
+    let mut out = Vec::with_capacity(24);
+    // Corner centres, clockwise in y-down space starting top-right.
+    let corners = [(h - r, -h + r, -0.5), (h - r, h - r, 0.0), (-h + r, h - r, 0.5), (-h + r, -h + r, 1.0)];
+    for (cx, cy, start) in corners {
+        for k in 0..=5 {
+            let a = (start + k as f64 / 5.0 * 0.5) * std::f64::consts::PI;
+            out.push(Pt { x: c.x + cx + r * a.cos(), y: c.y + cy + r * a.sin() });
+        }
+    }
+    out
+}
+
+/// Control-net offsets (16 points, row-major, fractions of the box) for a warp.
+pub fn warp_net(style: WarpStyle, bend: f64, points: &[[f64; 2]]) -> [[f64; 2]; 16] {
+    let b = bend.clamp(-2.0, 2.0);
+    let mut o = [[0.0f64; 2]; 16];
+    let mid = |i: usize| i == 1 || i == 2;
+    for j in 0..4 {
+        for i in 0..4 {
+            let k = j * 4 + i;
+            let (u, v) = (i as f64 / 3.0, j as f64 / 3.0);
+            o[k] = match style {
+                WarpStyle::Custom => [0.0, 0.0],
+                WarpStyle::Arch => [0.0, if mid(i) { -0.42 * b } else { 0.0 }],
+                WarpStyle::Arc => [0.0, if mid(i) && j == 0 { -0.55 * b } else if mid(i) && j == 1 { -0.2 * b } else { 0.0 }],
+                WarpStyle::ArcLower => [0.0, if mid(i) && j == 3 { 0.55 * b } else if mid(i) && j == 2 { 0.2 * b } else { 0.0 }],
+                WarpStyle::Bulge => [0.0, if mid(i) { (v - 0.5) * 1.0 * b } else { 0.0 }],
+                WarpStyle::Flag => [0.0, if i == 1 { -0.38 * b } else if i == 2 { 0.38 * b } else { 0.0 }],
+                WarpStyle::Rise => [0.0, if i < 2 { 0.22 * b } else { -0.22 * b }],
+                WarpStyle::Fish => [
+                    0.0,
+                    if j == 0 && mid(i) {
+                        -0.4 * b
+                    } else if j == 3 && mid(i) {
+                        0.4 * b
+                    } else if i == 3 {
+                        (v - 0.5) * -0.45 * b
+                    } else {
+                        0.0
+                    },
+                ],
+                WarpStyle::Inflate => {
+                    if mid(i) && mid(j) {
+                        [(u - 0.5) * 0.9 * b, (v - 0.5) * 0.9 * b]
+                    } else if mid(i) || mid(j) {
+                        [(u - 0.5) * 0.35 * b * (mid(j) as u8 as f64), (v - 0.5) * 0.35 * b * (mid(i) as u8 as f64)]
+                    } else {
+                        [0.0, 0.0]
+                    }
+                }
+                WarpStyle::Squeeze => [if mid(j) { (0.5 - u) * 0.7 * b } else { 0.0 }, 0.0],
+                WarpStyle::Twist => [(0.5 - v) * 0.45 * b, (u - 0.5) * 0.3 * b],
+            };
+            if let Some(p) = points.get(k) {
+                o[k][0] += p[0];
+                o[k][1] += p[1];
+            }
+        }
+    }
+    o
+}
+
+fn bern(t: f64) -> [f64; 4] {
+    let s = 1.0 - t;
+    [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t]
+}
+
+/// Offset of the Bezier patch at (u, v). Uniform control points reproduce the
+/// identity, so only the offsets need evaluating.
+pub fn eval_net(net: &[[f64; 2]; 16], u: f64, v: f64) -> [f64; 2] {
+    let bu = bern(u.clamp(0.0, 1.0));
+    let bv = bern(v.clamp(0.0, 1.0));
+    let mut out = [0.0, 0.0];
+    for j in 0..4 {
+        for i in 0..4 {
+            let w = bu[i] * bv[j];
+            out[0] += w * net[j * 4 + i][0];
+            out[1] += w * net[j * 4 + i][1];
+        }
+    }
+    // Points outside the box (e.g. from earlier modifiers) extend linearly.
+    out
+}
+
 /// Run a full modifier stack.
-pub fn apply_all(mut geo: Geo, mods: &[ModEntry], ctx: &Ctx) -> Geo {
+pub fn apply_all(geo: Geo, mods: &[ModEntry], ctx: &Ctx) -> Geo {
+    apply_all_frames(geo, mods, ctx, &mut Vec::new())
+}
+
+/// Run a stack and record, for each warp modifier with a uid, the box it
+/// warped (so the UI can draw its control net).
+pub fn apply_all_frames(mut geo: Geo, mods: &[ModEntry], ctx: &Ctx, frames: &mut Vec<(String, Rect)>) -> Geo {
     for e in mods.iter().filter(|e| e.on) {
+        if let (Modifier::Warp { .. }, Some(uid)) = (&e.m, &e.uid) {
+            frames.push((uid.clone(), geo.poly.bbox()));
+        }
         geo = apply(geo, &e.m, ctx);
         if geo.poly.is_empty() {
             break;
@@ -330,7 +524,7 @@ mod tests {
                 pt(50.0 * a.cos(), 50.0 * a.sin())
             })
             .collect();
-        let g = apply(Geo::poly_only(Shape::new(vec![circle])), &Modifier::Pixelate { size: 0.1 }, &CTX);
+        let g = apply(Geo::poly_only(Shape::new(vec![circle])), &Modifier::Pixelate { size: 0.1, shape: PixelShape::Square, gap: 0.0 }, &CTX);
         for c in &g.poly.contours {
             for i in 0..c.len() {
                 let d = c[(i + 1) % c.len()] - c[i];
@@ -338,6 +532,36 @@ mod tests {
             }
         }
         assert!(g.poly.area() > 6000.0 && g.poly.area() < 9500.0);
+    }
+
+    #[test]
+    fn dot_pixels_are_separate_circles() {
+        let g = apply(Geo::poly_only(square(100.0)), &Modifier::Pixelate { size: 0.2, shape: PixelShape::Dot, gap: 0.1 }, &CTX);
+        assert_eq!(g.poly.contours.len(), 25);
+        let r = 0.2 * 100.0 * 0.9 * 0.5;
+        let expect = 25.0 * std::f64::consts::PI * r * r;
+        assert!((g.poly.area() - expect).abs() / expect < 0.03, "{}", g.poly.area());
+    }
+
+    #[test]
+    fn warp_identity_and_arch() {
+        let net = warp_net(WarpStyle::Custom, 0.0, &[]);
+        assert_eq!(eval_net(&net, 0.3, 0.7), [0.0, 0.0]);
+        let g = apply(Geo::poly_only(square(100.0)), &Modifier::Warp { style: WarpStyle::Arch, bend: 0.5, points: vec![] }, &CTX);
+        let b = g.poly.bbox();
+        // Middle rises, corners stay.
+        assert!(b.y0 < -10.0, "{b:?}");
+        assert!((b.x0 - 0.0).abs() < 1e-6 && (b.x1 - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn warp_frames_are_reported() {
+        let mods: Vec<ModEntry> = serde_json::from_str(r#"[{"kind":"warp","style":"flag","bend":0.4,"uid":"w1"}]"#).unwrap();
+        let mut frames = Vec::new();
+        apply_all_frames(Geo::poly_only(square(50.0)), &mods, &CTX, &mut frames);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].0, "w1");
+        assert!((frames[0].1.width() - 50.0).abs() < 1e-9);
     }
 
     #[test]

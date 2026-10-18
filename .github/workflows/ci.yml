@@ -68,3 +68,44 @@ jobs:
           path: |
             target/universal-apple-darwin/release/bundle/dmg/*.dmg
             target/universal-apple-darwin/release/bundle/macos/*.app
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: mac
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build the web app
+        run: |
+          npm run build
+          (cd dist && zip -qr ../Morphotype-web.zip .)
+      - uses: actions/download-artifact@v4
+        with:
+          name: Morphotype-macOS
+          path: mac
+      - name: Collect release files
+        run: |
+          mkdir -p release
+          find mac -name '*.dmg' -exec cp {} release/ \;
+          cp Morphotype-web.zip release/
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Morphotype ${{ github.ref_name }}
+          body_path: docs/RELEASE_NOTES.md
+          files: release/*
+          fail_on_unmatched_files: true

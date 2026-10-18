@@ -3,6 +3,11 @@ export type Request =
   | { rid: number; type: 'unloadFont'; id: string }
   | { rid: number; type: 'build'; doc: string }
   | { rid: number; type: 'exportSvg'; doc: string; opts: string }
+  | { rid: number; type: 'exportPaths'; doc: string }
+  | { rid: number; type: 'bake'; doc: string; id: string }
+  | { rid: number; type: 'split'; doc: string; id: string }
+  | { rid: number; type: 'glyphPath'; font: string; axes: string; ch: string }
+  | { rid: number; type: 'fontPreview'; spec: string; chars: string }
   | { rid: number; type: 'exportFont'; spec: string }
   | { rid: number; type: 'trace'; rgba: Uint8Array; width: number; height: number; opts: string };
 

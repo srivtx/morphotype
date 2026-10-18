@@ -34,6 +34,21 @@ self.onmessage = async (ev: MessageEvent<Request>) => {
       case 'exportSvg':
         reply({ id: req.rid, ok: true, value: morpho.exportSvg(req.doc, req.opts) });
         break;
+      case 'exportPaths':
+        reply({ id: req.rid, ok: true, value: JSON.parse(morpho.exportPaths(req.doc)) });
+        break;
+      case 'bake':
+        reply({ id: req.rid, ok: true, value: JSON.parse(morpho.bake(req.doc, req.id)) });
+        break;
+      case 'split':
+        reply({ id: req.rid, ok: true, value: JSON.parse(morpho.split(req.doc, req.id)) });
+        break;
+      case 'glyphPath':
+        reply({ id: req.rid, ok: true, value: JSON.parse(morpho.glyphPath(req.font, req.axes, req.ch)) });
+        break;
+      case 'fontPreview':
+        reply({ id: req.rid, ok: true, value: JSON.parse(morpho.fontPreview(req.spec, req.chars)) });
+        break;
       case 'exportFont': {
         const bytes = morpho.exportFont(req.spec);
         reply({ id: req.rid, ok: true, value: bytes }, [bytes.buffer]);

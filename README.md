@@ -4,28 +4,38 @@ A Mac-first type and logo lab. Morph one typeface into another, reshape letterin
 
 ![Templates rendered by Morphotype](docs/images/gallery.png)
 
+## Install
+
+Download the latest `.dmg` from [Releases](https://github.com/srivtx/morphotype/releases). It's a universal app for Apple silicon and Intel Macs. Open it, drag **Morphotype** to Applications, and the first time right-click it and choose **Open** (the app isn't notarised yet). `Morphotype-web.zip` in the same release is the browser version, ready to host anywhere.
+
 ## What it does
 
-**Type and fonts**
-- Loads TTF, OTF, TTC and WOFF fonts, shaped with a HarfBuzz port so kerning, ligatures and variable-font axes work.
-- **Font morphing**: blends any two fonts glyph by glyph. Contours are matched by position and size, then aligned with dynamic time warping so stems, bowls and serifs line up. At 0 and 1 the result is exactly the original outline.
-- **Layer morphing**: blends any two layers, for example a word into a star.
-- **Make font**: compiles the current look (morph plus modifiers) into a valid `.ttf` with about 190 glyphs. On the Mac app, *Install on this Mac* puts it straight into `~/Library/Fonts`.
+Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and **Type** for designing a whole font.
 
-**Shape modifiers** (non-destructive, stackable, sized in ems)
-Weight · Round corners · Outline · Ink bleed · Slant · Stretch · Wave · Arc · Wobble · Melt (drips) · Pixelate · Perspective
+**Design mode**
+- **Direct editing.** Click to select, drag to move, and use the handles to resize, stretch or rotate. Smart guides snap to the artboard and other layers. Also marquee selection, multi-select, align and distribute, flip, lock, hide, groups and right-click menus.
+- **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed and Flat/gradient. There are 34 presets with GPU-rendered previews.
+- **Shapes that work like a logo tool.** Cut and Mask clip into the layer directly below, Merge fuses layers into one outline with one material, and Break apart splits text or traced images into one layer per letter.
+- **Reshape anything.** Quick looks (Bitmap, Dot matrix, Soft pixel, Tiles, Arch, Flag, Melting…) apply a whole modifier stack in one click. Warp gives Photoshop-style envelope presets plus 16 draggable points. Edit points gives real bezier editing. The modifiers are Weight, Round, Outline, Pixels (blocks, dots, soft tiles), Slant, Stretch, Warp, Arc, Wave, Perspective, Wobble, Melt and Ink bleed.
+- **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, and an app-icon tile with gloss, shadow and a holographic rim. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons and more.
+- **Fonts.** TTF, OTF, TTC and WOFF, shaped with a HarfBuzz port, with variable axes. Text can morph into another font glyph by glyph.
+- **Image tracing.** PNG, JPG, WebP or SVG become smooth vector outlines, or keep hard pixel edges.
 
-**Logos and symbols**
-- Parametric shapes: squircle, sun badge, map pin, cursor, cloud blob, mascot eyes, cat head, star, sparkle, polygon, ring, heart, plus.
-- Layer blending: **Add**, **Cut** (punch out) and **Mask** (intersect), computed as true booleans so the exported SVG and font are clean.
-- **Image tracing**: PNG, JPG, WebP or SVG files become smooth vector outlines with sub-pixel accuracy, or keep hard pixel edges for pixel art.
+**Type mode**
+- A glyph grid (A–Z, a–z, 0–9, punctuation and any character you add), previewed with your style.
+- Font-wide looks and modifiers, per-glyph point editing, widths and modifiers, and tracing images into glyphs.
+- A live tester using the real compiled font.
+- Export as `.ttf`, `.woff`, or a **web font kit** (TTF, WOFF, `@font-face` CSS and a specimen page). On the Mac app you can also install the font, and **Use in Design** adds it to your fonts straight away.
 
-**Effects** (GPU, live)
-Liquid chrome (animatable) · Glow glass with floor reflection · Puffy inflated 3D · App-icon tile · Distressed print · Neon tube · Flat. There are 16 presets; every parameter is editable.
+**Export**: PNG at 1×, 2× or 4× (optionally transparent), JPG, copy to clipboard, SVG with one path per object, fonts, and `.morpho` project files that embed imported fonts.
 
-**Export**: PNG at 1×, 2× or 4× (optionally transparent), SVG vector outline, TrueType font, and `.morpho` project files that embed any imported fonts.
+**Keyboard first**: ⌘K searches every command, shape, preset, canvas size and setting. Every action has a shortcut (press ? in the app), and settings are searchable (⌘,).
+
+![Templates rendered by Morphotype](docs/images/gallery.png)
 
 ![The editor](docs/images/editor.png)
+
+![Type mode](docs/images/type-mode.png)
 
 ## How it's built
 
@@ -70,23 +80,27 @@ npm install
 | Rust and UI unit tests | `npm test` |
 | Browser end-to-end test | `npm run build && npm run test:e2e` |
 
-CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-macOS* artifact). Because it's unsigned, open it the first time with right-click → Open.
+CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-macOS* artifact). Pushing a `v*` tag also publishes a GitHub Release with the `.dmg` and the web build attached.
 
 ### Shortcuts
 
 | | |
 | --- | --- |
-| ⌘Z / ⇧⌘Z | Undo / redo |
-| ⌘S / ⌘O | Save / open project |
-| ⌘E | Export PNG at 2× |
-| ⌘D | Duplicate layer |
-| ⌘0 | Fit artboard |
-| T | New text layer |
-| Arrows (⇧ for 10 px) | Nudge layer |
-| ⌫ | Delete layer |
-| Pinch or ⌘-scroll / scroll / Space-drag | Zoom / pan / pan |
+| ⌘K | Search every command |
+| V / H / T / O / R | Select, hand, text, circle, squircle |
+| P / W | Edit points / warp |
+| ⌘G / ⇧⌘G / ⇧⌘M | Group / ungroup / merge into one shape |
+| ⌥A ⌥H ⌥D / ⌥W ⌥V ⌥S | Align left, centre, right / top, middle, bottom |
+| ⌘] ⌘[ (⌥ for front/back) | Bring forward / send backward |
+| ⇧⌘B / ⌥⌘O | Break apart / convert to outline |
+| ⌘D, ⌘C, ⌘V, ⌥⌘C, ⌥⌘V | Duplicate, copy, paste, copy style, paste style |
+| ⌘E / ⇧⌘E / ⇧⌘C | Export PNG / SVG / copy image |
+| ⌘1 / ⌘2 | Design / Type mode |
+| ⌘0, ⇧0, ⇧2 | Fit, 100%, zoom to selection |
+| Arrows (⇧ for 10 px), Tab | Nudge, cycle layers |
+| ? / ⌘, | Help and all shortcuts / settings |
 
-You can also drag fonts, images or `.morpho` files onto the window.
+Drag fonts, images or `.morpho` files onto the window to open them.
 
 ## Repository layout
 
@@ -108,6 +122,7 @@ The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk
 ## Known limitations
 
 - Exported fonts don't carry kerning or OpenType features yet; metrics come from the base font(s).
+- Content outside the artboard isn't rendered (like a clipped frame), though you can still select and move it.
 - WOFF2 imports aren't supported yet; import the TTF or OTF instead.
 - Morphing between structurally very different glyphs, such as a two-storey and a single-storey "a", can pinch mid-way. Moving the blend toward either end resolves it.
 - The renderer needs WebGL2 with float render targets (`EXT_color_buffer_float`), which WKWebView provides on macOS 12 and later. If it's missing, editing and SVG/font export still work but the effect preview doesn't.

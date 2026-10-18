@@ -14,8 +14,12 @@ export type Modifier =
   | { kind: 'arc'; bend: number }
   | { kind: 'wobble'; amount: number; scale: number; seed: number }
   | { kind: 'melt'; amount: number; scale: number; seed: number }
-  | { kind: 'pixelate'; size: number }
-  | { kind: 'perspective'; amount: number };
+  | { kind: 'pixelate'; size: number; shape: PixelShape; gap: number }
+  | { kind: 'perspective'; amount: number }
+  | { kind: 'warp'; style: WarpStyle; bend: number; points: [number, number][] };
+
+export type PixelShape = 'square' | 'dot' | 'rounded';
+export type WarpStyle = 'custom' | 'arch' | 'arc' | 'arcLower' | 'bulge' | 'flag' | 'rise' | 'fish' | 'inflate' | 'squeeze' | 'twist';
 
 export type ModifierKind = Modifier['kind'];
 export type ModEntry = Modifier & { on: boolean; uid: string };
@@ -35,7 +39,13 @@ export type SymbolSpec =
   | { kind: 'eyes'; gap: number; width: number; height: number }
   | { kind: 'heart' }
   | { kind: 'plus'; thickness: number }
-  | { kind: 'catHead'; ears: number };
+  | { kind: 'catHead'; ears: number }
+  | { kind: 'bubble'; tail: number; roundness: number }
+  | { kind: 'spiral'; turns: number; weight: number }
+  | { kind: 'flower'; petals: number; depth: number }
+  | { kind: 'arrow'; head: number; shaft: number }
+  | { kind: 'bolt' }
+  | { kind: 'moon'; phase: number };
 
 export type SymbolKind = SymbolSpec['kind'];
 
@@ -62,35 +72,97 @@ export type Content =
   | { type: 'path'; d: string; size: number; name?: string }
   | { type: 'morph'; a: string; b: string; t: number };
 
-export interface Layer {
+/** What the engine needs to know about a layer. */
+export interface EngineLayer {
   id: string;
-  name?: string;
   visible: boolean;
   op: Op;
   x: number;
   y: number;
   rotation: number;
   scale: number;
+  /** Stretch in the layer's own frame. */
+  sx: number;
+  sy: number;
   modifiers: ModEntry[];
   content: Content;
 }
 
+export type Box = [number, number, number, number];
+
+export type Member = string | { id: string; op: Op };
+
+export interface RenderSpec {
+  id: string;
+  members: Member[];
+  modifiers?: ModEntry[];
+  em?: number;
+}
+
 export interface EngineDocument {
-  layers: Layer[];
+  layers: EngineLayer[];
+  renders?: RenderSpec[];
   quality?: number;
 }
 
 export interface LayerOut {
   id: string;
-  bbox: [number, number, number, number] | null;
+  bbox: Box | null;
   error: string | null;
+  d: string | null;
+  local: Box | null;
+  frames: { uid: string; bbox: Box }[];
+}
+
+export interface RenderOut {
+  id: string;
+  d: string;
+  bbox: Box | null;
+  points: number;
 }
 
 export interface BuildOut {
-  d: string;
-  bbox: [number, number, number, number] | null;
+  renders: RenderOut[];
+  bbox: Box | null;
   layers: LayerOut[];
   points: number;
+}
+
+export interface PathsOut {
+  paths: { id: string; d: string }[];
+  bbox: Box | null;
+}
+
+export interface BakeOut {
+  d: string;
+  size: number;
+}
+
+export interface PieceOut {
+  d: string;
+  size: number;
+  x: number;
+  y: number;
+}
+
+export interface GlyphOut {
+  d: string;
+  advance: number;
+  exists: boolean;
+}
+
+export interface GlyphPreview {
+  ch: string;
+  d: string;
+  advance: number;
+  edited: boolean;
+}
+
+export interface GlyphEdit {
+  ch: string;
+  d?: string;
+  advance?: number;
+  modifiers?: ModEntry[];
 }
 
 export interface Axis {
@@ -140,6 +212,10 @@ export interface FontSpec {
   style: string;
   charset: string | null;
   weightClass?: number;
+  quality?: number;
+  glyphs?: GlyphEdit[];
+  tracking?: number;
+  format?: 'ttf' | 'woff';
 }
 
 export interface SvgOptions {

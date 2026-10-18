@@ -46,6 +46,16 @@ pub enum Symbol {
     Plus { #[serde(default = "d::<30>")] thickness: f64 },
     /// Cat-ear head silhouette for mascot icons.
     CatHead { #[serde(default = "d::<30>")] ears: f64 },
+    /// Chat bubble with a tail (mascot app icons).
+    Bubble { #[serde(default = "d::<30>")] tail: f64, #[serde(default = "d::<260>")] roundness: f64 },
+    /// Thick spiral stroke with round ends.
+    Spiral { #[serde(default = "d::<250>")] turns: f64, #[serde(default = "d::<55>")] weight: f64 },
+    /// Rounded petals with pinched valleys.
+    Flower { #[serde(default = "d::<400>")] petals: f64, #[serde(default = "d::<35>")] depth: f64 },
+    Arrow { #[serde(default = "d::<45>")] head: f64, #[serde(default = "d::<30>")] shaft: f64 },
+    Bolt,
+    /// Crescent; `phase` 0 = thin sliver, 1 = nearly full.
+    Moon { #[serde(default = "d::<40>")] phase: f64 },
 }
 
 const SEG: usize = 256;
@@ -281,6 +291,127 @@ pub fn build(sym: &Symbol) -> Shape {
             ];
             Shape::new(vec![rounded_polygon(&pts, 0.12)])
         }
+        Symbol::Bubble { tail, roundness } => {
+            let n = roundness.clamp(2.0, 8.0);
+            let (rx, ry) = (0.5, 0.42);
+            let cy = -0.06;
+            let body = |a: f64| {
+                let (s, c) = a.sin_cos();
+                pt(rx * c.signum() * c.abs().powf(2.0 / n), cy + ry * s.signum() * s.abs().powf(2.0 / n))
+            };
+            let t = tail.clamp(0.0, 0.6);
+            // One contour: the body, with its lower-left arc swapped for a tail.
+            let (a1, a2) = (0.56 * PI, 0.8 * PI);
+            let mut pts = Vec::new();
+            let steps = SEG * 2;
+            for k in 0..steps {
+                let a = k as f64 / steps as f64 * TAU;
+                if t > 0.01 && a > a1 && a < a2 {
+                    continue;
+                }
+                pts.push(body(a));
+                if t > 0.01 && a <= a1 && (k + 1) as f64 / steps as f64 * TAU > a1 {
+                    let (p1, p2) = (body(a1), body(a2));
+                    let tip = pt(-0.44 - t * 0.08, cy + ry + 0.02 + t * 0.32);
+                    let c1 = pt(p1.x - 0.06, tip.y - 0.06);
+                    let c2 = pt(p2.x + 0.1, p2.y + 0.1);
+                    for j in 0..=20 {
+                        let u = j as f64 / 20.0;
+                        pts.push(p1 * ((1.0 - u) * (1.0 - u)) + c1 * (2.0 * u * (1.0 - u)) + tip * (u * u));
+                    }
+                    for j in 1..=20 {
+                        let u = j as f64 / 20.0;
+                        pts.push(tip * ((1.0 - u) * (1.0 - u)) + c2 * (2.0 * u * (1.0 - u)) + p2 * (u * u));
+                    }
+                }
+            }
+            Shape::new(vec![pts])
+        }
+        Symbol::Spiral { turns, weight } => {
+            let turns = turns.clamp(0.5, 6.0);
+            let r0 = 0.05;
+            let spacing = (0.5 - r0) / (turns + 0.5);
+            let half = (spacing * weight.clamp(0.1, 0.95)).min(0.2) * 0.5;
+            let steps = (turns * 128.0) as usize;
+            let total = turns * TAU;
+            let centre = |a: f64| -> (Pt, Pt) {
+                let r = r0 + half + spacing * a / TAU;
+                let p = pt(r * a.cos(), r * a.sin());
+                // Tangent of an Archimedean spiral.
+                let dr = spacing / TAU;
+                let t = pt(dr * a.cos() - r * a.sin(), dr * a.sin() + r * a.cos()).normalized();
+                (p, t)
+            };
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            for k in 0..=steps {
+                let a = total * k as f64 / steps as f64;
+                let (p, t) = centre(a);
+                let nrm = t.perp();
+                left.push(p + nrm * half);
+                right.push(p - nrm * half);
+            }
+            let cap = |p: Pt, from: Pt, out: &mut Vec<Pt>| {
+                let d = from - p;
+                let a0 = d.y.atan2(d.x);
+                for k in 1..12 {
+                    let a = a0 + PI * k as f64 / 12.0;
+                    out.push(pt(p.x + half * a.cos(), p.y + half * a.sin()));
+                }
+            };
+            let mut pts = left.clone();
+            let (end, _) = centre(total);
+            cap(end, *left.last().unwrap(), &mut pts);
+            pts.extend(right.iter().rev());
+            let (start, _) = centre(0.0);
+            cap(start, right[0], &mut pts);
+            Shape::new(vec![pts])
+        }
+        Symbol::Flower { petals, depth } => {
+            let n = petals.round().clamp(2.0, 16.0);
+            let dep = depth.clamp(0.0, 0.8);
+            let pts = (0..SEG * 2)
+                .map(|k| {
+                    let a = k as f64 / (SEG * 2) as f64 * TAU - PI / 2.0;
+                    let s = ((a + PI / 2.0) * n * 0.5).sin().abs();
+                    let r = 0.5 * (1.0 - dep * s.powf(1.6));
+                    pt(r * a.cos(), r * a.sin())
+                })
+                .collect();
+            Shape::new(vec![pts])
+        }
+        Symbol::Arrow { head, shaft } => {
+            let h = head.clamp(0.1, 0.9);
+            let t = shaft.clamp(0.05, 0.9) * 0.5;
+            let hx = 0.5 - h * 0.6;
+            let pts = vec![pt(-0.5, -t), pt(hx, -t), pt(hx, -h * 0.55), pt(0.5, 0.0), pt(hx, h * 0.55), pt(hx, t), pt(-0.5, t)];
+            Shape::new(vec![rounded_polygon(&pts, 0.025)])
+        }
+        Symbol::Bolt => {
+            let pts = vec![pt(0.08, -0.5), pt(-0.3, 0.06), pt(-0.02, 0.06), pt(-0.1, 0.5), pt(0.3, -0.08), pt(0.02, -0.08)];
+            Shape::new(vec![rounded_polygon(&pts, 0.02)])
+        }
+        Symbol::Moon { phase } => {
+            // Outer circle minus a circle shifted right by `off`.
+            let off = 0.12 + phase.clamp(0.0, 1.0) * 0.6;
+            let r = 0.5;
+            // Intersection angle on the outer circle.
+            let xi = off * 0.5;
+            let ai = (xi / r).clamp(-1.0, 1.0).acos();
+            let mut pts = Vec::new();
+            let n = 160;
+            for k in 0..=n {
+                let a = ai + (TAU - 2.0 * ai) * k as f64 / n as f64;
+                pts.push(pt(r * a.cos(), r * a.sin()));
+            }
+            // Inner arc of the shifted circle, back from the bottom to the top intersection.
+            let bi = ((xi - off) / r).clamp(-1.0, 1.0).acos();
+            for k in 1..n {
+                let a = TAU - bi - (TAU - 2.0 * bi) * k as f64 / n as f64;
+                pts.push(pt(off + r * a.cos(), r * a.sin()));
+            }
+            Shape::new(vec![pts])
+        }
     };
     normalize_winding(&mut s);
     s
@@ -300,7 +431,8 @@ mod tests {
         let all: Vec<Symbol> = serde_json::from_str(
             r#"[{"kind":"circle"},{"kind":"ring"},{"kind":"squircle"},{"kind":"roundRect"},{"kind":"polygon","rounding":0.3},
             {"kind":"star","rounding":0.2},{"kind":"sparkle"},{"kind":"burst"},{"kind":"pin"},{"kind":"cursor"},{"kind":"blob","wobble":1},
-            {"kind":"eyes"},{"kind":"heart"},{"kind":"plus"},{"kind":"catHead"}]"#,
+            {"kind":"eyes"},{"kind":"heart"},{"kind":"plus"},{"kind":"catHead"},{"kind":"bubble"},{"kind":"spiral"},
+            {"kind":"flower"},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1}]"#,
         )
         .unwrap();
         for s in &all {

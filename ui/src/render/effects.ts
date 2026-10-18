@@ -1,10 +1,12 @@
-// Effect registry. Each effect is a GLSL `effect(uv, out bg, out fg)` body
-// plus a parameter schema the UI renders automatically. Lengths are in
-// artboard pixels; the renderer converts to texture pixels.
+// Effect registry. Each effect is a GLSL `vec4 effect(vec2 uv)` returning
+// premultiplied colour for one object, plus a parameter schema the UI renders
+// automatically. Lengths are in artboard pixels; the renderer converts them
+// to texels. Backgrounds and app-icon tiles are drawn separately
+// (see background.ts) so every object can have its own material.
 
 export type ParamDef =
-  | { key: string; label: string; type: 'number'; min: number; max: number; step: number; default: number }
-  | { key: string; label: string; type: 'color'; default: string };
+  | { key: string; label: string; type: 'number'; min: number; max: number; step: number; default: number; advanced?: boolean }
+  | { key: string; label: string; type: 'color'; default: string; advanced?: boolean };
 
 export type ParamValues = Record<string, number | string>;
 
@@ -23,9 +25,11 @@ export interface EffectDef {
   glsl: string;
   height?: (p: ParamValues) => HeightSpec;
   animated?: (p: ParamValues) => boolean;
+  /** How far (artboard px) the effect paints outside the shape. */
+  reach: (p: ParamValues, size: { w: number; h: number }) => number;
 }
 
-const num = (key: string, label: string, min: number, max: number, step: number, def: number): ParamDef => ({
+const num = (key: string, label: string, min: number, max: number, step: number, def: number, advanced = false): ParamDef => ({
   key,
   label,
   type: 'number',
@@ -33,8 +37,9 @@ const num = (key: string, label: string, min: number, max: number, step: number,
   max,
   step,
   default: def,
+  advanced,
 });
-const col = (key: string, label: string, def: string): ParamDef => ({ key, label, type: 'color', default: def });
+const col = (key: string, label: string, def: string, advanced = false): ParamDef => ({ key, label, type: 'color', default: def, advanced });
 
 const n = (p: ParamValues, k: string) => Number(p[k] ?? 0);
 
@@ -44,10 +49,12 @@ uniform sampler2D u_sdf;
 uniform sampler2D u_height;
 uniform vec2 u_texSize;
 uniform vec2 u_art;
+uniform vec4 u_region;
 uniform float u_k;
 uniform float u_time;
 uniform float u_bevelTex;
 uniform vec4 u_bbox;
+uniform vec3 u_ambient;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -83,6 +90,11 @@ float fbm3(vec2 p) {
   }
   return s / 0.875;
 }
+/** Artboard pixel position (origin top-left) of a field uv. */
+vec2 artPx(vec2 uv) { return u_region.xy + uv * u_region.zw; }
+/** Position inside the object's bounding box, 0..1. */
+vec2 boxUv(vec2 uv) { return (uv - u_bbox.xy) / max(u_bbox.zw - u_bbox.xy, vec2(1e-4)); }
+vec2 offsetUv(vec2 artOffset) { return artOffset * u_k / u_texSize; }
 float sdfPx(vec2 uv) { return texture(u_sdf, uv).r; }
 float sdfArt(vec2 uv) { return texture(u_sdf, uv).r / u_k; }
 float cover(float dTex) { return clamp(0.5 - dTex / max(fwidth(dTex), 1e-3), 0.0, 1.0); }
@@ -95,6 +107,13 @@ vec3 normalAt(vec2 uv, float depth) {
   return normalize(vec3(-g, 1.0));
 }
 vec4 over(vec4 a, vec4 b) { return a + b * (1.0 - a.a); }
+vec3 spectrum(float t) { return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67))); }
+vec4 dropShadow(vec2 uv, vec2 off, float grow, float blur, float opacity) {
+  if (opacity <= 0.0) return vec4(0.0);
+  float sd = sdfArt(uv - offsetUv(off)) - grow;
+  float a = (1.0 - smoothstep(-blur, blur, sd)) * opacity;
+  return vec4(0.0, 0.0, 0.0, a);
+}
 `;
 
 const chrome: EffectDef = {
@@ -107,20 +126,20 @@ const chrome: EffectDef = {
     col('c3', 'Light', '#7cc8ff'),
     col('c4', 'Highlight', '#ffffff'),
     num('bevel', 'Bevel', 2, 200, 1, 46),
-    num('softness', 'Softness', 0, 80, 1, 10),
-    num('depth', 'Depth', 0.1, 4, 0.05, 1.3),
+    num('softness', 'Softness', 0, 80, 1, 10, true),
+    num('depth', 'Depth', 0.1, 4, 0.05, 1.3, true),
     num('liquid', 'Liquid', 0, 1.5, 0.01, 0.6),
-    num('scale', 'Flow scale', 0.2, 4, 0.05, 1),
-    num('bands', 'Bands', 0.5, 4, 0.05, 1.3),
+    num('scale', 'Flow scale', 0.2, 4, 0.05, 1, true),
+    num('bands', 'Bands', 0.5, 4, 0.05, 1.3, true),
     num('speed', 'Animate', 0, 2, 0.01, 0),
-    num('rim', 'Rim', 0, 12, 0.1, 2.2),
-    col('rimColor', 'Rim colour', '#bfe3ff'),
-    col('background', 'Background', '#000000'),
+    num('rim', 'Rim', 0, 12, 0.1, 2.2, true),
+    col('rimColor', 'Rim colour', '#bfe3ff', true),
   ],
   height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
   animated: (p) => n(p, 'speed') > 0,
+  reach: () => 4,
   glsl: /* glsl */ `
-uniform vec3 u_c1, u_c2, u_c3, u_c4, u_rimColor, u_background;
+uniform vec3 u_c1, u_c2, u_c3, u_c4, u_rimColor;
 uniform float u_depth, u_liquid, u_scale, u_bands, u_speed, u_rim;
 vec3 ramp(float v) {
   if (v < 0.28) return mix(u_c1, u_c2, smoothstep(0.0, 0.28, v));
@@ -129,13 +148,12 @@ vec3 ramp(float v) {
   if (v < 0.86) return mix(u_c3, u_c4, smoothstep(0.66, 0.86, v));
   return mix(u_c4, u_c3, smoothstep(0.86, 1.0, v));
 }
-void effect(vec2 uv, out vec3 bg, out vec4 fg) {
-  bg = u_background;
+vec4 effect(vec2 uv) {
   float d = sdfPx(uv);
   float cov = cover(d);
-  if (cov <= 0.0) { fg = vec4(0.0); return; }
+  if (cov <= 0.0) return vec4(0.0);
   vec3 n = normalAt(uv, u_depth);
-  vec2 p = uv * u_art / (620.0 * max(u_scale, 0.05));
+  vec2 p = artPx(uv) / (620.0 * max(u_scale, 0.05));
   float t = u_time * u_speed;
   vec2 q = vec2(fbm3(p + vec2(0.0, t * 0.5)), fbm3(p + vec2(5.2, 1.3) - vec2(t * 0.35, 0.0)));
   float w = fbm3(p * 1.4 + q * 1.8 + vec2(t * 0.2, -t * 0.1));
@@ -148,7 +166,7 @@ void effect(vec2 uv, out vec3 bg, out vec4 fg) {
   c += u_c4 * spec * 0.9;
   float rim = exp(min(d / u_k, 0.0) / max(u_rim, 0.05)) * step(0.01, u_rim);
   c = mix(c, u_rimColor, rim * 0.85);
-  fg = vec4(c * cov, cov);
+  return vec4(c * cov, cov);
 }`,
 };
 
@@ -161,145 +179,296 @@ const glass: EffectDef = {
     col('body', 'Body', '#01040b'),
     num('rimWidth', 'Rim width', 1, 120, 1, 14),
     num('rimIntensity', 'Rim intensity', 0, 4, 0.05, 1.5),
-    num('bevel', 'Bevel', 2, 200, 1, 40),
-    num('softness', 'Softness', 0, 80, 1, 16),
-    num('depth', 'Depth', 0.1, 4, 0.05, 1),
+    num('bevel', 'Bevel', 2, 200, 1, 40, true),
+    num('softness', 'Softness', 0, 80, 1, 16, true),
+    num('depth', 'Depth', 0.1, 4, 0.05, 1, true),
     num('outerGlow', 'Outer glow', 0, 2, 0.01, 0.45),
-    num('glowRadius', 'Glow radius', 1, 300, 1, 36),
+    num('glowRadius', 'Glow radius', 1, 300, 1, 36, true),
     num('grain', 'Grain', 0, 1, 0.01, 0.4),
     num('reflection', 'Reflection', 0, 1, 0.01, 0.35),
-    col('background', 'Background', '#000000'),
   ],
   height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  reach: (p, s) => n(p, 'glowRadius') * 4 * Math.min(1, n(p, 'outerGlow') * 2 + 0.2) + (n(p, 'reflection') > 0 ? s.h * 1.05 : 0),
   glsl: /* glsl */ `
-uniform vec3 u_glow, u_body, u_background;
+uniform vec3 u_glow, u_body;
 uniform float u_rimWidth, u_rimIntensity, u_depth, u_outerGlow, u_glowRadius, u_grain, u_reflection;
 vec3 glassColor(vec2 uv, float d) {
   vec3 n = normalAt(uv, u_depth);
   float inner = exp(min(d, 0.0) / max(u_rimWidth, 0.5));
   vec3 L = normalize(vec3(-0.45, -0.55, 0.7));
   float lam = max(dot(n, L), 0.0);
-  float grain = (hash12(floor(uv * u_texSize)) - 0.5) * u_grain;
+  float grain = (hash12(floor(artPx(uv) * u_k)) - 0.5) * u_grain;
   float g = (inner * u_rimIntensity * (0.5 + 0.9 * lam) + (1.0 - n.z) * 0.35 * lam) * (1.0 + grain);
   vec3 c = u_body + u_glow * max(g, 0.0);
   float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 28.0);
   return c + mix(u_glow, vec3(1.0), 0.6) * spec * 0.6;
 }
-void effect(vec2 uv, out vec3 bg, out vec4 fg) {
-  bg = u_background;
+vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   float d = dt / u_k;
   float cov = cover(dt);
-  fg = cov > 0.0 ? vec4(glassColor(uv, d) * cov, cov) : vec4(0.0);
+  vec4 fg = cov > 0.0 ? vec4(glassColor(uv, d) * cov, cov) : vec4(0.0);
   float og = exp(-max(d, 0.0) / max(u_glowRadius, 1.0)) * u_outerGlow * (1.0 - cov);
   float yb = u_bbox.w;
   if (u_reflection > 0.0 && uv.y > yb) {
     vec2 ruv = vec2(uv.x, 2.0 * yb - uv.y);
     float rt = sdfPx(ruv);
     float rc = cover(rt);
-    float fade = exp(-(uv.y - yb) * u_art.y / (0.25 * max(u_bbox.w - u_bbox.y, 0.01) * u_art.y)) * u_reflection;
+    float fade = exp(-(uv.y - yb) / (0.25 * max(u_bbox.w - u_bbox.y, 0.01))) * u_reflection;
     if (rc > 0.0) fg = over(fg, vec4(glassColor(ruv, rt / u_k) * rc * fade, rc * fade));
   }
   fg.rgb += u_glow * og;
   fg.a = clamp(fg.a + og, 0.0, 1.0);
+  return fg;
 }`,
 };
 
 const inflate: EffectDef = {
   id: 'inflate',
   name: 'Puffy',
-  description: 'Soft inflated 3D with a gradient backdrop and contact shadow.',
+  description: 'Soft inflated 3D with a contact shadow, like a balloon or a cloud.',
   params: [
     col('body', 'Body', '#eef2ff'),
     col('shade', 'Shade', '#8f9ee6'),
-    col('bgTop', 'Backdrop top', '#2b8bff'),
-    col('bgBottom', 'Backdrop bottom', '#1a3fe0'),
     num('bevel', 'Puff', 4, 300, 1, 90),
-    num('softness', 'Softness', 0, 80, 1, 14),
-    num('depth', 'Depth', 0.1, 3, 0.05, 0.9),
+    num('softness', 'Softness', 0, 80, 1, 14, true),
+    num('depth', 'Depth', 0.1, 3, 0.05, 0.9, true),
     num('gloss', 'Gloss', 0, 1.5, 0.01, 0.45),
-    num('rimTint', 'Backdrop bounce', 0, 1, 0.01, 0.35),
+    num('rimTint', 'Backdrop bounce', 0, 1, 0.01, 0.35, true),
     num('shadow', 'Shadow', 0, 1, 0.01, 0.4),
-    num('shadowOffset', 'Shadow offset', 0, 120, 1, 24),
-    num('shadowSoft', 'Shadow blur', 1, 200, 1, 40),
+    num('shadowOffset', 'Shadow offset', 0, 120, 1, 24, true),
+    num('shadowSoft', 'Shadow blur', 1, 200, 1, 40, true),
   ],
   height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  reach: (p) => n(p, 'shadowOffset') + n(p, 'shadowSoft') * 4,
   glsl: /* glsl */ `
-uniform vec3 u_body, u_shade, u_bgTop, u_bgBottom;
+uniform vec3 u_body, u_shade;
 uniform float u_depth, u_gloss, u_rimTint, u_shadow, u_shadowOffset, u_shadowSoft;
-void effect(vec2 uv, out vec3 bg, out vec4 fg) {
-  vec3 back = mix(u_bgTop, u_bgBottom, smoothstep(0.0, 1.0, uv.y));
-  vec2 so = vec2(0.0, u_shadowOffset * u_k) / u_texSize;
-  float sd = sdfArt(uv - so);
-  float sh = exp(-max(sd, 0.0) / max(u_shadowSoft, 1.0)) * u_shadow;
-  bg = back * (1.0 - sh * 0.6);
+vec4 effect(vec2 uv) {
+  float sd = sdfArt(uv - offsetUv(vec2(0.0, u_shadowOffset)));
+  float sh = exp(-max(sd, 0.0) / max(u_shadowSoft, 1.0)) * u_shadow * 0.6;
+  vec4 shadow = vec4(0.0, 0.0, 0.0, sh);
   float dt = sdfPx(uv);
   float cov = cover(dt);
-  if (cov <= 0.0) { fg = vec4(0.0); return; }
+  if (cov <= 0.0) return shadow;
   vec3 n = normalAt(uv, u_depth);
   vec3 L = normalize(vec3(-0.35, -0.7, 0.62));
   float wrap = clamp(dot(n, L) * 0.6 + 0.45, 0.0, 1.0);
   vec3 c = mix(u_shade, u_body, smoothstep(0.0, 1.0, wrap));
   float fres = pow(1.0 - clamp(n.z, 0.0, 1.0), 2.5);
-  c = mix(c, back * 1.15, fres * u_rimTint);
+  c = mix(c, u_ambient * 1.15, fres * u_rimTint);
   float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 16.0) * u_gloss;
   c += vec3(spec);
   c *= mix(0.88, 1.0, smoothstep(0.0, 0.5, H(uv)));
-  fg = vec4(c * cov, cov);
+  return over(vec4(c * cov, cov), shadow);
 }`,
 };
 
 const icon: EffectDef = {
   id: 'icon',
-  name: 'App icon',
-  description: 'Squircle app tile with a flat glyph, outline and soft shadow.',
+  name: 'Glossy glyph',
+  description: 'Solid colour with a gentle bevel shine, outline and soft shadow, made for icon tiles.',
   params: [
-    col('tileTop', 'Tile top', '#c9b8ff'),
-    col('tileBottom', 'Tile bottom', '#8a63f5'),
-    col('glyph', 'Glyph', '#0b0812'),
-    num('tileSize', 'Tile size', 0.2, 1, 0.01, 0.84),
-    num('corner', 'Corner', 2, 12, 0.1, 5),
-    num('gloss', 'Gloss', 0, 1, 0.01, 0.45),
-    num('shine', 'Glyph shine', 0, 1, 0.01, 0.35),
+    col('glyph', 'Colour', '#0b0812'),
+    num('shine', 'Shine', 0, 1, 0.01, 0.35),
     num('outline', 'Outline', 0, 40, 0.5, 0),
     col('outlineColor', 'Outline colour', '#ffffff'),
-    num('shadow', 'Shadow', 0, 1, 0.01, 0.35),
-    num('bevel', 'Glyph bevel', 1, 80, 1, 14),
-    col('background', 'Background', '#000000'),
+    num('shadow', 'Shadow', 0, 1, 0.01, 0.25),
+    num('shadowY', 'Shadow offset', -60, 60, 1, 10, true),
+    num('shadowBlur', 'Shadow blur', 1, 80, 1, 18, true),
+    num('bevel', 'Bevel', 1, 80, 1, 14, true),
   ],
   height: (p) => ({ profile: 2, bevel: n(p, 'bevel'), softness: 3 }),
+  reach: (p) => n(p, 'outline') + Math.abs(n(p, 'shadowY')) + n(p, 'shadowBlur') * 2,
   glsl: /* glsl */ `
-uniform vec3 u_tileTop, u_tileBottom, u_glyph, u_outlineColor, u_background;
-uniform float u_tileSize, u_corner, u_gloss, u_shine, u_outline, u_shadow;
-void effect(vec2 uv, out vec3 bg, out vec4 fg) {
-  bg = u_background;
-  vec2 c = (uv - 0.5) * u_art;
-  float r = u_tileSize * 0.5 * min(u_art.x, u_art.y);
-  vec2 a = abs(c) / r;
-  float e = max(u_corner, 2.0);
-  float se = pow(pow(a.x, e) + pow(a.y, e), 1.0 / e);
-  float td = (se - 1.0) * r;
-  float tcov = clamp(0.5 - td / max(fwidth(td), 1e-3), 0.0, 1.0);
-  vec3 tile = mix(u_tileTop, u_tileBottom, smoothstep(-r, r, c.y));
-  float edge = exp(min(td, 0.0) / (r * 0.05));
-  tile += edge * 0.18 * u_gloss * smoothstep(0.3 * r, -r, c.y);
-  tile = mix(tile, vec3(1.0), u_gloss * 0.18 * smoothstep(0.0, -r, c.y));
-  vec2 so = vec2(0.0, 0.025 * r * u_k) / u_texSize;
-  float sd = sdfArt(uv - so);
-  tile *= 1.0 - exp(-max(sd, 0.0) / (0.05 * r)) * u_shadow * 0.55;
-  vec4 f = vec4(tile * tcov, tcov);
+uniform vec3 u_glyph, u_outlineColor;
+uniform float u_shine, u_outline, u_shadow, u_shadowY, u_shadowBlur;
+vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
+  vec4 f = dropShadow(uv, vec2(0.0, u_shadowY), u_outline, u_shadowBlur, u_shadow * 0.6);
   if (u_outline > 0.0) {
     float ow = u_outline * u_k;
-    float ring = cover(abs(dt - ow * 0.5) - ow * 0.5);
+    float ring = cover(dt - ow);
     f = over(vec4(u_outlineColor * ring, ring), f);
   }
   float g = cover(dt);
   vec3 n = normalAt(uv, 1.0);
   float lit = dot(n, normalize(vec3(-0.4, -0.7, 0.6)));
   vec3 glyph = u_glyph * (0.9 + 0.2 * lit) + vec3(u_shine * 0.35 * pow(max(lit, 0.0), 12.0) * (1.0 - n.z));
-  f = over(vec4(glyph * g, g), f);
-  fg = f;
+  return over(vec4(glyph * g, g), f);
+}`,
+};
+
+const sticker: EffectDef = {
+  id: 'sticker',
+  name: 'Sticker',
+  description: 'Bold mascot style: fill, thick outline and a die-cut border.',
+  params: [
+    col('fill', 'Fill', '#ffffff'),
+    col('line', 'Outline', '#0a0a0a'),
+    num('lineWidth', 'Outline width', 0, 60, 0.5, 14),
+    col('border', 'Border', '#ffffff'),
+    num('borderWidth', 'Border width', 0, 60, 0.5, 0),
+    num('shine', 'Shine', 0, 1, 0.01, 0.25),
+    num('shadow', 'Shadow', 0, 1, 0.01, 0.2),
+    num('shadowY', 'Shadow offset', -60, 60, 1, 8, true),
+    num('shadowBlur', 'Shadow blur', 0.5, 80, 0.5, 10, true),
+  ],
+  height: () => ({ profile: 2, bevel: 18, softness: 3 }),
+  reach: (p) => n(p, 'lineWidth') + n(p, 'borderWidth') + Math.abs(n(p, 'shadowY')) + n(p, 'shadowBlur') * 2,
+  glsl: /* glsl */ `
+uniform vec3 u_fill, u_line, u_border;
+uniform float u_lineWidth, u_borderWidth, u_shine, u_shadow, u_shadowY, u_shadowBlur;
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float outer = u_lineWidth + u_borderWidth;
+  vec4 f = dropShadow(uv, vec2(0.0, u_shadowY), outer, u_shadowBlur, u_shadow * 0.7);
+  if (u_borderWidth > 0.0) {
+    float cb = cover(dt - outer * u_k);
+    f = over(vec4(u_border * cb, cb), f);
+  }
+  if (u_lineWidth > 0.0) {
+    float cl = cover(dt - u_lineWidth * u_k);
+    f = over(vec4(u_line * cl, cl), f);
+  }
+  float cf = cover(dt);
+  vec3 n = normalAt(uv, 0.7);
+  float lit = dot(n, normalize(vec3(-0.4, -0.7, 0.6)));
+  vec3 c = u_fill * (0.985 + 0.025 * lit) + vec3(u_shine * 0.3 * pow(max(lit, 0.0), 10.0) * (1.0 - n.z));
+  return over(vec4(c * cf, cf), f);
+}`,
+};
+
+const aura: EffectDef = {
+  id: 'aura',
+  name: 'Aura gradient',
+  description: 'Soft mesh gradient inside the shape with a glowing edge, like modern UI tiles.',
+  params: [
+    col('c1', 'Base', '#ff3d00'),
+    col('c2', 'Blob A', '#1a0000'),
+    col('c3', 'Blob B', '#ff9a3d'),
+    col('c4', 'Edge light', '#ffd2b0'),
+    num('seed', 'Arrangement', 0, 100, 0.1, 3),
+    num('softness', 'Softness', 0.2, 2, 0.01, 1),
+    num('edge', 'Edge width', 0, 80, 0.5, 10),
+    num('edgeGlow', 'Edge glow', 0, 1, 0.01, 0.6),
+    num('outerGlow', 'Outer glow', 0, 1.5, 0.01, 0.25),
+    num('glowRadius', 'Glow radius', 1, 200, 1, 30, true),
+    num('grain', 'Grain', 0, 1, 0.01, 0.15),
+  ],
+  reach: (p) => n(p, 'glowRadius') * 4 * Math.min(1, n(p, 'outerGlow') * 2 + 0.1),
+  glsl: /* glsl */ `
+uniform vec3 u_c1, u_c2, u_c3, u_c4;
+uniform float u_seed, u_softness, u_edge, u_edgeGlow, u_outerGlow, u_glowRadius, u_grain;
+float blob(vec2 q, vec2 c, vec2 r) { vec2 k = (q - c) / max(r, vec2(1e-3)); return exp(-dot(k, k) * 1.6); }
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float d = dt / u_k;
+  float cov = cover(dt);
+  vec2 q = boxUv(uv);
+  float s = u_seed;
+  vec2 a = vec2(0.5 + 0.3 * cos(s * 1.7), 0.42 + 0.3 * sin(s * 1.3));
+  vec2 b = vec2(0.5 + 0.32 * cos(s * 0.9 + 2.4), 0.6 + 0.28 * sin(s * 1.1 + 1.7));
+  vec2 c3 = vec2(0.5 + 0.35 * sin(s * 2.3 + 0.5), 0.5 + 0.35 * cos(s * 0.7 + 3.1));
+  float sf = u_softness;
+  vec3 c = u_c1;
+  c = mix(c, u_c2, blob(q, a, vec2(0.34, 0.26) * sf) * 0.95);
+  c = mix(c, u_c3, blob(q, b, vec2(0.3, 0.34) * sf) * 0.85);
+  c = mix(c, u_c2, blob(q, c3, vec2(0.18, 0.2) * sf) * 0.5);
+  float e = exp(min(d, 0.0) / max(u_edge, 0.5)) * step(0.01, u_edge);
+  c = mix(c, u_c4, e * u_edgeGlow);
+  c += (hash12(floor(artPx(uv) * u_k)) - 0.5) * u_grain * 0.12;
+  vec4 f = vec4(c * cov, cov);
+  float og = exp(-max(d, 0.0) / max(u_glowRadius, 1.0)) * u_outerGlow * (1.0 - cov);
+  f.rgb += mix(u_c3, u_c4, 0.5) * og;
+  f.a = clamp(f.a + og, 0.0, 1.0);
+  return f;
+}`,
+};
+
+const holo: EffectDef = {
+  id: 'holo',
+  name: 'Holographic',
+  description: 'Iridescent foil that shifts with the bevel, or a dark body with a holo rim.',
+  params: [
+    col('body', 'Body', '#0b0b0f'),
+    num('foil', 'Foil coverage', 0, 1, 0.01, 1),
+    num('rimWidth', 'Rim width', 0.5, 80, 0.5, 10),
+    num('pastel', 'Pastel', 0, 1, 0.01, 0.55),
+    num('shift', 'Hue shift', 0, 1, 0.005, 0),
+    num('scale', 'Pattern scale', 0.2, 4, 0.05, 1, true),
+    num('bevel', 'Bevel', 2, 120, 1, 26, true),
+    num('gloss', 'Gloss', 0, 1.5, 0.01, 0.6),
+    num('speed', 'Animate', 0, 2, 0.01, 0),
+  ],
+  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: 6 }),
+  animated: (p) => n(p, 'speed') > 0,
+  reach: () => 4,
+  glsl: /* glsl */ `
+uniform vec3 u_body;
+uniform float u_foil, u_rimWidth, u_pastel, u_shift, u_scale, u_gloss, u_speed;
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float cov = cover(dt);
+  if (cov <= 0.0) return vec4(0.0);
+  vec3 n = normalAt(uv, 1.0);
+  vec2 p = artPx(uv) / (500.0 * max(u_scale, 0.05));
+  float t = dot(n.xy, vec2(0.7, 0.45)) * 1.1 + (p.x * 0.6 + p.y * 0.4) + 0.25 * fbm3(p * 2.0) + u_shift + u_time * u_speed * 0.1;
+  vec3 foil = mix(spectrum(t), vec3(1.0), u_pastel * 0.6);
+  float rim = exp(min(dt / u_k, 0.0) / max(u_rimWidth, 0.5));
+  vec3 c = mix(u_body, foil, clamp(max(rim, u_foil), 0.0, 1.0));
+  vec3 L = normalize(vec3(-0.4, -0.7, 0.6));
+  float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 24.0) * u_gloss;
+  c += vec3(spec);
+  return vec4(c * cov, cov);
+}`,
+};
+
+const extrude: EffectDef = {
+  id: 'extrude',
+  name: 'Retro 3D',
+  description: 'Solid extrusion in any direction with an outline, like vintage signage.',
+  params: [
+    col('face', 'Face', '#ffd23f'),
+    col('side', 'Side', '#e8442e'),
+    num('depth', 'Depth', 0, 120, 1, 28),
+    num('angle', 'Direction', 0, 360, 1, 45),
+    num('shade', 'Side shading', 0, 1, 0.01, 0.35),
+    num('outline', 'Outline', 0, 30, 0.5, 6),
+    col('outlineColor', 'Outline colour', '#140a1e'),
+  ],
+  reach: (p) => n(p, 'depth') + n(p, 'outline') + 2,
+  glsl: /* glsl */ `
+uniform vec3 u_face, u_side, u_outlineColor;
+uniform float u_depth, u_angle, u_shade, u_outline;
+vec4 effect(vec2 uv) {
+  float a = radians(u_angle);
+  vec2 dir = vec2(cos(a), sin(a));
+  float dt = sdfPx(uv);
+  float unionD = dt;
+  float hit = -1.0;
+  float steps = clamp(u_depth * u_k / 1.25, 1.0, 120.0);
+  for (int i = 1; i <= 120; i++) {
+    if (float(i) > steps) break;
+    float t = float(i) / steps;
+    float s = sdfPx(uv - offsetUv(dir * t * u_depth));
+    unionD = min(unionD, s);
+    if (s < 0.0 && hit < 0.0) hit = t;
+  }
+  vec4 f = vec4(0.0);
+  if (u_outline > 0.0) {
+    float ring = cover(unionD - u_outline * u_k);
+    f = vec4(u_outlineColor * ring, ring);
+  }
+  float sc = cover(unionD);
+  vec3 side = u_side * (1.0 - u_shade * clamp(hit, 0.0, 1.0));
+  f = over(vec4(side * sc, sc), f);
+  if (u_outline > 0.0) {
+    float edge = cover(abs(dt) - u_outline * 0.5 * u_k) * (1.0 - cover(dt + u_outline * 0.5 * u_k));
+    f = over(vec4(u_outlineColor * edge, edge), f);
+  }
+  float fc = cover(dt + (u_outline > 0.0 ? u_outline * 0.5 * u_k : 0.0));
+  return over(vec4(u_face * fc, fc), f);
 }`,
 };
 
@@ -309,23 +478,22 @@ const distressed: EffectDef = {
   description: 'Worn letterpress ink with rough edges, speckles, grain and scan lines.',
   params: [
     col('ink', 'Ink', '#ece6d8'),
-    col('paper', 'Paper', '#0b0b0b'),
     num('roughness', 'Roughness', 0, 20, 0.1, 3),
-    num('scale', 'Texture scale', 0.2, 5, 0.05, 1),
-    num('bleed', 'Ink spread', -10, 10, 0.1, 0.5),
+    num('scale', 'Texture scale', 0.2, 5, 0.05, 1, true),
+    num('bleed', 'Ink spread', -10, 10, 0.1, 0.5, true),
     num('speckle', 'Speckle', 0, 1, 0.01, 0.45),
     num('grain', 'Grain', 0, 1, 0.01, 0.6),
     num('lines', 'Scan lines', 0, 1, 0.01, 0.4),
-    num('seed', 'Seed', 0, 100, 1, 7),
+    num('seed', 'Seed', 0, 100, 1, 7, true),
   ],
+  reach: (p) => n(p, 'roughness') * 3 + Math.max(0, n(p, 'bleed')) + 2,
   glsl: /* glsl */ `
-uniform vec3 u_ink, u_paper;
+uniform vec3 u_ink;
 uniform float u_roughness, u_scale, u_bleed, u_speckle, u_grain, u_lines, u_seed;
-void effect(vec2 uv, out vec3 bg, out vec4 fg) {
-  vec2 p = uv * u_art;
+vec4 effect(vec2 uv) {
+  vec2 p = artPx(uv);
   float s = max(u_scale, 0.05);
   float g0 = hash12(floor(p * 1.5) + u_seed * 17.0);
-  bg = u_paper + (g0 - 0.5) * u_grain * 0.07;
   float d = sdfArt(uv);
   float n1 = fbm(p / (16.0 * s) + u_seed);
   float n2 = fbm(p / (4.0 * s) - u_seed * 1.7);
@@ -336,7 +504,7 @@ void effect(vec2 uv, out vec3 bg, out vec4 fg) {
   cov *= 1.0 - hole;
   float line = pow(0.5 + 0.5 * sin(p.y * 6.2831 / 46.0), 60.0);
   vec3 ink = u_ink * (1.0 - u_grain * 0.3 * g0) * (1.0 - u_lines * 0.45 * line);
-  fg = vec4(ink * cov, cov);
+  return vec4(ink * cov, cov);
 }`,
 };
 
@@ -350,16 +518,15 @@ const neon: EffectDef = {
     num('tube', 'Tube width', 0.5, 40, 0.5, 6),
     num('glow', 'Glow radius', 1, 200, 1, 34),
     num('intensity', 'Intensity', 0, 3, 0.05, 1.1),
-    num('fill', 'Fill', 0, 1, 0.01, 0),
+    num('fill', 'Fill', 0, 1, 0.01, 0, true),
     num('flicker', 'Flicker', 0, 1, 0.01, 0),
-    col('background', 'Background', '#07030d'),
   ],
   animated: (p) => n(p, 'flicker') > 0,
+  reach: (p) => n(p, 'tube') + n(p, 'glow') * 4,
   glsl: /* glsl */ `
-uniform vec3 u_color, u_core, u_background;
+uniform vec3 u_color, u_core;
 uniform float u_tube, u_glow, u_intensity, u_fill, u_flicker;
-void effect(vec2 uv, out vec3 bg, out vec4 fg) {
-  bg = u_background;
+vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   float d = dt / u_k;
   float tt = abs(dt) - u_tube * 0.5 * u_k;
@@ -369,50 +536,49 @@ void effect(vec2 uv, out vec3 bg, out vec4 fg) {
   float fl = 1.0 - u_flicker * 0.65 * step(0.8, hash11(floor(u_time * 9.0)));
   float fill = d < 0.0 ? u_fill * 0.3 : 0.0;
   vec3 c = (u_color * (glow * 0.85 + tube * 0.5 + fill) + u_core * core * tube) * fl;
-  fg = vec4(c, clamp(max(max(glow * 0.9, tube), fill) * fl, 0.0, 1.0));
+  return vec4(c, clamp(max(max(glow * 0.9, tube), fill) * fl, 0.0, 1.0));
 }`,
 };
 
 const flat: EffectDef = {
   id: 'flat',
   name: 'Flat',
-  description: 'Clean fill with optional outline and drop shadow.',
+  description: 'Clean fill or gradient with an optional outline and drop shadow.',
   params: [
     col('fill', 'Fill', '#f4f1ea'),
-    col('background', 'Background', '#141414'),
+    col('fill2', 'Gradient to', '#ff5a1f'),
+    num('gradient', 'Gradient', 0, 1, 0.01, 0),
+    num('angle', 'Gradient angle', 0, 360, 1, 180, true),
     num('outline', 'Outline', 0, 60, 0.5, 0),
     col('outlineColor', 'Outline colour', '#ff5a1f'),
-    num('shadowX', 'Shadow X', -100, 100, 1, 0),
-    num('shadowY', 'Shadow Y', -100, 100, 1, 12),
-    num('shadowBlur', 'Shadow blur', 0.5, 100, 0.5, 14),
     num('shadowOpacity', 'Shadow', 0, 1, 0.01, 0),
+    num('shadowX', 'Shadow X', -100, 100, 1, 0, true),
+    num('shadowY', 'Shadow Y', -100, 100, 1, 12, true),
+    num('shadowBlur', 'Shadow blur', 0.5, 100, 0.5, 14, true),
   ],
+  reach: (p) => n(p, 'outline') + Math.max(Math.abs(n(p, 'shadowX')), Math.abs(n(p, 'shadowY'))) + n(p, 'shadowBlur') * 2,
   glsl: /* glsl */ `
-uniform vec3 u_fill, u_background, u_outlineColor;
-uniform float u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity;
-void effect(vec2 uv, out vec3 bg, out vec4 fg) {
-  bg = u_background;
+uniform vec3 u_fill, u_fill2, u_outlineColor;
+uniform float u_gradient, u_angle, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity;
+vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
-  vec4 f = vec4(0.0);
-  if (u_shadowOpacity > 0.0) {
-    float sd = sdfArt(uv - vec2(u_shadowX, u_shadowY) * u_k / u_texSize) - u_outline;
-    float sa = clamp(0.5 - sd / max(u_shadowBlur, 0.5), 0.0, 1.0) * u_shadowOpacity;
-    f = vec4(0.0, 0.0, 0.0, sa);
-  }
+  vec4 f = dropShadow(uv, vec2(u_shadowX, u_shadowY), u_outline, u_shadowBlur, u_shadowOpacity);
   if (u_outline > 0.0) {
-    float ow = u_outline * u_k;
-    float ring = cover(abs(dt - ow * 0.5) - ow * 0.5);
+    float ring = cover(dt - u_outline * u_k);
     f = over(vec4(u_outlineColor * ring, ring), f);
   }
   float c = cover(dt);
-  fg = over(vec4(u_fill * c, c), f);
+  float a = radians(u_angle);
+  float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(a), -cos(a))) + 0.5, 0.0, 1.0);
+  vec3 colr = mix(u_fill, u_fill2, g * u_gradient);
+  return over(vec4(colr * c, c), f);
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [chrome, glass, inflate, icon, distressed, neon, flat];
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed];
 
 export function effectById(id: string): EffectDef {
-  return EFFECTS.find((e) => e.id === id) ?? chrome;
+  return EFFECTS.find((e) => e.id === id) ?? flat;
 }
 
 export function defaultParams(e: EffectDef): ParamValues {
@@ -423,60 +589,44 @@ export interface Preset {
   name: string;
   effect: string;
   params: ParamValues;
-  /** Swatch colours for the preset chip. */
-  swatch: string[];
+  /** Backdrop for the preview thumbnail (and "apply with background"). */
+  bg: string;
+  tags?: string;
 }
 
 export const PRESETS: Preset[] = [
-  { name: 'Ice chrome', effect: 'chrome', params: {}, swatch: ['#020b2b', '#0b5cff', '#7cc8ff', '#ffffff'] },
-  {
-    name: 'Toxic chrome',
-    effect: 'chrome',
-    params: { c1: '#061204', c2: '#2f6b0b', c3: '#c8ff3a', c4: '#ffb300', rimColor: '#d8ff7a' },
-    swatch: ['#061204', '#2f6b0b', '#c8ff3a', '#ffb300'],
-  },
-  {
-    name: 'Molten',
-    effect: 'chrome',
-    params: { c1: '#071722', c2: '#00a99d', c3: '#ff6a00', c4: '#ffe7c2', rimColor: '#ff9a3c', liquid: 1.0 },
-    swatch: ['#071722', '#00a99d', '#ff6a00', '#ffe7c2'],
-  },
-  {
-    name: 'Plasma',
-    effect: 'chrome',
-    params: { c1: '#16002b', c2: '#5a17d6', c3: '#ff2e9a', c4: '#ffd36b', rimColor: '#ff7ad1' },
-    swatch: ['#16002b', '#5a17d6', '#ff2e9a', '#ffd36b'],
-  },
-  {
-    name: 'Mercury',
-    effect: 'chrome',
-    params: { c1: '#050505', c2: '#4a4a4a', c3: '#c4c4c4', c4: '#ffffff', rimColor: '#ffffff', liquid: 0.35 },
-    swatch: ['#050505', '#4a4a4a', '#c4c4c4', '#ffffff'],
-  },
-  { name: 'Blue glass', effect: 'glass', params: {}, swatch: ['#000000', '#01040b', '#2aa8ff', '#bfe6ff'] },
-  { name: 'Ember glass', effect: 'glass', params: { glow: '#ff7a1a' }, swatch: ['#000000', '#120400', '#ff7a1a', '#ffd2a8'] },
-  { name: 'Puffy cloud', effect: 'inflate', params: {}, swatch: ['#1a3fe0', '#2b8bff', '#8f9ee6', '#eef2ff'] },
-  {
-    name: 'Bubblegum',
-    effect: 'inflate',
-    params: { body: '#ffe0f1', shade: '#ff6fb8', bgTop: '#ff9fd2', bgBottom: '#ff4fa3' },
-    swatch: ['#ff4fa3', '#ff9fd2', '#ff6fb8', '#ffe0f1'],
-  },
-  { name: 'Lilac icon', effect: 'icon', params: {}, swatch: ['#c9b8ff', '#8a63f5', '#0b0812', '#ffffff'] },
-  {
-    name: 'Sunset icon',
-    effect: 'icon',
-    params: { tileTop: '#ff8a1f', tileBottom: '#ff4d00', glyph: '#ffc61a', outline: 0 },
-    swatch: ['#ff8a1f', '#ff4d00', '#ffc61a', '#fff3d6'],
-  },
-  {
-    name: 'Candy icon',
-    effect: 'icon',
-    params: { tileTop: '#ff77c8', tileBottom: '#ff2f6d', glyph: '#fff2fb', shine: 0.6 },
-    swatch: ['#ff77c8', '#ff2f6d', '#fff2fb', '#000000'],
-  },
-  { name: 'Distressed', effect: 'distressed', params: {}, swatch: ['#0b0b0b', '#3a3a3a', '#a7a29a', '#ece6d8'] },
-  { name: 'Neon pink', effect: 'neon', params: {}, swatch: ['#07030d', '#5c0f57', '#ff3df2', '#fff3ff'] },
-  { name: 'Neon cyan', effect: 'neon', params: { color: '#28f0ff', core: '#f0ffff', background: '#02070b' }, swatch: ['#02070b', '#06424a', '#28f0ff', '#f0ffff'] },
-  { name: 'Flat', effect: 'flat', params: {}, swatch: ['#141414', '#141414', '#f4f1ea', '#f4f1ea'] },
+  { name: 'Ice chrome', effect: 'chrome', params: {}, bg: '#000000', tags: 'metal blue' },
+  { name: 'Toxic chrome', effect: 'chrome', params: { c1: '#061204', c2: '#2f6b0b', c3: '#c8ff3a', c4: '#ffb300', rimColor: '#d8ff7a' }, bg: '#000000', tags: 'metal green gold' },
+  { name: 'Molten', effect: 'chrome', params: { c1: '#071722', c2: '#00a99d', c3: '#ff6a00', c4: '#ffe7c2', rimColor: '#ff9a3c', liquid: 1.0 }, bg: '#000000', tags: 'metal orange teal' },
+  { name: 'Plasma', effect: 'chrome', params: { c1: '#16002b', c2: '#5a17d6', c3: '#ff2e9a', c4: '#ffd36b', rimColor: '#ff7ad1' }, bg: '#000000', tags: 'metal purple pink' },
+  { name: 'Mercury', effect: 'chrome', params: { c1: '#050505', c2: '#4a4a4a', c3: '#c4c4c4', c4: '#ffffff', rimColor: '#ffffff', liquid: 0.35 }, bg: '#000000', tags: 'metal silver' },
+  { name: 'Rose gold', effect: 'chrome', params: { c1: '#2a0f0c', c2: '#a8574a', c3: '#f2b8a2', c4: '#fff4ee', rimColor: '#ffd9cc', liquid: 0.3 }, bg: '#120807', tags: 'metal copper' },
+  { name: 'Blue glass', effect: 'glass', params: {}, bg: '#000000', tags: 'glow' },
+  { name: 'Ember glass', effect: 'glass', params: { glow: '#ff7a1a' }, bg: '#000000', tags: 'glow orange' },
+  { name: 'Mint glass', effect: 'glass', params: { glow: '#3dffb5', body: '#010a06' }, bg: '#000000', tags: 'glow green' },
+  { name: 'Puffy cloud', effect: 'inflate', params: {}, bg: '#2b6bff', tags: '3d balloon white' },
+  { name: 'Bubblegum', effect: 'inflate', params: { body: '#ffe0f1', shade: '#ff6fb8' }, bg: '#ff6fb8', tags: '3d pink' },
+  { name: 'Lime puff', effect: 'inflate', params: { body: '#f4ffd6', shade: '#86c11b', shadow: 0.3 }, bg: '#a6e21b', tags: '3d green' },
+  { name: 'Mascot sticker', effect: 'sticker', params: {}, bg: '#5cc6ff', tags: 'outline cartoon' },
+  { name: 'Ink sticker', effect: 'sticker', params: { fill: '#0a0a0a', line: '#ffffff', lineWidth: 6, borderWidth: 0, shine: 0.1 }, bg: '#ffffff', tags: 'black' },
+  { name: 'Die-cut', effect: 'sticker', params: { fill: '#ff5a1f', line: '#140a1e', lineWidth: 8, borderWidth: 18, shadow: 0.35 }, bg: '#1b1b1f', tags: 'border' },
+  { name: 'Sunset aura', effect: 'aura', params: {}, bg: '#161616', tags: 'gradient mesh' },
+  { name: 'Acid aura', effect: 'aura', params: { c1: '#d6ff1f', c2: '#5a1fff', c3: '#b9ff3d', c4: '#f6ffd0', seed: 7.4 }, bg: '#161616', tags: 'gradient mesh yellow violet' },
+  { name: 'Ocean aura', effect: 'aura', params: { c1: '#1424ff', c2: '#000028', c3: '#4fb4ff', c4: '#c7e4ff', seed: 1.2 }, bg: '#161616', tags: 'gradient mesh blue' },
+  { name: 'Rose aura', effect: 'aura', params: { c1: '#ff4fb1', c2: '#1d0030', c3: '#ffffff', c4: '#ffd0f0', seed: 12.6 }, bg: '#161616', tags: 'gradient mesh pink' },
+  { name: 'Forest aura', effect: 'aura', params: { c1: '#073d12', c2: '#000a02', c3: '#4fe37a', c4: '#bff5c8', seed: 22 }, bg: '#161616', tags: 'gradient mesh green' },
+  { name: 'Holo foil', effect: 'holo', params: {}, bg: '#0b0b0f', tags: 'iridescent rainbow' },
+  { name: 'Holo rim', effect: 'holo', params: { foil: 0, rimWidth: 7 }, bg: '#000000', tags: 'iridescent dark' },
+  { name: 'Retro sign', effect: 'extrude', params: {}, bg: '#2b1d3a', tags: '3d vintage' },
+  { name: 'Pop 3D', effect: 'extrude', params: { face: '#ffffff', side: '#7b4dff', outline: 0, depth: 18, angle: 60 }, bg: '#7b4dff', tags: '3d purple' },
+  { name: 'Glossy ink', effect: 'icon', params: {}, bg: '#a98bff', tags: 'icon black' },
+  { name: 'Sunset glyph', effect: 'icon', params: { glyph: '#ffc61a' }, bg: '#ff5a10', tags: 'icon yellow' },
+  { name: 'Candy glyph', effect: 'icon', params: { glyph: '#fff2fb', shine: 0.6 }, bg: '#ff3d86', tags: 'icon white' },
+  { name: 'Distressed', effect: 'distressed', params: {}, bg: '#0b0b0b', tags: 'grunge print' },
+  { name: 'Neon pink', effect: 'neon', params: {}, bg: '#07030d', tags: 'glow' },
+  { name: 'Neon cyan', effect: 'neon', params: { color: '#28f0ff', core: '#f0ffff' }, bg: '#02070b', tags: 'glow' },
+  { name: 'Flat', effect: 'flat', params: {}, bg: '#141414', tags: 'solid' },
+  { name: 'Flat ink', effect: 'flat', params: { fill: '#0a0a0a' }, bg: '#7b4dff', tags: 'solid black' },
+  { name: 'Peach gradient', effect: 'flat', params: { fill: '#ffb36b', fill2: '#ff3d7f', gradient: 1 }, bg: '#130f1a', tags: 'gradient' },
+  { name: 'Electric gradient', effect: 'flat', params: { fill: '#45f3ff', fill2: '#7b4dff', gradient: 1, angle: 135 }, bg: '#08080c', tags: 'gradient blue' },
 ];

@@ -4,7 +4,7 @@ import type { FontInfo } from '../engine/types';
 export interface FontEntry {
   id: string;
   name: string;
-  source: 'bundled' | 'imported' | 'system';
+  source: 'bundled' | 'imported' | 'system' | 'custom';
   info: FontInfo;
 }
 

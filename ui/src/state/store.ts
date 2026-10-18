@@ -2,25 +2,49 @@ import { useSyncExternalStore } from 'react';
 import type { BuildResult } from '../engine/client';
 import type { FontEntry } from '../fonts/library';
 import { emptyProject, type Project } from './model';
+import { loadSettings, saveSettings, type Settings } from './settings';
+import { find } from './tree';
 
 export interface Toast {
   id: number;
   message: string;
   kind: 'info' | 'error';
+  action?: { label: string; run: () => void };
 }
+
+export type Dialog =
+  | { kind: 'trace'; image: ImageData; name: string; target?: 'layer' | 'glyph' }
+  | { kind: 'font' }
+  | { kind: 'templates' }
+  | { kind: 'systemFonts' }
+  | { kind: 'settings'; query?: string }
+  | { kind: 'help' }
+  | { kind: 'palette' }
+  | { kind: 'canvas' };
+
+/** On-canvas sub-editors. */
+export type EditMode = null | { kind: 'points'; id: string } | { kind: 'warp'; id: string; uid: string };
 
 export interface State {
   project: Project;
-  selection: string | null;
+  /** Selected node ids (layers or groups). */
+  selection: string[];
+  hover: string | null;
+  mode: 'design' | 'type';
+  /** Glyph open in Type mode. */
+  glyph: string;
+  editing: EditMode;
   fonts: FontEntry[];
   build: BuildResult | null;
   ready: boolean;
   toasts: Toast[];
-  previewTransparent: boolean;
   past: Project[];
   future: Project[];
-  /** Open dialog, if any. */
-  dialog: null | { kind: 'trace'; image: ImageData; name: string } | { kind: 'font' } | { kind: 'templates' } | { kind: 'systemFonts' };
+  dialog: Dialog | null;
+  settings: Settings;
+  /** Right panel tab. */
+  tab: 'design' | 'style';
+  tool: 'select' | 'hand';
 }
 
 type Listener = () => void;
@@ -32,15 +56,21 @@ function initial(): State {
   const project = emptyProject();
   return {
     project,
-    selection: project.layers[0]?.id ?? null,
+    selection: project.layers[0] ? [project.layers[0].id] : [],
+    hover: null,
+    mode: 'design',
+    glyph: 'A',
+    editing: null,
     fonts: [],
     build: null,
     ready: false,
     toasts: [],
-    previewTransparent: false,
     past: [],
     future: [],
     dialog: null,
+    settings: loadSettings(),
+    tab: 'design',
+    tool: 'select',
   };
 }
 
@@ -48,6 +78,8 @@ let state: State = initial();
 const listeners = new Set<Listener>();
 let lastKey = '';
 let lastTime = 0;
+/** Inside a pointer gesture every edit with the same key is one undo step. */
+let gesture = false;
 
 export const store = {
   get: () => state,
@@ -74,7 +106,7 @@ export function edit(fn: (draft: Project) => void, key = '') {
   const draft = structuredClone(before);
   fn(draft);
   const now = performance.now();
-  const coalesce = key !== '' && key === lastKey && now - lastTime < COALESCE_MS;
+  const coalesce = key !== '' && key === lastKey && (gesture || now - lastTime < COALESCE_MS);
   lastKey = key;
   lastTime = now;
   store.set({
@@ -84,33 +116,61 @@ export function edit(fn: (draft: Project) => void, key = '') {
   });
 }
 
+/** Start a drag: its edits collapse into one undo step until `commitEdit`. */
+export function beginGesture() {
+  gesture = true;
+  lastKey = '';
+}
+
+/** End the current gesture / coalescing window (e.g. on pointer up). */
+export function commitEdit() {
+  gesture = false;
+  lastKey = '';
+}
+
 /** Replace the whole project (open file, template) as one undoable step. */
 export function replaceProject(p: Project) {
   lastKey = '';
-  store.set({ project: p, past: [...state.past, state.project], future: [], selection: p.layers.at(-1)?.id ?? null });
+  const top = p.layers.at(-1);
+  store.set({ project: p, past: [...state.past, state.project], future: [], selection: top ? [top.id] : [], editing: null });
 }
 
 export function undo() {
   const prev = state.past.at(-1);
   if (!prev) return;
   lastKey = '';
-  store.set({ project: prev, past: state.past.slice(0, -1), future: [state.project, ...state.future], selection: keepSelection(prev) });
+  store.set({ project: prev, past: state.past.slice(0, -1), future: [state.project, ...state.future], selection: keepSelection(prev), editing: keepEditing(prev) });
 }
 
 export function redo() {
   const next = state.future[0];
   if (!next) return;
   lastKey = '';
-  store.set({ project: next, past: [...state.past, state.project], future: state.future.slice(1), selection: keepSelection(next) });
+  store.set({ project: next, past: [...state.past, state.project], future: state.future.slice(1), selection: keepSelection(next), editing: keepEditing(next) });
 }
 
 function keepSelection(p: Project) {
-  return p.layers.some((l) => l.id === state.selection) ? state.selection : (p.layers.at(-1)?.id ?? null);
+  return state.selection.filter((id) => find(p.layers, id));
+}
+
+function keepEditing(p: Project): EditMode {
+  return state.editing && find(p.layers, state.editing.id) ? state.editing : null;
+}
+
+export function select(ids: string[]) {
+  const editing = state.editing && ids.length === 1 && ids[0] === state.editing.id ? state.editing : null;
+  store.set({ selection: ids, editing });
+}
+
+export function setSettings(patch: Partial<Settings>) {
+  const settings = { ...state.settings, ...patch };
+  saveSettings(settings);
+  store.set({ settings });
 }
 
 let toastId = 0;
-export function toast(message: string, kind: Toast['kind'] = 'info') {
-  const t = { id: ++toastId, message, kind };
-  store.set({ toasts: [...state.toasts, t] });
-  setTimeout(() => store.set({ toasts: state.toasts.filter((x) => x.id !== t.id) }), kind === 'error' ? 7000 : 3500);
+export function toast(message: string, kind: Toast['kind'] = 'info', action?: Toast['action']) {
+  const t: Toast = { id: ++toastId, message, kind, action };
+  store.set({ toasts: [...state.toasts.slice(-3), t] });
+  setTimeout(() => store.set({ toasts: state.toasts.filter((x) => x.id !== t.id) }), kind === 'error' ? 7000 : action ? 6000 : 3500);
 }

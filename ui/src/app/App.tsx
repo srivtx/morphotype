@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react';
+import { ContextMenu } from '../components/ContextMenu';
 import { Dialogs } from '../components/Dialogs';
+import { Icon } from '../components/icons';
 import { Inspector } from '../components/Inspector';
 import { LayersPanel } from '../components/LayersPanel';
-import { StylePanel } from '../components/StylePanel';
+import { prewarmThumbs, StylePanel } from '../components/StylePanel';
 import { TopBar } from '../components/TopBar';
-import { Viewport } from '../components/Viewport';
+import { TypeMode } from '../components/type/TypeMode';
+import { Tooltips } from '../components/ui';
+import { Viewport } from '../components/canvas/Viewport';
 import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
-import { store, toast, useStore, undo, redo } from '../state/store';
-import { textLayer } from '../state/model';
-import { addLayer, duplicateLayer, engineDoc, exportPNG, importFonts, importImage, openProject, removeLayer, saveProject, updateLayer } from './actions';
+import { buildScene } from '../state/tree';
+import { store, toast, useStore } from '../state/store';
+import { importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
+import { allCommands, matchKey } from './commands';
 
 function Toasts() {
   const toasts = useStore((s) => s.toasts);
@@ -17,7 +22,19 @@ function Toasts() {
     <div className="toasts" role="status">
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.kind}`}>
-          {t.message}
+          {t.kind === 'error' && <Icon name="warning" size={14} />}
+          <span>{t.message}</span>
+          {t.action && (
+            <button
+              className="toast-action"
+              onClick={() => {
+                t.action!.run();
+                store.set({ toasts: store.get().toasts.filter((x) => x.id !== t.id) });
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -28,69 +45,75 @@ function Toasts() {
 function useBuildLoop() {
   const layers = useStore((s) => s.project.layers);
   const ready = useStore((s) => s.ready);
+  const fonts = useStore((s) => s.fonts);
   useEffect(() => {
     if (!ready) return;
     let live = true;
-    engine.build(engineDoc(store.get().project)).then(
+    engine.build(buildScene(store.get().project).doc).then(
       (b) => live && store.set({ build: b }),
       (e: Error) => toast(`Engine error: ${e.message}`, 'error'),
     );
     return () => {
       live = false;
     };
-  }, [layers, ready]);
+  }, [layers, ready, fonts]);
 }
 
 function isTyping(e: KeyboardEvent) {
   const t = e.target as HTMLElement;
-  return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t.isContentEditable;
+  if (t instanceof HTMLInputElement) return !['checkbox', 'radio', 'range', 'button'].includes(t.type);
+  return t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t.isContentEditable;
 }
+
+/** Keys that still work while typing in a field. */
+const GLOBAL_WHILE_TYPING = new Set(['mod+s', 'mod+o', 'mod+k', 'mod+p', 'mod+,', 'mod+e', 'shift+mod+e', 'mod+n', 'mod+1', 'mod+2']);
 
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      const k = e.key.toLowerCase();
-      const sel = store.get().selection;
-      if (mod && k === 'z' && !isTyping(e)) {
+      if (e.defaultPrevented) return;
+      const s = store.get();
+      // Dialogs handle their own keys (palette, settings…).
+      if (s.dialog && s.dialog.kind !== 'trace') {
+        const combo = matchKey(e);
+        if (combo !== 'mod+k' && combo !== 'mod+,') return;
+      }
+      const combo = matchKey(e);
+      const typing = isTyping(e);
+      if (typing && !GLOBAL_WHILE_TYPING.has(combo)) return;
+      // Let the browser fire native copy / cut / paste events (handled below).
+      if (combo === 'mod+c' || combo === 'mod+x' || combo === 'mod+v') return;
+      // Tab moves focus through the UI unless the canvas has it.
+      const onCanvas = e.target === document.body || (e.target as HTMLElement).closest?.('.viewport');
+      if ((combo === 'tab' || combo === 'shift+tab') && !onCanvas) return;
+      // Inside a focused list or menu, arrows and Enter belong to it.
+      const t = e.target as HTMLElement;
+      if (t.closest?.('.popover, [role=tree], [role=grid]') && /^(arrow|enter|space|tab|shift\+tab)/.test(combo)) return;
+      // Type mode: canvas-only commands don't apply.
+      const designOnly = /^(nudge|align|distribute|flip|group|ungroup|merge|forward|backward|front|back|points|add-|tool-|outline|break|lock|hide|duplicate|delete|cut|copy$|paste$|select-all|copy-style|paste-style|next-layer|prev-layer|zoom|fit)/;
+      for (const c of allCommands()) {
+        if (!c.keys?.includes(combo)) continue;
+        if (s.mode === 'type' && designOnly.test(c.id)) continue;
+        if (c.when && !c.when()) continue;
         e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
-      } else if (mod && k === 'y' && !isTyping(e)) {
-        e.preventDefault();
-        redo();
-      } else if (mod && k === 's') {
-        e.preventDefault();
-        void saveProject();
-      } else if (mod && k === 'o') {
-        e.preventDefault();
-        void openProject();
-      } else if (mod && k === 'e') {
-        e.preventDefault();
-        void exportPNG(2, store.get().previewTransparent);
-      } else if (mod && k === '0') {
-        e.preventDefault();
-        window.dispatchEvent(new Event('mt-fit'));
-      } else if (mod && k === 'd' && sel) {
-        e.preventDefault();
-        duplicateLayer(sel);
-      } else if (isTyping(e)) {
+        c.run();
         return;
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && sel) {
-        e.preventDefault();
-        removeLayer(sel);
-      } else if (e.key.startsWith('Arrow') && sel) {
-        e.preventDefault();
-        const step = e.shiftKey ? 10 : 1;
-        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
-        const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-        updateLayer(sel, (l) => ((l.x += dx), (l.y += dy)), 'nudge');
-      } else if (k === 't' && !mod) {
-        addLayer(textLayer('Type', store.get().fonts[0]?.id ?? 'archivo'));
       }
     };
+    const editable = (t: EventTarget | null) => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || (t as HTMLElement | null)?.isContentEditable;
+    const onCopy = (e: ClipboardEvent) => !editable(e.target) && store.get().mode === 'design' && onCopyEvent(e);
+    const onCut = (e: ClipboardEvent) => !editable(e.target) && store.get().mode === 'design' && onCopyEvent(e, true);
+    const onPaste = (e: ClipboardEvent) => !editable(e.target) && void onPasteEvent(e);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('copy', onCopy);
+    window.addEventListener('cut', onCut);
+    window.addEventListener('paste', onPaste);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('copy', onCopy);
+      window.removeEventListener('cut', onCut);
+      window.removeEventListener('paste', onPaste);
+    };
   }, []);
 }
 
@@ -116,7 +139,7 @@ function useDropFiles() {
       const images = files.filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'].includes(ext(f.name)));
       if (fonts.length) await importFonts(fonts);
       if (projects.length) await openProject(projects);
-      else if (images.length) await importImage(images);
+      else if (images.length) await importImage(images, store.get().mode === 'type' ? 'glyph' : 'layer');
     };
     window.addEventListener('dragover', onOver);
     window.addEventListener('dragleave', onLeave);
@@ -130,45 +153,72 @@ function useDropFiles() {
   return over;
 }
 
+function DesignMode() {
+  const tab = useStore((s) => s.tab);
+  const editing = useStore((s) => s.editing);
+  return (
+    <main className="workspace">
+      <aside className="panel left">
+        <LayersPanel />
+      </aside>
+      <section className="center">
+        <Viewport />
+        {editing && (
+          <div className="edit-pill" role="status">
+            <Icon name={editing.kind === 'warp' ? 'warp' : 'points'} size={14} />
+            {editing.kind === 'warp' ? 'Drag the 16 points to warp' : 'Editing points'}
+            <button className="link-btn" onClick={() => store.set({ editing: null })}>
+              Done <kbd>Esc</kbd>
+            </button>
+          </div>
+        )}
+      </section>
+      <aside className="panel right">
+        <div className="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'design'} className={tab === 'design' ? 'on' : ''} onClick={() => store.set({ tab: 'design' })}>
+            Design
+          </button>
+          <button role="tab" aria-selected={tab === 'style'} className={tab === 'style' ? 'on' : ''} onClick={() => store.set({ tab: 'style' })}>
+            Style
+          </button>
+        </div>
+        <div className="panel-scroll">{tab === 'design' ? <Inspector /> : <StylePanel />}</div>
+      </aside>
+    </main>
+  );
+}
+
 export function App() {
-  const [tab, setTab] = useState<'layer' | 'style'>('layer');
   const ready = useStore((s) => s.ready);
+  const mode = useStore((s) => s.mode);
   useBuildLoop();
   useShortcuts();
   const dropping = useDropFiles();
 
   useEffect(() => {
     loadBundled().then(
-      (fonts) => store.set({ fonts, ready: true }),
+      (fonts) => {
+        store.set({ fonts, ready: true });
+        prewarmThumbs();
+      },
       (e: Error) => toast(`Couldn't start the engine: ${e.message}`, 'error'),
     );
   }, []);
 
   return (
-    <div className="app">
+    <div className={`app mode-${mode}`}>
       <TopBar />
-      <main className="workspace">
-        <aside className="panel left">
-          <h3 className="panel-title">Layers</h3>
-          <LayersPanel />
-        </aside>
-        <Viewport />
-        <aside className="panel right">
-          <div className="tabs" role="tablist">
-            <button role="tab" aria-selected={tab === 'layer'} className={tab === 'layer' ? 'on' : ''} onClick={() => setTab('layer')}>
-              Shape
-            </button>
-            <button role="tab" aria-selected={tab === 'style'} className={tab === 'style' ? 'on' : ''} onClick={() => setTab('style')}>
-              Style
-            </button>
-          </div>
-          <div className="panel-scroll">{tab === 'layer' ? <Inspector /> : <StylePanel />}</div>
-        </aside>
-      </main>
-      {!ready && <div className="boot">Loading engine…</div>}
+      {mode === 'design' ? <DesignMode /> : <TypeMode />}
+      {!ready && (
+        <div className="boot">
+          <span className="spinner" /> Loading engine…
+        </div>
+      )}
       {dropping && <div className="drop-hint">Drop fonts, images or a .morpho project</div>}
       <Dialogs />
+      <ContextMenu />
       <Toasts />
+      <Tooltips />
     </div>
   );
 }

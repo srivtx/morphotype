@@ -553,6 +553,57 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
     out.0
 }
 
+fn be32(d: &[u8], o: usize) -> u32 {
+    u32::from_be_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
+}
+
+/// Wrap an sfnt (as written by [`write_ttf`]) as WOFF 1.0 with zlib-compressed
+/// tables, for hosting on the web.
+pub fn to_woff(sfnt: &[u8]) -> Vec<u8> {
+    let n = u16::from_be_bytes([sfnt[4], sfnt[5]]) as usize;
+    let flavor = be32(sfnt, 0);
+    let mut entries = Vec::with_capacity(n);
+    for i in 0..n {
+        let o = 12 + i * 16;
+        let (tag, sum, off, len) = (be32(sfnt, o), be32(sfnt, o + 4), be32(sfnt, o + 8) as usize, be32(sfnt, o + 12) as usize);
+        let raw = &sfnt[off..off + len];
+        let z = miniz_oxide::deflate::compress_to_vec_zlib(raw, 9);
+        let data = if z.len() < raw.len() { z } else { raw.to_vec() };
+        entries.push((tag, sum, len, data));
+    }
+    let header = 44 + 20 * n;
+    let mut total = header;
+    for e in &entries {
+        total += (e.3.len() + 3) & !3;
+    }
+    let mut out = W(Vec::with_capacity(total));
+    out.tag(b"wOFF");
+    out.u32(flavor);
+    out.u32(total as u32);
+    out.u16(n as u16);
+    out.u16(0);
+    out.u32(sfnt.len() as u32);
+    out.u16(1);
+    out.u16(0);
+    for _ in 0..5 {
+        out.u32(0); // metadata and private blocks
+    }
+    let mut offset = header;
+    for (tag, sum, orig, data) in &entries {
+        out.u32(*tag);
+        out.u32(offset as u32);
+        out.u32(data.len() as u32);
+        out.u32(*orig as u32);
+        out.u32(*sum);
+        offset += (data.len() + 3) & !3;
+    }
+    for e in &entries {
+        out.0.extend_from_slice(&e.3);
+        out.pad4();
+    }
+    out.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,6 +630,18 @@ mod tests {
             italic_angle: 0.0,
             copyright: "test".into(),
         }
+    }
+
+    #[test]
+    fn woff_roundtrips() {
+        let glyphs = vec![OutGlyph { codepoint: Some('A' as u32), advance: 600.0, contours: vec![square(50.0, 500.0)] }];
+        let ttf = write_ttf(&meta(), &glyphs);
+        let woff = to_woff(&ttf);
+        assert_eq!(&woff[0..4], b"wOFF");
+        assert_eq!(u32::from_be_bytes([woff[8], woff[9], woff[10], woff[11]]) as usize, woff.len());
+        let back = crate::font::to_sfnt(&woff).unwrap();
+        let face = Face::parse(&back, 0).expect("decoded WOFF parses");
+        assert_eq!(face.glyph_hor_advance(face.glyph_index('A').unwrap()), Some(600));
     }
 
     #[test]

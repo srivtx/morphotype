@@ -28,11 +28,51 @@ pub fn unload_font(id: &str) {
     ENGINE.with(|e| e.borrow_mut().unload_font(id));
 }
 
-/// Build a document. Returns `{ d, bbox, layers, points }` as JSON.
+/// Build a document. Returns `{ renders, bbox, layers, points }` as JSON.
 #[wasm_bindgen]
 pub fn build(doc_json: &str) -> Result<String, JsError> {
     let doc: Document = parse(doc_json, "document")?;
     ENGINE.with(|e| serde_json::to_string(&e.borrow_mut().build(&doc)).map_err(|e| JsError::new(&e.to_string())))
+}
+
+fn json<T: serde::Serialize>(v: &T) -> Result<String, JsError> {
+    serde_json::to_string(v).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Every object as exact or fitted curves: `{ paths: [{id, d}], bbox }`.
+#[wasm_bindgen(js_name = exportPaths)]
+pub fn export_paths(doc_json: &str) -> Result<String, JsError> {
+    let doc: Document = parse(doc_json, "document")?;
+    ENGINE.with(|e| json(&e.borrow_mut().export_paths(&doc)))
+}
+
+/// Convert a layer to a plain outline: `{ d, size }`.
+#[wasm_bindgen]
+pub fn bake(doc_json: &str, id: &str) -> Result<String, JsError> {
+    let doc: Document = parse(doc_json, "document")?;
+    ENGINE.with(|e| json(&e.borrow_mut().bake(&doc, id).map_err(|m| JsError::new(&m))?))
+}
+
+/// Break a layer into pieces: `[{ d, size, x, y }]`.
+#[wasm_bindgen]
+pub fn split(doc_json: &str, id: &str) -> Result<String, JsError> {
+    let doc: Document = parse(doc_json, "document")?;
+    ENGINE.with(|e| json(&e.borrow_mut().split(&doc, id).map_err(|m| JsError::new(&m))?))
+}
+
+/// One character of a loaded font: `{ d, advance, exists }` in em units.
+#[wasm_bindgen(js_name = glyphPath)]
+pub fn glyph_path(font: &str, axes_json: &str, ch: &str) -> Result<String, JsError> {
+    let axes: std::collections::BTreeMap<String, f32> = parse(axes_json, "axes")?;
+    let c = ch.chars().next().ok_or_else(|| JsError::new("No character given."))?;
+    ENGINE.with(|e| json(&e.borrow_mut().glyph_path(font, &axes, c).map_err(|m| JsError::new(&m))?))
+}
+
+/// Styled previews of characters of a font spec: `[{ ch, d, advance, edited }]`.
+#[wasm_bindgen(js_name = fontPreview)]
+pub fn font_preview(spec_json: &str, chars: &str) -> Result<String, JsError> {
+    let spec: FontSpec = parse(spec_json, "font spec")?;
+    ENGINE.with(|e| json(&e.borrow_mut().font_preview(&spec, chars).map_err(|m| JsError::new(&m))?))
 }
 
 #[wasm_bindgen(js_name = exportSvg)]

@@ -5,7 +5,7 @@ use crate::field::{extract, signed_distance, Grid};
 use crate::fit::fit_shape;
 use crate::font::{glyph_outline, shape_line, FontData, FontInfo};
 use crate::geom::{flatten_curves, normalize_winding, poly_to_curves, Affine, CurveShape, Pt, Rect, Shape};
-use crate::modifiers::{apply_all, Ctx, Geo, ModEntry, Modifier};
+use crate::modifiers::{apply_all, apply_all_frames, Ctx, Geo, ModEntry, Modifier};
 use crate::morph::Morph;
 use crate::svg;
 use crate::symbols::{self, Symbol};
@@ -116,16 +116,24 @@ pub struct Layer {
     pub rotation: f64,
     #[serde(default = "one")]
     pub scale: f64,
+    /// Extra horizontal / vertical stretch in the layer's own frame.
+    #[serde(default = "one")]
+    pub sx: f64,
+    #[serde(default = "one")]
+    pub sy: f64,
     #[serde(default)]
     pub modifiers: Vec<ModEntry>,
     pub content: Content,
 }
 
 impl Layer {
-    fn transform(&self) -> Affine {
+    pub fn transform(&self) -> Affine {
         Affine::translate(self.x, self.y)
             .then(Affine::rotate(self.rotation.to_radians()))
-            .then(Affine::scale(self.scale, self.scale))
+            .then(Affine::scale(self.scale * self.sx, self.scale * self.sy))
+    }
+    fn scale_em(&self) -> f64 {
+        (self.scale * self.sx.abs().min(self.sy.abs())).abs().max(1e-3)
     }
     fn em(&self) -> f64 {
         match &self.content {
@@ -135,14 +143,56 @@ impl Layer {
     }
 }
 
+/// A layer in a render, optionally with its blend op overridden (a group
+/// used as a cutter passes its children in with the group's op).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Member {
+    Id(String),
+    With { id: String, op: Op },
+}
+
+impl Member {
+    fn id(&self) -> &str {
+        match self {
+            Member::Id(id) | Member::With { id, .. } => id,
+        }
+    }
+}
+
+/// One rendered object: its member layers combine with their blend ops
+/// (bottom to top), then the render's own modifiers run on the result.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderSpec {
+    pub id: String,
+    pub members: Vec<Member>,
+    #[serde(default)]
+    pub modifiers: Vec<ModEntry>,
+    /// Em for the render's modifiers; defaults to the first member's.
+    #[serde(default)]
+    pub em: Option<f64>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
+    /// Every layer (hidden ones too, so morphs can reference them).
     #[serde(default)]
     pub layers: Vec<Layer>,
+    /// Objects to produce. Without it, all visible layers form one object.
+    #[serde(default)]
+    pub renders: Option<Vec<RenderSpec>>,
     /// Field samples per em (preview ≈ 120, export ≈ 400).
     #[serde(default)]
     pub quality: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameOut {
+    pub uid: String,
+    pub bbox: [f64; 4],
 }
 
 #[derive(Debug, Serialize)]
@@ -151,16 +201,87 @@ pub struct LayerOut {
     pub id: String,
     pub bbox: Option<[f64; 4]>,
     pub error: Option<String>,
+    /// The layer's own outline in document coordinates (for hit testing).
+    pub d: Option<String>,
+    /// Bounding box in the layer's local frame (before its transform).
+    pub local: Option<[f64; 4]>,
+    /// Boxes warped by the layer's warp modifiers, in the local frame.
+    pub frames: Vec<FrameOut>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderOut {
+    pub id: String,
+    pub d: String,
+    pub bbox: Option<[f64; 4]>,
+    pub points: usize,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildOut {
-    /// Final outline as SVG path data in document coordinates (nonzero fill).
-    pub d: String,
+    pub renders: Vec<RenderOut>,
     pub bbox: Option<[f64; 4]>,
     pub layers: Vec<LayerOut>,
     pub points: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathOut {
+    pub id: String,
+    pub d: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathsOut {
+    pub paths: Vec<PathOut>,
+    pub bbox: Option<[f64; 4]>,
+}
+
+/// A layer converted to a plain outline: `d` is in units of `size`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BakeOut {
+    pub d: String,
+    pub size: f64,
+}
+
+/// One piece of a broken-apart layer, positioned in document coordinates.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PieceOut {
+    pub d: String,
+    pub size: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// A glyph from a font in em units (y-down, baseline at 0, pen at 0).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlyphOut {
+    pub d: String,
+    pub advance: f64,
+    pub exists: bool,
+}
+
+/// Preview of one glyph of a font spec: outline in em units (y-down).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlyphPreview {
+    pub ch: String,
+    pub d: String,
+    pub advance: f64,
+    pub edited: bool,
+}
+
+struct Local {
+    geo: Geo,
+    em: f64,
+    frames: Vec<(String, Rect)>,
 }
 
 fn rect_arr(r: Rect) -> Option<[f64; 4]> {
@@ -178,7 +299,7 @@ pub struct Engine {
     fonts: HashMap<String, FontData>,
     glyphs: HashMap<(String, u64, u16), Rc<GlyphGeo>>,
     morphs: HashMap<(String, u64, u16, String, u64, u16), Rc<Morph>>,
-    layers: HashMap<u64, Rc<(Geo, f64)>>,
+    layers: HashMap<u64, Rc<Local>>,
 }
 
 const PREVIEW_QUALITY: f64 = 120.0;
@@ -368,7 +489,7 @@ impl Engine {
     }
 
     /// Local geometry of a layer (modifiers applied, transform not), cached.
-    fn layer_local(&mut self, doc: &Document, layer: &Layer, quality: f64, depth: u32) -> Result<Rc<(Geo, f64)>, String> {
+    fn layer_local(&mut self, doc: &Document, layer: &Layer, quality: f64, depth: u32) -> Result<Rc<Local>, String> {
         if depth > 4 {
             return Err("Morph layers are nested too deeply.".into());
         }
@@ -414,19 +535,20 @@ impl Engine {
                 let ga = self.layer_local(doc, &la, quality, depth + 1)?;
                 let gb = self.layer_local(doc, &lb, quality, depth + 1)?;
                 let prep = |l: &Layer, g: &Geo| -> Shape {
-                    let s = g.poly.clone().transformed(&Affine::rotate(l.rotation.to_radians()).then(Affine::scale(l.scale, l.scale)));
+                    let s = g.poly.clone().transformed(&Affine::rotate(l.rotation.to_radians()).then(Affine::scale(l.scale * l.sx, l.scale * l.sy)));
                     let c = s.bbox().center();
                     s.transformed(&Affine::translate(-c.x, -c.y))
                 };
-                let sa = prep(&la, &ga.0);
-                let sb = prep(&lb, &gb.0);
+                let sa = prep(&la, &ga.geo);
+                let sb = prep(&lb, &gb.geo);
                 let m = Morph::new(&sa, &sb, MORPH_SAMPLES);
-                let em = ga.1 * (1.0 - t) + gb.1 * t;
+                let em = ga.em * (1.0 - t) + gb.em * t;
                 (Geo::poly_only(m.at(*t)), em)
             }
         };
-        let geo = apply_all(geo, &layer.modifiers, &Ctx { em, quality });
-        let out = Rc::new((geo, em));
+        let mut frames = Vec::new();
+        let geo = apply_all_frames(geo, &layer.modifiers, &Ctx { em, quality }, &mut frames);
+        let out = Rc::new(Local { geo, em, frames });
         if self.layers.len() > 256 {
             self.layers.clear();
         }
@@ -434,63 +556,128 @@ impl Engine {
         Ok(out)
     }
 
-    /// Build the whole document. Returns final geometry plus per-layer info.
-    pub fn build_geo(&mut self, doc: &Document) -> (Geo, Vec<LayerOut>, f64) {
+    /// Build every layer, then every render. Returns each render's geometry
+    /// (with the smallest member em, for curve fitting) plus per-layer info.
+    pub fn build_scene(&mut self, doc: &Document) -> (Vec<(String, Geo, f64)>, Vec<LayerOut>) {
         let quality = doc.quality.unwrap_or(PREVIEW_QUALITY).clamp(24.0, 1024.0);
-        let mut acc = Geo { poly: Shape::default(), curves: Some(Vec::new()) };
-        let mut min_em = f64::INFINITY;
-        let mut outs = Vec::new();
+        let mut built: HashMap<&str, (Geo, f64)> = HashMap::new();
+        let mut outs = Vec::with_capacity(doc.layers.len());
         for layer in &doc.layers {
-            if !layer.visible {
-                outs.push(LayerOut { id: layer.id.clone(), bbox: None, error: None });
-                continue;
-            }
-            let local = match self.layer_local(doc, layer, quality, 0) {
-                Ok(g) => g,
-                Err(e) => {
-                    outs.push(LayerOut { id: layer.id.clone(), bbox: None, error: Some(e) });
-                    continue;
+            let mut out = LayerOut { id: layer.id.clone(), bbox: None, error: None, d: None, local: None, frames: Vec::new() };
+            if layer.visible {
+                match self.layer_local(doc, layer, quality, 0) {
+                    Ok(local) => {
+                        let mut g = local.geo.clone();
+                        let m = layer.transform();
+                        g.transform(&m);
+                        out.bbox = rect_arr(g.poly.bbox());
+                        out.local = rect_arr(local.geo.poly.bbox());
+                        out.d = Some(svg::poly_d(&g.poly, 1));
+                        out.frames = local.frames.iter().filter_map(|(uid, r)| rect_arr(*r).map(|b| FrameOut { uid: uid.clone(), bbox: b })).collect();
+                        built.insert(layer.id.as_str(), (g, local.em * layer.scale_em()));
+                    }
+                    Err(e) => out.error = Some(e),
                 }
-            };
-            let mut g = local.0.clone();
-            g.transform(&layer.transform());
-            let em = local.1 * layer.scale.abs().max(1e-3);
-            min_em = min_em.min(em);
-            outs.push(LayerOut { id: layer.id.clone(), bbox: rect_arr(g.poly.bbox()), error: None });
-            match layer.op {
-                Op::Add => {
-                    acc.poly.extend(g.poly);
-                    match (&mut acc.curves, g.curves) {
-                        (Some(a), Some(b)) => a.extend(b),
-                        _ => acc.curves = None,
+            }
+            outs.push(out);
+        }
+        let default_spec;
+        let specs: &[RenderSpec] = match &doc.renders {
+            Some(r) => r,
+            None => {
+                default_spec = [RenderSpec { id: "all".into(), members: doc.layers.iter().map(|l| Member::Id(l.id.clone())).collect(), ..Default::default() }];
+                &default_spec
+            }
+        };
+        let ops: HashMap<&str, Op> = doc.layers.iter().map(|l| (l.id.as_str(), l.op)).collect();
+        let mut renders = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let mut acc = Geo { poly: Shape::default(), curves: Some(Vec::new()) };
+            let mut min_em = f64::INFINITY;
+            let mut first_em = None;
+            for member in &spec.members {
+                let id = member.id();
+                let Some((g, em)) = built.get(id) else { continue };
+                min_em = min_em.min(*em);
+                first_em.get_or_insert(*em);
+                let op = match member {
+                    Member::With { op, .. } => *op,
+                    Member::Id(_) => ops.get(id).copied().unwrap_or_default(),
+                };
+                match op {
+                    Op::Add => {
+                        acc.poly.extend(g.poly.clone());
+                        match (&mut acc.curves, &g.curves) {
+                            (Some(a), Some(b)) => a.extend(b.iter().cloned()),
+                            _ => acc.curves = None,
+                        }
+                    }
+                    op => {
+                        let cell = min_em / quality;
+                        acc.poly = boolean(&acc.poly, &g.poly, op, cell);
+                        acc.curves = None;
                     }
                 }
-                Op::Subtract | Op::Intersect => {
-                    let cell = em.min(min_em) / quality;
-                    acc.poly = boolean(&acc.poly, &g.poly, layer.op, cell);
-                    acc.curves = None;
-                }
             }
+            let min_em = if min_em.is_finite() { min_em } else { 200.0 };
+            if spec.modifiers.iter().any(|m| m.on) && !acc.poly.is_empty() {
+                let em = spec.em.unwrap_or(first_em.unwrap_or(min_em)).max(1.0);
+                acc = apply_all(acc, &spec.modifiers, &Ctx { em, quality });
+            }
+            renders.push((spec.id.clone(), acc, min_em));
         }
-        (acc, outs, if min_em.is_finite() { min_em } else { 200.0 })
+        (renders, outs)
     }
 
     pub fn build(&mut self, doc: &Document) -> BuildOut {
-        let (geo, layers, _) = self.build_geo(doc);
-        BuildOut { d: svg::poly_d(&geo.poly, 2), bbox: rect_arr(geo.poly.bbox()), layers, points: geo.poly.point_count() }
+        let (renders, layers) = self.build_scene(doc);
+        let mut bbox = Rect::EMPTY;
+        let mut points = 0;
+        let renders = renders
+            .into_iter()
+            .map(|(id, geo, _)| {
+                let b = geo.poly.bbox();
+                bbox = bbox.union(&b);
+                points += geo.poly.point_count();
+                RenderOut { id, d: svg::poly_d(&geo.poly, 2), bbox: rect_arr(b), points: geo.poly.point_count() }
+            })
+            .collect();
+        BuildOut { renders, bbox: rect_arr(bbox), layers, points }
     }
 
-    /// Final document as fitted curves (exact where possible).
-    pub fn build_curves(&mut self, doc: &Document) -> (CurveShape, Rect) {
+    fn export_doc(doc: &Document) -> Document {
         let mut doc = doc.clone();
         doc.quality = Some(doc.quality.unwrap_or(EXPORT_QUALITY).max(EXPORT_QUALITY));
-        let (geo, _, em) = self.build_geo(&doc);
-        let bbox = geo.poly.bbox();
-        let curves = match geo.curves {
-            Some(c) => c,
-            None => fit_shape(&geo.poly, em / 1500.0, 50.0),
-        };
-        (curves, bbox)
+        doc
+    }
+
+    /// Every render as fitted curves (exact where possible).
+    pub fn build_paths(&mut self, doc: &Document) -> (Vec<(String, CurveShape)>, Rect) {
+        let (renders, _) = self.build_scene(&Self::export_doc(doc));
+        let mut bbox = Rect::EMPTY;
+        let out = renders
+            .into_iter()
+            .map(|(id, geo, em)| {
+                bbox = bbox.union(&geo.poly.bbox());
+                let curves = match geo.curves {
+                    Some(c) => c,
+                    None => fit_shape(&geo.poly, em / 1500.0, 50.0),
+                };
+                (id, curves)
+            })
+            .collect();
+        (out, bbox)
+    }
+
+    pub fn export_paths(&mut self, doc: &Document) -> PathsOut {
+        let (paths, bbox) = self.build_paths(doc);
+        PathsOut { paths: paths.into_iter().map(|(id, c)| PathOut { id, d: svg::curves_d(&c, 2) }).collect(), bbox: rect_arr(bbox) }
+    }
+
+    /// Final document as one set of fitted curves.
+    pub fn build_curves(&mut self, doc: &Document) -> (CurveShape, Rect) {
+        let (paths, bbox) = self.build_paths(doc);
+        (paths.into_iter().flat_map(|(_, c)| c).collect(), bbox)
     }
 
     pub fn export_svg(&mut self, doc: &Document, opts: &SvgOpts) -> String {
@@ -498,6 +685,138 @@ impl Engine {
         let d = svg::curves_d(&curves, 2);
         let pad = if bbox.is_empty() { 0.0 } else { bbox.width().max(bbox.height()) * opts.padding.clamp(0.0, 1.0) };
         svg::document(&d, bbox, pad, opts.fill.as_deref().unwrap_or("#000"), opts.background.as_deref())
+    }
+
+    /// A layer's local geometry at export quality as curves, plus its em.
+    fn layer_curves(&mut self, doc: &Document, id: &str) -> Result<(Layer, Shape, Option<CurveShape>, f64), String> {
+        let doc = Self::export_doc(doc);
+        let layer = doc.layers.iter().find(|l| l.id == id).cloned().ok_or("That layer doesn't exist.")?;
+        let quality = doc.quality.unwrap_or(EXPORT_QUALITY);
+        let local = self.layer_local(&doc, &layer, quality, 0)?;
+        if local.geo.poly.is_empty() {
+            return Err("This layer has no outline to convert.".into());
+        }
+        Ok((layer, local.geo.poly.clone(), local.geo.curves.clone(), local.em))
+    }
+
+    /// Convert a layer (content plus modifiers) into a plain outline.
+    pub fn bake(&mut self, doc: &Document, id: &str) -> Result<BakeOut, String> {
+        let (layer, poly, curves, em) = self.layer_curves(doc, id)?;
+        let mut curves = curves.unwrap_or_else(|| fit_shape(&poly, em / 1500.0, 50.0));
+        let em = layer.em();
+        let m = Affine::scale(1.0 / em, 1.0 / em);
+        for c in &mut curves {
+            c.transform(&m);
+        }
+        Ok(BakeOut { d: svg::curves_d(&curves, 5), size: em })
+    }
+
+    /// Break a layer into separate outlines: each solid contour with its holes.
+    /// Small pieces sitting above or below a larger one in the same column
+    /// (the dot of an i, accents) stay with it.
+    pub fn split(&mut self, doc: &Document, id: &str) -> Result<Vec<PieceOut>, String> {
+        let (layer, poly, curves, _) = self.layer_curves(doc, id)?;
+        let exact = curves.filter(|c| c.len() == poly.contours.len());
+        let n = poly.contours.len();
+        let areas: Vec<f64> = poly.contours.iter().map(|c| crate::geom::signed_area(c)).collect();
+        // Each hole belongs to the smallest solid that contains it.
+        let mut owner: Vec<usize> = (0..n).collect();
+        for i in 0..n {
+            if areas[i] >= 0.0 {
+                continue;
+            }
+            let p = crate::geom::interior_point(&poly.contours[i]);
+            let probe = poly.contours[i].first().copied().unwrap_or(p);
+            let mut best: Option<usize> = None;
+            for j in 0..n {
+                if areas[j] <= 0.0 || crate::geom::winding(&poly.contours[j], probe) == 0 {
+                    continue;
+                }
+                if best.is_none_or(|b| areas[j] < areas[b]) {
+                    best = Some(j);
+                }
+            }
+            if let Some(b) = best {
+                owner[i] = b;
+            }
+        }
+        let solids: Vec<usize> = (0..n).filter(|&i| areas[i] > 0.0).collect();
+        if solids.is_empty() {
+            return Err("This layer has no outline to break apart.".into());
+        }
+        // Union-find over solids for the dot-of-an-i rule.
+        let mut parent: HashMap<usize, usize> = solids.iter().map(|&i| (i, i)).collect();
+        fn find(p: &mut HashMap<usize, usize>, i: usize) -> usize {
+            let q = p[&i];
+            if q == i {
+                return i;
+            }
+            let r = find(p, q);
+            p.insert(i, r);
+            r
+        }
+        let boxes: HashMap<usize, Rect> = solids.iter().map(|&i| (i, crate::geom::Shape::new(vec![poly.contours[i].clone()]).bbox())).collect();
+        for (a_i, &a) in solids.iter().enumerate() {
+            for &b in &solids[a_i + 1..] {
+                let (ra, rb) = (boxes[&a], boxes[&b]);
+                let (small, big, sa, sb) = if areas[a] < areas[b] { (ra, rb, areas[a], areas[b]) } else { (rb, ra, areas[b], areas[a]) };
+                // Dots and accents are much shorter than their letter.
+                if sa > sb * 0.6 || small.height() > big.height() * 0.5 {
+                    continue;
+                }
+                let overlap = small.x1.min(big.x1) - small.x0.max(big.x0);
+                let gap = (small.y0 - big.y1).max(big.y0 - small.y1);
+                if overlap > small.width() * 0.5 && gap < big.height() * 0.5 {
+                    let (x, y) = (find(&mut parent, a), find(&mut parent, b));
+                    parent.insert(x, y);
+                }
+            }
+        }
+        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for i in 0..n {
+            let solid = if areas[i] > 0.0 { i } else { owner[i] };
+            if areas[solid] <= 0.0 {
+                continue;
+            }
+            let root = find(&mut parent, solid);
+            groups.entry(root).or_default().push(i);
+        }
+        let em = layer.em();
+        let m = layer.transform();
+        let mut out = Vec::new();
+        for idx in groups.values() {
+            let shape = Shape::new(idx.iter().map(|&i| poly.contours[i].clone()).collect());
+            let c = shape.bbox().center();
+            let mut cs: CurveShape = match &exact {
+                Some(ex) => idx.iter().map(|&i| ex[i].clone()).collect(),
+                None => fit_shape(&shape, em / 1500.0, 50.0),
+            };
+            let norm = Affine::scale(1.0 / em, 1.0 / em).then(Affine::translate(-c.x, -c.y));
+            for k in &mut cs {
+                k.transform(&norm);
+            }
+            let pos = m.apply(c);
+            out.push(PieceOut { d: svg::curves_d(&cs, 5), size: em, x: pos.x, y: pos.y });
+        }
+        // Reading order: rows top to bottom, then left to right.
+        out.sort_by(|a, b| (a.y / (em * layer.scale_em() * 0.5)).round().total_cmp(&(b.y / (em * layer.scale_em() * 0.5)).round()).then(a.x.total_cmp(&b.x)));
+        Ok(out)
+    }
+
+    /// One character of a font as an outline in em units.
+    pub fn glyph_path(&mut self, font: &str, axes: &BTreeMap<String, f32>, ch: char) -> Result<GlyphOut, String> {
+        let (gid, adv) = {
+            let f = self.font(font)?;
+            let upm = f.info.units_per_em.max(1) as f64;
+            let face = f.face(&axes_vec(axes)).ok_or("The font couldn't be opened.")?;
+            match face.glyph_index(ch) {
+                Some(g) => (Some(g.0), face.glyph_hor_advance(g).unwrap_or(0) as f64 / upm),
+                None => (None, 0.0),
+            }
+        };
+        let Some(gid) = gid else { return Ok(GlyphOut { d: String::new(), advance: 0.0, exists: false }) };
+        let g = self.glyph(font, axes, gid)?;
+        Ok(GlyphOut { d: svg::curves_d(&g.curves, 5), advance: adv, exists: true })
     }
 
     /// Trace an image to a path normalised to a 1-em box centred on the origin.
@@ -519,67 +838,65 @@ impl Engine {
         })
     }
 
-    pub fn export_font(&mut self, spec: &FontSpec) -> Result<Vec<u8>, String> {
-        let fa = self.font(&spec.font)?;
-        let info_a = fa.info.clone();
-        let upm = info_a.units_per_em.max(16) as f64;
-        let morph = spec.morph.as_ref().filter(|m| m.t > 1e-6);
-        let info_b = match morph {
-            Some(m) => Some(self.font(&m.font)?.info.clone()),
-            None => None,
-        };
-        let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
-        let lerp_metric = |a: i16, ua: f64, b: Option<(i16, f64)>| -> i16 {
-            let va = a as f64 / ua;
-            let v = match b {
-                Some((b, ub)) => va * (1.0 - t) + (b as f64 / ub) * t,
-                None => va,
-            };
-            (v * upm).round() as i16
-        };
-        let ib = info_b.as_ref().map(|i| i.units_per_em.max(1) as f64);
-        let metric = |fa: fn(&FontInfo) -> i16| lerp_metric(fa(&info_a), info_a.units_per_em as f64, info_b.as_ref().map(|b| (fa(b), ib.unwrap_or(1.0))));
-        let charset: Vec<char> = match &spec.charset {
-            Some(s) if !s.trim().is_empty() => {
-                let mut v: Vec<char> = s.chars().filter(|c| !c.is_control()).collect();
-                v.push(' ');
-                v.sort();
-                v.dedup();
-                v
-            }
+    fn font_charset(spec: &FontSpec) -> Vec<char> {
+        let mut v: Vec<char> = match &spec.charset {
+            Some(s) if !s.trim().is_empty() => s.chars().filter(|c| !c.is_control()).collect(),
             _ => default_charset(),
         };
-        let mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
-        let ctx = Ctx { em: upm, quality: spec.quality.unwrap_or(EXPORT_QUALITY).clamp(60.0, 1024.0) };
-        // Advance and side-bearing changes implied by the modifier stack.
-        let mut adv_scale = 1.0;
-        let mut adv_extra = 0.0;
-        let mut shift = 0.0;
-        let mut slant = 0.0;
-        for m in &mods {
+        v.extend(spec.glyphs.iter().filter_map(|g| g.ch.chars().next()));
+        v.push(' ');
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// Advance and side-bearing changes implied by a modifier stack:
+    /// (advance scale, extra advance in em, left shift in em, slant degrees).
+    fn spacing_of(mods: &[ModEntry]) -> (f64, f64, f64, f64) {
+        let (mut scale, mut extra, mut shift, mut slant) = (1.0, 0.0, 0.0, 0.0);
+        for m in mods.iter().filter(|m| m.on) {
             match m.m {
                 Modifier::Weight { amount } => {
-                    adv_extra += 2.0 * amount * upm;
-                    shift += amount * upm;
+                    extra += 2.0 * amount;
+                    shift += amount;
                 }
                 Modifier::Outline { width } => {
-                    adv_extra += width.abs() * upm;
-                    shift += width.abs() * upm * 0.5;
+                    extra += width.abs();
+                    shift += width.abs() * 0.5;
                 }
-                Modifier::Stretch { x, .. } => adv_scale *= x.clamp(0.05, 20.0),
+                Modifier::Stretch { x, .. } => scale *= x.clamp(0.05, 20.0),
                 Modifier::Slant { angle } => slant += angle,
                 _ => {}
             }
         }
-        let mut out = Vec::new();
-        for ch in charset {
-            let (ga, adv_a) = {
-                let f = self.font(&spec.font)?;
-                let face = f.face(&axes_vec(&spec.axes)).ok_or("The font couldn't be opened.")?;
-                let Some(g) = face.glyph_index(ch) else { continue };
-                (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / upm)
+        (scale, extra, shift, slant)
+    }
+
+    /// Final outline of one character in font units (y-down) and its advance.
+    /// `None` when neither the fonts nor the edits define the character.
+    fn font_glyph(&mut self, spec: &FontSpec, ch: char, upm: f64, quality: f64) -> Result<Option<(Geo, f64, bool)>, String> {
+        let edit = spec.glyphs.iter().find(|g| g.ch.starts_with(ch));
+        let morph = spec.morph.as_ref().filter(|m| m.t > 1e-6);
+        let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
+        let base = {
+            let f = self.font(&spec.font)?;
+            let face = f.face(&axes_vec(&spec.axes)).ok_or("The font couldn't be opened.")?;
+            let fu = f.info.units_per_em.max(1) as f64;
+            face.glyph_index(ch).map(|g| (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / fu))
+        };
+        let edited_d = edit.and_then(|e| e.d.as_deref()).filter(|d| !d.trim().is_empty());
+        let (poly, curves, mut adv) = if let Some(d) = edited_d {
+            let cs = svg::parse_path(d)?;
+            let mut poly = flatten_curves(&cs, 0.0006).cleaned(1e-10);
+            normalize_winding(&mut poly);
+            let b = poly.bbox();
+            let fallback = base.map_or(if b.is_empty() { 0.5 } else { b.x1 + 0.08 }, |b| b.1);
+            (poly, Some(cs), fallback)
+        } else {
+            let Some((ga, adv_a)) = base else {
+                return Ok(None);
             };
-            let (poly, curves, adv) = match morph {
+            match morph {
                 None => {
                     let g = self.glyph(&spec.font, &spec.axes, ga)?;
                     (g.poly.clone(), Some(g.curves.clone()), adv_a)
@@ -597,28 +914,84 @@ impl Engine {
                     let mm = self.glyph_morph(&spec.font, &spec.axes, ga, &m.font, &m.axes, gb)?;
                     (mm.at(t), None, adv_a * (1.0 - t) + adv_b * t)
                 }
+            }
+        };
+        if let Some(a) = edit.and_then(|e| e.advance) {
+            adv = a.max(0.0);
+        }
+        let mut mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
+        if let Some(e) = edit {
+            mods.extend(e.modifiers.iter().filter(|m| m.on).cloned());
+        }
+        let em_to_units = Affine::scale(upm, upm);
+        let mut geo = Geo {
+            poly: poly.transformed(&em_to_units),
+            curves: curves.map(|mut cs| {
+                for c in &mut cs {
+                    c.transform(&em_to_units);
+                }
+                cs
+            }),
+        };
+        geo = apply_all(geo, &mods, &Ctx { em: upm, quality });
+        let (scale, extra, shift, _) = Self::spacing_of(&mods);
+        geo.transform(&Affine::translate(shift * upm, 0.0));
+        let advance = (adv * scale + extra + spec.tracking) * upm;
+        Ok(Some((geo, advance.max(0.0), edit.is_some())))
+    }
+
+    /// Previews of some characters of a font spec, in em units.
+    pub fn font_preview(&mut self, spec: &FontSpec, chars: &str) -> Result<Vec<GlyphPreview>, String> {
+        let upm = 1000.0;
+        let quality = spec.quality.unwrap_or(PREVIEW_QUALITY).clamp(40.0, 400.0);
+        let mut out = Vec::new();
+        let back = Affine::scale(1.0 / upm, 1.0 / upm);
+        for ch in chars.chars() {
+            match self.font_glyph(spec, ch, upm, quality)? {
+                Some((mut geo, adv, edited)) => {
+                    geo.poly.transform(&back);
+                    out.push(GlyphPreview { ch: ch.to_string(), d: svg::poly_d(&geo.poly, 4), advance: adv / upm, edited });
+                }
+                None => out.push(GlyphPreview { ch: ch.to_string(), d: String::new(), advance: 0.0, edited: false }),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn export_font(&mut self, spec: &FontSpec) -> Result<Vec<u8>, String> {
+        let info_a = self.font(&spec.font)?.info.clone();
+        let upm = info_a.units_per_em.max(16) as f64;
+        let morph = spec.morph.as_ref().filter(|m| m.t > 1e-6);
+        let info_b = match morph {
+            Some(m) => Some(self.font(&m.font)?.info.clone()),
+            None => None,
+        };
+        let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
+        let lerp_metric = |a: i16, ua: f64, b: Option<(i16, f64)>| -> i16 {
+            let va = a as f64 / ua;
+            let v = match b {
+                Some((b, ub)) => va * (1.0 - t) + (b as f64 / ub) * t,
+                None => va,
             };
-            let em_to_units = Affine::scale(upm, upm);
-            let mut geo = Geo {
-                poly: poly.transformed(&em_to_units),
-                curves: curves.map(|mut cs| {
-                    for c in &mut cs {
-                        c.transform(&em_to_units);
-                    }
-                    cs
-                }),
-            };
-            geo = apply_all(geo, &mods, &ctx);
-            geo.transform(&Affine::translate(shift, 0.0));
+            (v * upm).round() as i16
+        };
+        let ib = info_b.as_ref().map(|i| i.units_per_em.max(1) as f64);
+        let metric = |fa: fn(&FontInfo) -> i16| lerp_metric(fa(&info_a), info_a.units_per_em as f64, info_b.as_ref().map(|b| (fa(b), ib.unwrap_or(1.0))));
+        let quality = spec.quality.unwrap_or(EXPORT_QUALITY).clamp(60.0, 1024.0);
+        let mut out = Vec::new();
+        for ch in Self::font_charset(spec) {
+            let Some((geo, advance, _)) = self.font_glyph(spec, ch, upm, quality)? else { continue };
             let contours = match geo.curves {
                 Some(c) => c,
                 None => fit_shape(&geo.poly, upm / 1600.0, 50.0),
             };
-            out.push(OutGlyph { codepoint: Some(ch as u32), advance: adv * upm * adv_scale + adv_extra, contours });
+            out.push(OutGlyph { codepoint: Some(ch as u32), advance, contours });
         }
         if out.iter().all(|g| g.contours.is_empty()) {
             return Err("None of the requested characters exist in this font.".into());
         }
+        let mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
+        let (_, _, _, slant) = Self::spacing_of(&mods);
         let family = clean_name(&spec.family, "Morphotype");
         let style = clean_name(&spec.style, "Regular");
         let weight = spec.weight_class.unwrap_or_else(|| {
@@ -642,7 +1015,11 @@ impl Engine {
             italic_angle: -slant,
             copyright: spec.copyright.clone().unwrap_or_else(|| format!("Derived from {} with Morphotype", info_a.full_name)),
         };
-        Ok(write_ttf(&meta, &out))
+        let ttf = write_ttf(&meta, &out);
+        Ok(match spec.format.as_deref() {
+            Some("woff") => crate::ttf::to_woff(&ttf),
+            _ => ttf,
+        })
     }
 }
 
@@ -718,6 +1095,30 @@ pub struct FontSpec {
     pub quality: Option<f64>,
     #[serde(default)]
     pub copyright: Option<String>,
+    /// Hand-edited glyphs; characters not in the base font are added.
+    #[serde(default)]
+    pub glyphs: Vec<GlyphEdit>,
+    /// Extra advance for every glyph, in em.
+    #[serde(default)]
+    pub tracking: f64,
+    /// "ttf" (default) or "woff".
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlyphEdit {
+    pub ch: String,
+    /// Replacement outline in em units (y-down, baseline at 0).
+    #[serde(default)]
+    pub d: Option<String>,
+    /// Advance width in em.
+    #[serde(default)]
+    pub advance: Option<f64>,
+    /// Extra modifiers for this glyph, after the font-wide ones.
+    #[serde(default)]
+    pub modifiers: Vec<ModEntry>,
 }
 
 /// Convenience used by tests and the CLI: centre of a shape's bbox.
@@ -747,7 +1148,7 @@ mod tests {
         let mut e = engine();
         let out = e.build(&doc(r#"{"layers":[{"id":"t","content":{"type":"text","text":"MORPH","font":"archivo","size":100}}]}"#));
         let b = out.bbox.unwrap();
-        assert!(!out.d.is_empty());
+        assert!(!out.renders[0].d.is_empty());
         assert!((b[0] + b[2]).abs() < 10.0, "horizontally centred: {b:?}");
         assert!(b[2] - b[0] > 300.0);
         assert!(out.layers[0].error.is_none());
@@ -780,7 +1181,8 @@ mod tests {
               {"id":"a","content":{"type":"symbol","symbol":{"kind":"circle"},"size":100}},
               {"id":"b","op":"subtract","content":{"type":"symbol","symbol":{"kind":"circle"},"size":50}}]}"#,
         );
-        let (geo, _, _) = e.build_geo(&d);
+        let (renders, _) = e.build_scene(&d);
+        let geo = &renders[0].1;
         let expect = std::f64::consts::PI * (2500.0 - 625.0);
         assert!((geo.poly.area() - expect).abs() / expect < 0.02, "{}", geo.poly.area());
     }
@@ -796,6 +1198,70 @@ mod tests {
         );
         let out = e.build(&d);
         assert!(out.layers[2].bbox.is_some(), "{:?}", out.layers[2].error);
+    }
+
+    #[test]
+    fn renders_are_separate_and_clip() {
+        let mut e = engine();
+        let d = doc(
+            r#"{"layers":[
+              {"id":"body","content":{"type":"symbol","symbol":{"kind":"circle"},"size":100}},
+              {"id":"eye","op":"subtract","content":{"type":"symbol","symbol":{"kind":"circle"},"size":40}},
+              {"id":"star","x":300,"sx":2,"content":{"type":"symbol","symbol":{"kind":"star"},"size":100}}],
+              "renders":[{"id":"body","members":["body",{"id":"eye","op":"subtract"}]},{"id":"star","members":["star"],"modifiers":[{"kind":"weight","amount":0.05}]}]}"#,
+        );
+        let out = e.build(&d);
+        assert_eq!(out.renders.len(), 2);
+        assert!(out.renders.iter().all(|r| !r.d.is_empty()));
+        // Stretched star is twice as wide as tall (before the weight grows it).
+        let sb = out.layers[2].bbox.unwrap();
+        assert!((sb[2] - sb[0]) > 1.7 * (sb[3] - sb[1]), "{sb:?}");
+        assert!(out.layers[0].d.as_deref().is_some_and(|d| d.starts_with('M')));
+        let (renders, _) = e.build_scene(&d);
+        let expect = std::f64::consts::PI * (2500.0 - 400.0);
+        assert!((renders[0].1.poly.area() - expect).abs() / expect < 0.02);
+        let paths = e.export_paths(&d);
+        assert_eq!(paths.paths.len(), 2);
+    }
+
+    #[test]
+    fn bake_and_split() {
+        let mut e = engine();
+        let d = doc(r#"{"layers":[{"id":"t","x":10,"content":{"type":"text","text":"Hi!","font":"archivo","size":100}}]}"#);
+        let baked = e.bake(&d, "t").unwrap();
+        assert_eq!(baked.size, 100.0);
+        let pd = doc(&format!(r#"{{"layers":[{{"id":"p","x":10,"content":{{"type":"path","d":"{}","size":100}}}}]}}"#, baked.d));
+        let (a, b) = (e.build(&d).bbox.unwrap(), e.build(&pd).bbox.unwrap());
+        for k in 0..4 {
+            assert!((a[k] - b[k]).abs() < 1.0, "{a:?} vs {b:?}");
+        }
+        // H, i (stem + dot together), ! (bar + dot together).
+        let pieces = e.split(&d, "t").unwrap();
+        assert_eq!(pieces.len(), 3, "{pieces:?}");
+        assert!(pieces[0].x < pieces[1].x && pieces[1].x < pieces[2].x);
+    }
+
+    #[test]
+    fn glyph_paths_and_font_edits() {
+        let mut e = engine();
+        let g = e.glyph_path("archivo", &BTreeMap::new(), 'O').unwrap();
+        assert!(g.exists && g.advance > 0.4 && g.d.contains('M'));
+        assert!(!e.glyph_path("archivo", &BTreeMap::new(), '☃').unwrap().exists);
+        let spec: FontSpec = serde_json::from_str(
+            r#"{"font":"archivo","family":"Edit Test","charset":"AB","tracking":0.05,"format":"woff",
+            "modifiers":[{"kind":"pixelate","size":0.08,"shape":"dot","gap":0.1}],
+            "glyphs":[{"ch":"☃","d":"M0 0L0.5 -0.7L1 0Z","advance":1.1},{"ch":"B","modifiers":[{"kind":"slant","angle":10}]}]}"#,
+        )
+        .unwrap();
+        let prev = e.font_preview(&spec, "A☃").unwrap();
+        assert!(!prev[0].d.is_empty() && prev[1].edited);
+        assert!((prev[1].advance - 1.15).abs() < 1e-6);
+        let woff = e.export_font(&spec).unwrap();
+        assert_eq!(&woff[0..4], b"wOFF");
+        let ttf = crate::font::to_sfnt(&woff).unwrap();
+        let face = rustybuzz::ttf_parser::Face::parse(&ttf, 0).unwrap();
+        assert!(face.glyph_index('☃').is_some());
+        assert!(face.glyph_index('A').is_some());
     }
 
     #[test]
