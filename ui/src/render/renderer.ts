@@ -348,6 +348,11 @@ export class Renderer {
     return { x, y, w, h };
   }
 
+  /** Artboard point at the middle of the visible canvas. */
+  viewCentre() {
+    return this.toArt(this.canvas.clientWidth / 2, this.canvas.clientHeight / 2);
+  }
+
   /** CSS pixel (relative to canvas) → artboard coordinates (origin at centre). */
   toArt(px: number, py: number) {
     const r = this.artRect();

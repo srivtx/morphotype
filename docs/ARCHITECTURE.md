@@ -83,6 +83,8 @@ Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI gen
 - A small external store (`useSyncExternalStore`) holds the project. Undo history stores immutable snapshots. Edits that share a key merge into one undo step: within a pointer gesture always, otherwise within 700 ms, so one drag or slider move is one step.
 - `app/commands.ts` is the single list of user actions with their shortcuts. The keyboard handler, command palette, context menus and help sheet all read it, which is how everything stays reachable from the keyboard.
 - Canvas overlays (selection frame, handles, smart guides, point editor, warp net) are SVG drawn over the WebGL canvas in screen space, using the per-layer outlines and local boxes the engine returns.
+- Typing on the canvas uses a hidden textarea for input, selection and IME, and draws the caret and selection from the engine's own layout (`text_layout` shares the shaping code with the outline builder, so carets always match the letters). Modifiers that move letters (warp, arc, wave, slant, stretch, perspective) pause on that layer while typing.
+- Materials have colour roles (`render/palette.ts`): one picked colour generates every role (shadow, base, light, highlight…) in OKLCH, which is how a single swatch recolours chrome or puffy believably.
 - `EngineClient` handles worker RPC with latest-wins builds and crash recovery.
 - `platform/` hides the web/desktop differences: file dialogs, saving, system fonts and font install.
 
@@ -91,6 +93,6 @@ Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI gen
 1. **Kerning carry-over**: interpolate pair kerning from GPOS/kern of both sources; add a class-based kerning editor.
 2. **Variable font export**: export the morph axis (and weight/round) as a real `fvar`/`gvar` variable font. The morph correspondence is already point-compatible, which is the hard part.
 3. **WOFF2 import** via a pure-Rust Brotli decoder.
-4. **More effects**: halftone, risograph, holographic foil, extrude 3D, plus video loop export for animated chrome and neon.
+4. **More effects**: video loop export for animated chrome and neon, and image layers with halftone and duotone filters.
 5. **Metal path**: if profiling on Apple silicon shows WebGL overhead, move the SDF and effects to `wgpu`, which the Rust core can call directly.
 6. **Signing and notarisation** for the `.dmg` in CI once an Apple Developer ID is available.

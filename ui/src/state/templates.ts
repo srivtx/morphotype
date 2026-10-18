@@ -1,10 +1,10 @@
 // Starting points. Each one is a small, fully editable document.
-import { background, fill, group, mods, style, symbolLayer, textLayer, tile, type Background, type Node, type Project } from './model';
+import { background, fill, group, mods, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer } from './model';
 
 export interface Template {
   name: string;
   hint: string;
-  category: 'Logo' | 'Icon' | 'Type' | 'Social';
+  category: 'Logo' | 'Icon' | 'Type' | 'Social' | 'Print';
   make: () => Project;
 }
 
@@ -258,6 +258,143 @@ export const TEMPLATES: Template[] = [
         ],
         solid('#f2ede4', { grain: 0.25 }),
         { width: 1080, height: 1080 },
+      ),
+  },
+  {
+    name: 'Critter icons',
+    hint: 'Five mascot app icons on a pastel sky',
+    category: 'Icon',
+    make: () => {
+      const black = INK('#0a0a0a');
+      const critter = (i: number, x: number, tileColor: string, body: ShapeLayer, eyeY = -6) => {
+        body.x = x;
+        return group(
+          [
+            symbolLayer('roundRect', 240, { x, name: 'Tile', style: style('flat', { fill: tileColor }) }, { radius: 0.11, aspect: 1 }),
+            body,
+            symbolLayer('eyes', 64, { x, y: eyeY, style: INK('#ffffff'), name: 'Eyes' }, { gap: 0.5, width: 0.2, height: 0.34 }),
+          ],
+          { name: `Critter ${i + 1}` },
+        );
+      };
+      return project(
+        'Critter icons',
+        [
+          critter(0, -560, '#f2252c', symbolLayer('sparkle', 170, { style: black }, { pinch: 0.42 })),
+          critter(1, -280, '#ffe95c', symbolLayer('rays', 160, { style: black }, { rays: 13, short: 0.82, inner: 0.36, jitter: 0.5, seed: 4 })),
+          critter(2, 0, '#2bd065', symbolLayer('polygon', 170, { rotation: 45, style: black, modifiers: mods({ kind: 'pixelate', size: 0.12, shape: 'square', gap: 0 }) }, { sides: 4, rounding: 0 })),
+          critter(3, 280, '#3388f5', symbolLayer('roundRect', 180, { style: black, modifiers: mods({ kind: 'pixelate', size: 0.075, shape: 'square', gap: 0 }) }, { radius: 0.22, aspect: 2.2 })),
+          critter(4, 560, '#b360fa', symbolLayer('polygon', 180, { rotation: 180, y: 8, style: black }, { sides: 3, rounding: 0.18 }), -14),
+        ],
+        background({ ...fill('linear', '#9fd4fb', '#fbe1d0', '#f9a8cf'), angle: 180 }, { grain: 0.15 }),
+        { width: 1600, height: 900 },
+      );
+    },
+  },
+  {
+    name: 'Mascot card',
+    hint: 'Business card with a smiling wordmark and a blind emboss',
+    category: 'Print',
+    make: () => {
+      const cream = style('flat', { fill: '#f4ead8', texture: 0.6 });
+      const red = INK('#e8442e');
+      const face = (x: number) =>
+        group(
+          [
+            symbolLayer('squircle', 196, { x, y: 60, style: cream, name: 'O' }, { exponent: 4.5, aspect: 1.08 }),
+            symbolLayer('eyes', 120, { x, y: 40, style: red, name: 'Eyes' }, { gap: 0.82, width: 0.11, height: 0.11 }),
+            symbolLayer('smile', 64, { x, y: 74, style: red, name: 'Smile' }, { curve: 0.55, weight: 0.3 }),
+          ],
+          { name: 'Face' },
+        );
+      return project(
+        'Mascot card',
+        [
+          group([symbolLayer('ring', 150, { x: -380, y: -170, style: style('emboss') }, { thickness: 0.16 }), symbolLayer('ring', 66, { x: -380, y: -170, style: style('emboss') }, { thickness: 0.3 })], { name: 'Emboss' }),
+          textLayer('M', 'dela-gothic', { x: -320, y: 60, style: cream }, { size: 250 }),
+          face(-110),
+          textLayer('J', 'dela-gothic', { x: 100, y: 60, style: cream }, { size: 250 }),
+          face(300),
+          textLayer('hola@mojo.studio', 'playfair', { y: -220, x: 250, style: INK('#f4ead8'), name: 'Email' }, { size: 26, tracking: 0.04 }),
+        ],
+        solid('#e8442e', { grain: 0.3 }),
+        { width: 1050, height: 600 },
+      );
+    },
+  },
+  {
+    name: 'Pixel ID card',
+    hint: 'Pixel wordmark over a lime starburst on cream',
+    category: 'Print',
+    make: () =>
+      project(
+        'Pixel ID card',
+        [
+          symbolLayer('rays', 560, { x: 120, rotation: 8, style: INK('#b8f59a'), name: 'Burst' }, { rays: 11, short: 0.55, inner: 0.12, jitter: 0.6, seed: 7 }),
+          textLayer('NOVA', 'silkscreen', { x: 120, y: 0, style: INK('#5b5b5b') }, { size: 200 }),
+          textLayer('NOVA', 'bungee', { x: -330, y: -200, style: style('flat', { fill: '#e8336d', texture: 0.4 }), modifiers: mods({ kind: 'ink', amount: 0.03, scale: 0.4, seed: 5 }), name: 'Label' }, { size: 90 }),
+          textLayer('designer', 'space-grotesk', { x: 330, y: -220, style: INK('#1a1a1a'), name: 'Role' }, { size: 44 }),
+          textLayer('logos · posters · identity', 'inter', { x: 120, y: 230, style: INK('#1a1a1a'), name: 'Tags' }, { size: 26 }),
+          symbolLayer('sparkle', 60, { x: 430, y: 230, style: INK('#e8336d') }, { pinch: 0.6 }),
+        ],
+        solid('#f3efe6', { grain: 0.35 }),
+        { width: 1011, height: 638 },
+      ),
+  },
+  {
+    name: 'Star lockup',
+    hint: 'Four-point star mark beside a stacked wordmark',
+    category: 'Logo',
+    make: () =>
+      project(
+        'Star lockup',
+        [
+          symbolLayer('sparkle', 400, { x: -400, style: INK(), name: 'Mark' }, { pinch: 0.45 }),
+          symbolLayer('squircle', 46, { x: -400, op: 'subtract', name: 'Window' }, { exponent: 12, aspect: 1 }),
+          textLayer('Nova\nDesign\nLab', 'inter-black', { x: -150, y: 20, style: INK(), name: 'Wordmark' }, { size: 120, lineHeight: 0.92, tracking: -0.03, align: 'left' }),
+          textLayer('®', 'inter-black', { x: -215, y: -150, style: INK(), name: 'Registered' }, { size: 56 }),
+        ],
+        solid('#ffffff'),
+        { width: 1600, height: 900 },
+      ),
+  },
+  {
+    name: 'Badge row',
+    hint: 'Letters in rings with a star in the middle',
+    category: 'Logo',
+    make: () => {
+      const letters = ['S', 'T', '', 'U', 'D', 'O'];
+      return project(
+        'Badge row',
+        letters.map((ch, i) => {
+          const x = (i - 2.5) * 170;
+          return group(
+            [
+              symbolLayer('ring', 150, { x, style: INK() }, { thickness: 0.08 }),
+              ch ? textLayer(ch, 'inter-black', { x, style: INK() }, { size: 80 }) : symbolLayer('sparkle', 90, { x, style: INK() }, { pinch: 0.55 }),
+            ],
+            { name: ch || 'Star' },
+          );
+        }),
+        solid('#ffffff'),
+        { width: 1400, height: 500 },
+      );
+    },
+  },
+  {
+    name: 'Riso zine',
+    hint: 'Overprinted risograph type with halftone dots',
+    category: 'Print',
+    make: () =>
+      project(
+        'Riso zine',
+        [
+          symbolLayer('circle', 640, { y: -120, style: style('halftone', { ink: '#ffd23f', cell: 16, ramp: 1, rampAngle: 200 }), name: 'Sun' }),
+          textLayer('ZINE', 'archivo', { y: 240, style: style('riso'), modifiers: mods({ kind: 'ink', amount: 0.01, scale: 0.4, seed: 2 }) }, { size: 300, tracking: -0.02 }),
+          textLayer('issue no. 3', 'space-grotesk', { y: -560, style: INK('#2b6bff'), name: 'Issue' }, { size: 40, tracking: 0.1 }),
+        ],
+        solid('#f4f1ea', { grain: 0.3 }),
+        { width: 1080, height: 1350 },
       ),
   },
 ];

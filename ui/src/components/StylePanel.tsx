@@ -10,7 +10,7 @@ import { edit, setSettings, useStore } from '../state/store';
 import { findNode } from '../state/tree';
 import { ColorField } from './ColorPicker';
 import { Icon } from './icons';
-import { IconButton, Section, Slider } from './ui';
+import { IconButton, Section, Slider, Toggle } from './ui';
 
 // One shared sample outline for every preview card.
 let sample: Promise<{ d: string; bbox: [number, number, number, number] | null }> | null = null;
@@ -45,6 +45,14 @@ function PresetCard({ p, active, onApply }: { p: Preset; active: boolean; onAppl
       <span className="preset-name">{p.name}</span>
     </button>
   );
+}
+
+/** Small preview of a material (its default look), cached. */
+export function EffectThumb({ id }: { id: string }) {
+  const e = effectById(id);
+  const preset = PRESETS.find((p) => p.effect === e.id);
+  const url = useThumb(`effect:${e.id}`, () => styleScene(e, defaultParams(e), preset?.bg ?? '#111114'));
+  return url ? <img src={url} alt="" draggable={false} /> : <span className="shimmer" />;
 }
 
 function EffectCard({ e, active, onPick }: { e: EffectDef; active: boolean; onPick: () => void }) {
@@ -155,6 +163,8 @@ export function StylePanel() {
           .map((p) =>
             p.type === 'color' ? (
               <ColorField key={p.key} label={p.label} value={String(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+            ) : p.min === 0 && p.max === 1 && p.step === 1 ? (
+              <Toggle key={p.key} label={p.label} checked={Number(st.params[p.key] ?? p.default) > 0.5} onChange={(v) => setParam(p.key, v ? 1 : 0)} />
             ) : (
               <Slider key={p.key} label={p.label} min={p.min} max={p.max} step={p.step} reset={p.default} value={Number(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
             ),

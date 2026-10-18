@@ -56,6 +56,21 @@ pub enum Symbol {
     Bolt,
     /// Crescent; `phase` 0 = thin sliver, 1 = nearly full.
     Moon { #[serde(default = "d::<40>")] phase: f64 },
+    /// A smiling mouth: a thick arc with round ends. Negative `curve` frowns.
+    Smile { #[serde(default = "d::<50>")] curve: f64, #[serde(default = "d::<35>")] weight: f64 },
+    /// Spiky starburst with alternating long and short rays.
+    Rays {
+        #[serde(default = "d::<1200>")]
+        rays: f64,
+        #[serde(default = "d::<55>")]
+        short: f64,
+        #[serde(default = "d::<18>")]
+        inner: f64,
+        #[serde(default)]
+        jitter: f64,
+        #[serde(default)]
+        seed: u32,
+    },
 }
 
 const SEG: usize = 256;
@@ -412,6 +427,55 @@ pub fn build(sym: &Symbol) -> Shape {
             }
             Shape::new(vec![pts])
         }
+        Symbol::Smile { curve, weight } => {
+            let c = curve.clamp(-1.0, 1.0);
+            let w = weight.clamp(0.05, 1.0) * 0.3;
+            let h = (0.08 + c.abs() * 1.3).min(1.45);
+            // Chord of 0.9 minus the caps, whatever the curve.
+            let r = (0.45 - w / 2.0) / h.sin();
+            let sag = r - r * h.cos();
+            let sign = if c < 0.0 { -1.0 } else { 1.0 };
+            // y-down: π/2 points at the bottom of the circle.
+            let mid = if sign > 0.0 { PI / 2.0 } else { -PI / 2.0 };
+            let centre = pt(0.0, -sign * (r - sag / 2.0));
+            let n = 64;
+            let at = |rad: f64, a: f64| pt(centre.x + rad * a.cos(), centre.y + rad * a.sin());
+            let mut pts = Vec::new();
+            for k in 0..=n {
+                pts.push(at(r + w / 2.0, mid - h + 2.0 * h * k as f64 / n as f64));
+            }
+            let cap = |pts: &mut Vec<Pt>, a: f64, from_out: bool| {
+                let e = at(r, a);
+                let dir = if from_out { a } else { a + PI };
+                for k in 1..16 {
+                    let t = dir + PI * k as f64 / 16.0 * if from_out == (sign > 0.0) { 1.0 } else { -1.0 } * sign;
+                    pts.push(pt(e.x + w / 2.0 * t.cos(), e.y + w / 2.0 * t.sin()));
+                }
+            };
+            cap(&mut pts, mid + h, true);
+            for k in 0..=n {
+                pts.push(at(r - w / 2.0, mid + h - 2.0 * h * k as f64 / n as f64));
+            }
+            cap(&mut pts, mid - h, false);
+            Shape::new(vec![pts])
+        }
+        Symbol::Rays { rays, short, inner, jitter, seed } => {
+            let n = (rays.round() as usize).clamp(3, 48);
+            let ri = inner.clamp(0.05, 0.45);
+            let mut pts = Vec::with_capacity(n * 4);
+            for k in 0..n * 2 {
+                let a = -PI / 2.0 + k as f64 / (n * 2) as f64 * TAU;
+                if k % 2 == 0 {
+                    let long = (k / 2) % 2 == 0;
+                    let j = 1.0 - jitter.clamp(0.0, 1.0) * 0.45 * (noise2(k as f64 * 1.37, 0.5, *seed) * 0.5 + 0.5);
+                    let ro = if long { 0.5 } else { (ri + (0.5 - ri) * short.clamp(0.0, 1.0)).max(ri + 0.02) } * j;
+                    pts.push(pt(ro.max(ri + 0.02) * a.cos(), ro.max(ri + 0.02) * a.sin()));
+                } else {
+                    pts.push(pt(ri * a.cos(), ri * a.sin()));
+                }
+            }
+            Shape::new(vec![pts])
+        }
     };
     normalize_winding(&mut s);
     s
@@ -432,7 +496,8 @@ mod tests {
             r#"[{"kind":"circle"},{"kind":"ring"},{"kind":"squircle"},{"kind":"roundRect"},{"kind":"polygon","rounding":0.3},
             {"kind":"star","rounding":0.2},{"kind":"sparkle"},{"kind":"burst"},{"kind":"pin"},{"kind":"cursor"},{"kind":"blob","wobble":1},
             {"kind":"eyes"},{"kind":"heart"},{"kind":"plus"},{"kind":"catHead"},{"kind":"bubble"},{"kind":"spiral"},
-            {"kind":"flower"},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1}]"#,
+            {"kind":"flower"},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1},
+            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3}]"#,
         )
         .unwrap();
         for s in &all {

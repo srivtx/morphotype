@@ -5,8 +5,9 @@ import type { SymbolKind } from '../engine/types';
 import type { IconName } from '../components/icons';
 import { platform } from '../platform';
 import { PRESETS } from '../render/effects';
-import { CANVAS_PRESETS, isGroup, newModifier, SYMBOL_UI, symbolLayer, textLayer } from '../state/model';
+import { CANVAS_PRESETS, isGroup, newModifier, SYMBOL_UI, symbolLayer } from '../state/model';
 import { edit, redo, select, setSettings, store, undo } from '../state/store';
+import { ancestors } from '../state/tree';
 import {
   addShape,
   alignSelected,
@@ -21,6 +22,8 @@ import {
   distributeSelected,
   duplicateSelected,
   editPoints,
+  editText,
+  endTextEdit,
   exportJPG,
   exportPNG,
   exportSVG,
@@ -37,6 +40,7 @@ import {
   saveProject,
   selectAll,
   selectedNodes,
+  startText,
   toggleLocked,
   toggleVisible,
   ungroupSelected,
@@ -64,7 +68,6 @@ const primaryShape = () => {
   return n && !isGroup(n) ? n : undefined;
 };
 const fire = (name: string, detail?: unknown) => window.dispatchEvent(new CustomEvent(name, { detail }));
-const firstFont = () => store.get().fonts[0]?.id ?? 'archivo';
 
 export function commands(): Command[] {
   const list: Command[] = [
@@ -89,7 +92,20 @@ export function commands(): Command[] {
     { id: 'duplicate', title: 'Duplicate', group: 'Edit', icon: 'duplicate', keys: ['mod+d'], when: hasSel, run: () => duplicateSelected() },
     { id: 'delete', title: 'Delete', group: 'Edit', icon: 'trash', keys: ['backspace', 'delete'], when: hasSel, run: removeSelected },
     { id: 'select-all', title: 'Select all', group: 'Edit', keys: ['mod+a'], run: selectAll },
-    { id: 'deselect', title: 'Deselect / leave editing', group: 'Edit', keys: ['escape'], run: () => (store.get().editing ? store.set({ editing: null }) : select([])) },
+    {
+      id: 'deselect',
+      title: 'Deselect / leave editing',
+      group: 'Edit',
+      keys: ['escape'],
+      run: () => {
+        const s = store.get();
+        if (s.editing?.kind === 'text') endTextEdit();
+        else if (s.editing) store.set({ editing: null });
+        else if (s.tool !== 'select') store.set({ tool: 'select' });
+        else select([]);
+      },
+    },
+    { id: 'select-parent', title: 'Select parent group', group: 'Edit', keys: ['shift+enter'], hidden: true, when: hasSel, run: () => selectParent() },
     { id: 'copy-style', title: 'Copy style', group: 'Edit', icon: 'droplet', keys: ['alt+mod+c'], when: hasSel, run: copyStyle },
     { id: 'paste-style', title: 'Paste style', group: 'Edit', icon: 'droplet', keys: ['alt+mod+v'], when: hasSel, run: pasteStyle },
     { id: 'next-layer', title: 'Select next layer', group: 'Edit', keys: ['tab'], hidden: true, run: () => cycle(1) },
@@ -98,7 +114,8 @@ export function commands(): Command[] {
     { id: 'tool-select', title: 'Select tool', group: 'Tools', icon: 'select', keys: ['v'], run: () => store.set({ tool: 'select' }) },
     { id: 'tool-hand', title: 'Hand tool (pan)', group: 'Tools', icon: 'hand', keys: ['h'], run: () => store.set({ tool: 'hand' }) },
     // Add
-    { id: 'add-text', title: 'Add text', group: 'Add', icon: 'text', keys: ['t'], run: () => addShape(textLayer('Type', firstFont())) },
+    { id: 'tool-text', title: 'Text tool (click the canvas to type)', group: 'Tools', icon: 'text', keys: ['t'], keywords: 'type write words', run: () => store.set({ tool: 'text', editing: null }) },
+    { id: 'add-text', title: 'Add text in the middle', group: 'Add', icon: 'text', keywords: 'type write words', run: () => startText() },
     { id: 'add-squircle', title: 'Add squircle', group: 'Add', icon: 'tile', keys: ['r'], run: () => addShape(symbolLayer('squircle')) },
     { id: 'add-circle', title: 'Add circle', group: 'Add', icon: 'shapes', keys: ['o'], run: () => addShape(symbolLayer('circle')) },
     ...(Object.keys(SYMBOL_UI) as SymbolKind[]).map(
@@ -127,7 +144,7 @@ export function commands(): Command[] {
     { id: 'outline', title: 'Convert to outline', group: 'Shape', icon: 'outline', keys: ['alt+mod+o'], keywords: 'bake path flatten', when: () => !!primaryShape(), run: () => void convertToOutline(primaryShape()!.id) },
     { id: 'break', title: 'Break apart into letters / pieces', group: 'Shape', icon: 'scissors', keys: ['shift+mod+b'], keywords: 'split separate release compound', when: () => !!primaryShape(), run: () => void breakApart(primaryShape()!.id) },
     { id: 'points', title: 'Edit points', group: 'Shape', icon: 'points', keys: ['p'], keywords: 'nodes bezier pen vector', when: () => !!primaryShape() && design(), run: () => void editPoints(primaryShape()!.id) },
-    { id: 'enter', title: 'Edit text, enter group or edit points', group: 'Edit', keys: ['enter'], hidden: true, when: () => store.get().selection.length > 0 && design(), run: () => enter() },
+    { id: 'enter', title: 'Edit text, enter group or edit points', group: 'Edit', keys: ['enter'], hidden: true, when: () => (store.get().selection.length > 0 || store.get().tool === 'text') && design(), run: () => enter() },
     {
       id: 'add-warp',
       title: 'Warp (envelope)',
@@ -171,6 +188,7 @@ export function commands(): Command[] {
     // Help
     { id: 'palette', title: 'Search commands', group: 'Help', icon: 'search', keys: ['mod+k', 'mod+p', 'mod+/'], hidden: true, run: () => store.set({ dialog: { kind: 'palette' } }) },
     { id: 'settings', title: 'Settings…', group: 'Help', icon: 'settings', keys: ['mod+,'], keywords: 'preferences options', run: () => store.set({ dialog: { kind: 'settings' } }) },
+    { id: 'type-basics', title: 'Type basics: parts of a letter, spacing, naming', group: 'Help', icon: 'type', keywords: 'typography cap height x-height baseline kerning tutorial learn font', run: () => store.set({ dialog: { kind: 'typeGuide' } }) },
     { id: 'help', title: 'How to use Morphotype and shortcuts', group: 'Help', icon: 'help', keys: ['?', 'shift+/'], keywords: 'guide keyboard tutorial', run: () => store.set({ dialog: { kind: 'help' } }) },
   ];
   // Style presets and canvas sizes are searchable too.
@@ -216,8 +234,20 @@ function cycle(dir: 1 | -1) {
   select([next.id]);
 }
 
+/** Shift+Enter: select the group around the selection. */
+function selectParent() {
+  const s = store.get();
+  const id = s.selection.at(-1);
+  const parent = id ? [...ancestors(s.project.layers, id)].at(-1) : undefined;
+  if (parent) select([parent.id]);
+}
+
 /** Enter: edit the text, step into a group, or edit points. */
 function enter() {
+  if (store.get().tool === 'text') {
+    startText();
+    return;
+  }
   const n = primaryNode();
   if (!n) return;
   if (isGroup(n)) {
@@ -225,8 +255,7 @@ function enter() {
     return;
   }
   if (n.content.type === 'text') {
-    store.set({ tab: 'design' });
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.text-input')?.focus());
+    editText(n.id, undefined, true);
     return;
   }
   void editPoints(n.id);

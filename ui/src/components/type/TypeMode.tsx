@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { importImage } from '../../app/actions';
-import { addCharacters, CHARSETS, customizeGlyph, editType, ensureTypeProject, exportFontFile, exportWebKit, installOnMac, removeCharacter, resetGlyph, specOf, useInDesign } from '../../app/typeActions';
+import { addCharacters, CHARSETS, closeTypeProject, customFontId, customizeGlyph, editType, exportFontFile, exportWebKit, installOnMac, removeCharacter, resetGlyph, specOf } from '../../app/typeActions';
+import { TypeStart } from './TypeStart';
+import { TYPE_TERMS } from './TypeGuide';
+import { Tour } from '../Tour';
 import { engine } from '../../engine/client';
 import type { GlyphPreview, ModEntry } from '../../engine/types';
 import { platform } from '../../platform';
 import { uid, type TypeProject } from '../../state/model';
 import { SHAPE_RECIPES } from '../../state/recipes';
-import { store, toast, undo, useStore } from '../../state/store';
+import { setSettings, store, toast, undo, useStore } from '../../state/store';
 import { PathPointEditor } from '../canvas/PointEditor';
 import { FontPicker } from '../FontPicker';
 import { Icon } from '../icons';
 import { Modifiers } from '../Inspector';
-import { IconButton, Section, Segmented, Slider } from '../ui';
+import { IconButton, Menu, MenuItem, MenuSep, Section, Segmented, Slider } from '../ui';
 
 const FILTERS = [
   { value: 'all', label: 'All' },
@@ -78,11 +81,9 @@ function metricsOf(t: TypeProject) {
 export function TypeMode() {
   const type = useStore((s) => s.project.type);
   const ready = useStore((s) => s.ready);
-  useEffect(() => {
-    if (ready && !type) ensureTypeProject();
-  }, [ready, type]);
   const { map, busy } = usePreviews(type);
-  if (!type) return <div className="workspace type-mode" />;
+  if (!ready) return <div className="workspace type-mode" />;
+  if (!type) return <TypeStart />;
   return (
     <main className="workspace type-mode">
       <aside className="panel left">
@@ -93,10 +94,9 @@ export function TypeMode() {
         <Tester t={type} />
       </section>
       <aside className="panel right">
-        <div className="panel-scroll">
-          <FontPanel t={type} previews={map} />
-        </div>
+        <FontPanel t={type} previews={map} />
       </aside>
+      <TypeTour />
     </main>
   );
 }
@@ -174,13 +174,16 @@ function GlyphGrid({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
 
 function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<string, GlyphPreview>; busy: boolean }) {
   const glyph = useStore((s) => s.glyph);
+  const fonts = useStore((s) => s.fonts);
   const ref = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [size, setSize] = useState({ w: 600, h: 500 });
   const [base, setBase] = useState<{ d: string; advance: number; exists: boolean } | null>(null);
+  const [term, setTerm] = useState<{ key: string; x: number; y: number } | null>(null);
   const edit = t.glyphs[glyph];
   const p = previews.get(glyph);
   const m = metricsOf(t);
+  const baseName = fonts.find((f) => f.id === t.base)?.name ?? 'the base font';
   useEffect(() => {
     const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }));
     if (ref.current) ro.observe(ref.current);
@@ -201,16 +204,25 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
   const ox = size.w / 2 - (adv / 2) * k;
   const oy = size.h / 2 + ((m.asc + m.desc) / 2) * k;
   const S = (q: { x: number; y: number }) => ({ x: ox + q.x * k, y: oy + q.y * k });
-  const line = (y: number, label: string, cls = '') => (
+  const line = (y: number, label: string, key: string, cls = '') => (
     <g className={`metric ${cls}`}>
       <line x1={0} x2={size.w} y1={oy + y * k} y2={oy + y * k} />
-      <text x={8} y={oy + y * k - 5}>
-        {label}
+      <text
+        x={8}
+        y={oy + y * k - 5}
+        className="metric-label"
+        onClick={(e) => setTerm(term?.key === key ? null : { key, x: e.nativeEvent.offsetX, y: oy + y * k })}
+      >
+        {label} ⓘ
       </text>
     </g>
   );
   const all = [...t.charset];
   const idx = all.indexOf(glyph);
+  const drawn = !!edit?.d;
+  const empty = !drawn && p && !p.d;
+  // In a blank font the base outline is only a guide to trace over.
+  const guide = base?.exists && (t.blank || drawn);
   return (
     <div className="glyph-stage">
       <div className="glyph-toolbar">
@@ -218,25 +230,27 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
         <span className="glyph-title">
           <strong>{glyph}</strong>
           <span className="dim">U+{glyph.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}</span>
-          {!base?.exists && !edit?.d && <span className="badge mask">Not in base font</span>}
-          {edit?.d && <span className="badge merge">Edited</span>}
+          {!t.blank && !base?.exists && !drawn && <span className="badge mask">Not in base font</span>}
+          {drawn && <span className="badge merge">{t.blank ? 'Drawn' : 'Edited'}</span>}
         </span>
         <IconButton icon="chevronRight" title="Next glyph" onClick={() => store.set({ glyph: all[(idx + 1) % all.length] })} />
         <span className="spacer" />
         {busy && <span className="dim small">Updating…</span>}
-        {!edit?.d ? (
-          <button className="btn small" onClick={() => void customizeGlyph(glyph)}>
-            <Icon name="points" size={13} /> {base?.exists ? 'Edit points' : 'Draw this glyph'}
-          </button>
+        {!drawn ? (
+          !empty && (
+            <button className="btn small" onClick={() => void customizeGlyph(glyph, 'base')}>
+              <Icon name="points" size={13} /> Edit points
+            </button>
+          )
         ) : (
           <button
             className="btn small"
             onClick={() => {
               resetGlyph(glyph);
-              toast(`Reset “${glyph}”`, 'info', { label: 'Undo', run: undo });
+              toast(t.blank ? `Cleared “${glyph}”` : `Reset “${glyph}”`, 'info', { label: 'Undo', run: undo });
             }}
           >
-            <Icon name="reset" size={13} /> Reset
+            <Icon name="reset" size={13} /> {t.blank ? 'Clear' : 'Reset'}
           </button>
         )}
         <button className="btn small" onClick={() => void importImage(undefined, 'glyph')}>
@@ -245,21 +259,24 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
       </div>
       <div className="glyph-canvas" ref={ref}>
         <svg ref={svgRef} width={size.w} height={size.h}>
-          {line(m.desc * -1, 'Descender', 'soft')}
-          {line(0, 'Baseline', 'base')}
-          {line(-m.x, 'x-height', 'soft')}
-          {line(-m.cap, 'Cap height')}
-          {line(-m.asc, 'Ascender', 'soft')}
+          {line(m.desc * -1, 'Descender', 'descender', 'soft')}
+          {line(0, 'Baseline', 'baseline', 'base')}
+          {line(-m.x, 'x-height', 'xheight', 'soft')}
+          {line(-m.cap, 'Cap height', 'cap')}
+          {line(-m.asc, 'Ascender', 'ascender', 'soft')}
           <line className="metric side" x1={ox} x2={ox} y1={0} y2={size.h} />
           <line className="metric side" x1={ox + adv * k} x2={ox + adv * k} y1={0} y2={size.h} />
+          <text className="metric-label adv-label" x={ox + (adv * k) / 2} y={size.h - 34} textAnchor="middle" onClick={(e) => setTerm(term?.key === 'advance' ? null : { key: 'advance', x: e.nativeEvent.offsetX, y: size.h - 150 })}>
+            Width {adv.toFixed(2)} em ⓘ
+          </text>
           <g transform={`matrix(${k},0,0,${k},${ox},${oy})`}>
-            {edit?.d && base?.exists && <path className="glyph-base" d={base.d} />}
+            {guide && <path className="glyph-base" d={base!.d} />}
             {p?.d && <path className="glyph-fill" d={p.d} />}
           </g>
-          {edit?.d && (
+          {drawn && (
             <PathPointEditor
               key={glyph}
-              d={edit.d}
+              d={edit!.d!}
               scale={1}
               pxPerUnit={k}
               toScreen={S}
@@ -273,18 +290,33 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
             />
           )}
         </svg>
-        {!edit?.d && p && !p.d && (
-          <div className="glyph-empty">
-            <p>
-              “{glyph}” isn't in {store.get().fonts.find((f) => f.id === t.base)?.name ?? 'the base font'}.
-            </p>
-            <button className="btn primary" onClick={() => void customizeGlyph(glyph)}>
-              Draw it
+        {term && (
+          <div className="term-tip" style={{ left: Math.min(term.x, size.w - 280), top: term.y + 10 }} role="note">
+            <strong>{TYPE_TERMS[term.key].name}</strong>
+            <p>{TYPE_TERMS[term.key].text}</p>
+            <button className="link-btn" onClick={() => (setTerm(null), store.set({ dialog: { kind: 'typeGuide', topic: term.key === 'advance' ? 'spacing' : 'anatomy' } }))}>
+              Learn more
             </button>
           </div>
         )}
+        {empty && (
+          <div className="glyph-empty">
+            <p>{t.blank ? `“${glyph}” isn't drawn yet.` : `“${glyph}” isn't in ${baseName}.`}</p>
+            <div className="button-row">
+              <button className="btn primary" onClick={() => void customizeGlyph(glyph, 'scratch')}>
+                <Icon name="points" size={13} /> Start from a block
+              </button>
+              {base?.exists && (
+                <button className="btn" onClick={() => void customizeGlyph(glyph, 'base')} data-tip={`Copy ${baseName}'s outline and reshape it`}>
+                  Copy the guide
+                </button>
+              )}
+            </div>
+            {t.blank && base?.exists && <p className="dim small">The grey letter is {baseName}'s, as a guide. It isn't part of your font.</p>}
+          </div>
+        )}
       </div>
-      {edit?.d && <p className="glyph-hint">Drag points · double-click a line to add one · double-click a point for smooth/sharp · ⌫ deletes · ⌘A selects all</p>}
+      {drawn && <p className="glyph-hint">Drag points · double-click a line to add one · double-click a point for smooth/sharp · ⌫ deletes · ⌘A selects all</p>}
     </div>
   );
 }
@@ -336,39 +368,70 @@ function Tester({ t }: { t: TypeProject }) {
   );
 }
 
+type PanelTab = 'font' | 'glyph' | 'export';
+
 function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, GlyphPreview> }) {
+  const [tab, setTab] = useState<PanelTab>('font');
   const glyph = useStore((s) => s.glyph);
-  const g = t.glyphs[glyph];
-  const desktop = !!platform().installFont;
-  const looks = SHAPE_RECIPES.filter((r) => !r.mods.some((m) => m.kind === 'arc'));
+  return (
+    <>
+      <div className="tabs type-tabs" role="tablist">
+        {(
+          [
+            ['font', 'Font'],
+            ['glyph', `Glyph ${glyph}`],
+            ['export', 'Use & export'],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="panel-scroll">
+        {tab === 'font' && <FontTab t={t} />}
+        {tab === 'glyph' && <GlyphTab t={t} previews={previews} />}
+        {tab === 'export' && <ExportTab t={t} />}
+      </div>
+    </>
+  );
+}
+
+function FontTab({ t }: { t: TypeProject }) {
+  const looks = SHAPE_RECIPES.filter((r) => !r.mods.some((m) => ['arc', 'warp', 'wave'].includes(m.kind)));
+  const active = (r: (typeof looks)[number]) => t.modifiers.length === r.mods.length && r.mods.every((m, i) => t.modifiers[i]?.kind === m.kind);
   return (
     <div className="inspector">
       <div className="sel-header">
         <span className="sel-kind">Font</span>
-        <input className="sel-name" value={t.family} aria-label="Family name" onChange={(e) => editType((tp) => (tp.family = e.target.value), 'family')} />
-      </div>
-      <Section title="Family" id="type-family">
-        <label className="field">
-          <span>Style</span>
-          <input className="text-field" value={t.style} onChange={(e) => editType((tp) => (tp.style = e.target.value), 'style')} />
+        <label className="sel-name-wrap" data-tip="Family name">
+          <input className="sel-name" value={t.family} aria-label="Family name" onChange={(e) => editType((tp) => (tp.family = e.target.value), 'family')} />
         </label>
-        <div className="field">
-          <span>Base font</span>
-          <FontPicker value={t.base} onChange={(id) => id && editType((tp) => ((tp.base = id), (tp.axes = {})))} />
-        </div>
-        <div className="field">
-          <span>Morph to</span>
-          <FontPicker allowNone value={t.morph?.font ?? null} onChange={(id) => editType((tp) => (tp.morph = id ? { font: id, t: tp.morph?.t ?? 0.5, axes: {} } : null))} />
-        </div>
-        {t.morph && <Slider label="Blend" value={t.morph.t} min={0} max={1} step={0.005} onChange={(v) => editType((tp) => tp.morph && (tp.morph.t = v), 'morph')} />}
-        <Slider label="Spacing" value={t.tracking} min={-0.2} max={0.5} step={0.005} reset={0} onChange={(v) => editType((tp) => (tp.tracking = v), 'tracking')} />
-      </Section>
+        <Menu buttonClass="icon-btn" label={<Icon name="more" />} title="More" placement="bottom-end" width={230}>
+          {(close) => (
+            <div className="menu-list">
+              <MenuItem icon="help" label="Type basics" onClick={() => (close(), store.set({ dialog: { kind: 'typeGuide' } }))} />
+              <MenuItem icon="sparkle" label="Show the tour again" onClick={() => (close(), window.dispatchEvent(new Event('mt-type-tour')))} />
+              <MenuSep />
+              <MenuItem
+                icon="plus"
+                label="Start a new font…"
+                onClick={() => {
+                  close();
+                  closeTypeProject();
+                  toast('Closed this font', 'info', { label: 'Undo', run: undo });
+                }}
+              />
+            </div>
+          )}
+        </Menu>
+      </div>
       <Section title="Look for every glyph" id="type-looks">
         <div className="looks">
           {looks.slice(0, 12).map((r) => (
             <button
               key={r.name}
-              className="look text"
+              className={`look text ${active(r) ? 'on' : ''}`}
               onClick={(e) =>
                 editType((tp) => {
                   const fresh = r.mods.map((m) => ({ ...structuredClone(m), on: true, uid: uid('m') }) as ModEntry);
@@ -380,15 +443,82 @@ function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
               <span>{r.name}</span>
             </button>
           ))}
-          <button className="look text" onClick={() => editType((tp) => (tp.modifiers = []))}>
+          <button className={`look text ${t.modifiers.length === 0 ? 'on' : ''}`} onClick={() => editType((tp) => (tp.modifiers = []))}>
             <span>Plain</span>
           </button>
         </div>
+        <p className="hint">One rule for every glyph keeps the font consistent. Fine-tune it under Modifiers.</p>
       </Section>
-      <Modifiers mods={t.modifiers} owner="type" onChange={(fn, key) => editType((tp) => fn(tp.modifiers), key)} />
-      <Section title={`Glyph “${glyph}”`} id="type-glyph">
+      <Section title="Spacing" id="type-spacing">
+        <Slider label="Letter spacing" value={t.tracking} min={-0.2} max={0.5} step={0.005} reset={0} onChange={(v) => editType((tp) => (tp.tracking = v), 'tracking')} />
+        <p className="hint">
+          Space added to every glyph's width.{' '}
+          <button className="link-btn inline" onClick={() => store.set({ dialog: { kind: 'typeGuide', topic: 'spacing' } })}>
+            How spacing works
+          </button>
+        </p>
+      </Section>
+      <Section title={t.blank ? 'Metrics' : 'Base'} id="type-family">
+        <label className="field">
+          <span>Style</span>
+          <input className="text-field" value={t.style} onChange={(e) => editType((tp) => (tp.style = e.target.value), 'style')} />
+        </label>
+        <div className="field">
+          <span>{t.blank ? 'Lines from' : 'Base font'}</span>
+          <FontPicker value={t.base} onChange={(id) => id && editType((tp) => ((tp.base = id), (tp.axes = {})))} />
+        </div>
+        {!t.blank && (
+          <>
+            <div className="field">
+              <span>Morph to</span>
+              <FontPicker allowNone value={t.morph?.font ?? null} onChange={(id) => editType((tp) => (tp.morph = id ? { font: id, t: tp.morph?.t ?? 0.5, axes: {} } : null))} />
+            </div>
+            {t.morph && <Slider label="Blend" value={t.morph.t} min={0} max={1} step={0.005} onChange={(v) => editType((tp) => tp.morph && (tp.morph.t = v), 'morph')} />}
+          </>
+        )}
+        <p className="hint">{t.blank ? 'Your glyphs use this font’s baseline, x-height and cap height as guides.' : 'Glyphs you haven’t redrawn come from the base font, with the look applied.'}</p>
+      </Section>
+      <Section title="Modifiers" id="type-mods" defaultOpen={t.modifiers.length > 0 && store.get().settings.advanced}>
+        <Modifiers mods={t.modifiers} owner="type" onChange={(fn, key) => editType((tp) => fn(tp.modifiers), key)} />
+      </Section>
+    </div>
+  );
+}
+
+function GlyphTab({ t, previews }: { t: TypeProject; previews: Map<string, GlyphPreview> }) {
+  const glyph = useStore((s) => s.glyph);
+  const g = t.glyphs[glyph];
+  return (
+    <div className="inspector">
+      <div className="sel-header">
+        <span className="sel-kind">Glyph</span>
+        <span className="glyph-badge">{glyph}</span>
+        <span className="dim small">U+{glyph.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}</span>
+      </div>
+      <Section title="Shape" id="glyph-shape">
+        <div className="button-row">
+          {!g?.d ? (
+            <>
+              <button className="btn" onClick={() => void customizeGlyph(glyph, 'base')}>
+                <Icon name="points" size={13} /> {t.blank ? 'Copy the guide' : 'Edit points'}
+              </button>
+              <button className="btn" onClick={() => void customizeGlyph(glyph, 'scratch')}>
+                Start from a block
+              </button>
+            </>
+          ) : (
+            <button className="btn" onClick={() => resetGlyph(glyph)}>
+              <Icon name="reset" size={13} /> {t.blank ? 'Clear' : 'Back to the base glyph'}
+            </button>
+          )}
+          <button className="btn" onClick={() => void importImage(undefined, 'glyph')}>
+            <Icon name="image" size={13} /> Trace
+          </button>
+        </div>
+      </Section>
+      <Section title="Width" id="glyph-width">
         <Slider
-          label="Width"
+          label="Advance width"
           value={g?.advance ?? previews.get(glyph)?.advance ?? 0.6}
           min={0}
           max={2}
@@ -400,28 +530,41 @@ function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
             Use the base width
           </button>
         )}
-        <Modifiers
-          mods={g?.modifiers ?? []}
-          owner={`glyph:${glyph}`}
-          onChange={(fn, key) =>
-            editType((tp) => {
-              const cur = (tp.glyphs[glyph] ??= {});
-              cur.modifiers ??= [];
-              fn(cur.modifiers);
-            }, key)
-          }
-        />
-        <div className="button-row">
-          <button className="btn small" onClick={() => removeCharacter(glyph)}>
-            <Icon name="trash" size={13} /> Remove from font
-          </button>
-        </div>
+        <p className="hint">The box the glyph takes up, including the space on each side.</p>
       </Section>
-      <Section title="Export" id="type-export">
+      <Modifiers
+        mods={g?.modifiers ?? []}
+        owner={`glyph:${glyph}`}
+        onChange={(fn, key) =>
+          editType((tp) => {
+            const cur = (tp.glyphs[glyph] ??= {});
+            cur.modifiers ??= [];
+            fn(cur.modifiers);
+          }, key)
+        }
+      />
+      <div className="pad">
+        <button className="btn small" onClick={() => removeCharacter(glyph)}>
+          <Icon name="trash" size={13} /> Remove “{glyph}” from the font
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExportTab({ t }: { t: TypeProject }) {
+  const desktop = !!platform().installFont;
+  const used = useStore((s) => s.fonts.some((f) => f.id === customFontId(t)));
+  return (
+    <div className="inspector">
+      <Section title="Use it here" id="type-use">
+        <button className="btn primary wide" onClick={() => store.set({ dialog: { kind: 'useFont' } })}>
+          <Icon name="design" size={14} /> {used ? 'Update in Design…' : 'Use in Design…'}
+        </button>
+        <p className="hint">Adds {t.family || 'your font'} to the font list as its own family. Text set in the base font isn’t touched unless you choose to switch it.</p>
+      </Section>
+      <Section title="Install and export" id="type-export">
         <div className="export-grid">
-          <button className="btn primary" onClick={() => void useInDesign()}>
-            <Icon name="design" size={14} /> Use in Design
-          </button>
           {desktop && (
             <button className="btn" onClick={() => void installOnMac()}>
               <Icon name="check" size={14} /> Install on this Mac
@@ -443,3 +586,17 @@ function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
   );
 }
 
+function TypeTour() {
+  return (
+    <Tour
+      event="mt-type-tour"
+      steps={[
+        { target: '.glyphs', title: 'Your glyphs', text: 'Every character in the font. Click one to open it, use the arrow keys to move around, and add any character at the bottom.' },
+        { target: '.glyph-canvas', title: 'The glyph editor', text: 'The lines show baseline, x-height and cap height. Click a label to learn what it means. Edit points to reshape the letter.' },
+        { target: '.type-tabs', title: 'Font, glyph, export', text: 'Font sets the look for every glyph at once. Glyph tunes the open one. Use & export puts your font to work.' },
+        { target: '.tester', title: 'The real thing', text: 'This preview uses your compiled font. Type anything to test spacing and shapes in real words.' },
+      ]}
+      onDone={() => setSettings({ typeTour: true })}
+    />
+  );
+}

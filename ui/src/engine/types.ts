@@ -45,7 +45,9 @@ export type SymbolSpec =
   | { kind: 'flower'; petals: number; depth: number }
   | { kind: 'arrow'; head: number; shaft: number }
   | { kind: 'bolt' }
-  | { kind: 'moon'; phase: number };
+  | { kind: 'moon'; phase: number }
+  | { kind: 'smile'; curve: number; weight: number }
+  | { kind: 'rays'; rays: number; short: number; inner: number; jitter: number; seed: number };
 
 export type SymbolKind = SymbolSpec['kind'];
 
@@ -145,6 +147,22 @@ export interface PieceOut {
   y: number;
 }
 
+export interface CaretLine {
+  /** UTF-16 offset of the line's first character. */
+  start: number;
+  baseline: number;
+  /** x before each UTF-16 unit of the line, then the line end. */
+  carets: number[];
+}
+
+/** Caret layout of a text layer in its local units (before modifiers). */
+export interface TextLayout {
+  lines: CaretLine[];
+  ascent: number;
+  descent: number;
+  cap: number;
+}
+
 export interface GlyphOut {
   d: string;
   advance: number;
@@ -216,6 +234,8 @@ export interface FontSpec {
   glyphs?: GlyphEdit[];
   tracking?: number;
   format?: 'ttf' | 'woff';
+  /** Only drawn glyphs; the base font lends metrics. */
+  blank?: boolean;
 }
 
 export interface SvgOptions {

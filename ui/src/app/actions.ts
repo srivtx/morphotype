@@ -2,11 +2,12 @@ import { engine } from '../engine/client';
 import type { Box, Content, ModEntry } from '../engine/types';
 import { fromBase64, importFontBytes, registerCssFont, toBase64, type FontEntry } from '../fonts/library';
 import { platform } from '../platform';
-import { fillCss } from '../render/background';
+import { ambientOf, fillCss } from '../render/background';
+import { luminance } from '../render/palette';
 import { defaultParams, effectById, type Preset } from '../render/effects';
 import type { Renderer } from '../render/renderer';
 import { migrate } from '../state/migrate';
-import { group, isGroup, pathLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
+import { group, isGroup, pathLayer, style, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
 import { allLayers, ancestors, buildScene, childrenOf, find, findNode, layersOf, removeNodes, topmost, walk } from '../state/tree';
 
@@ -128,6 +129,65 @@ export function addShape(l: ShapeLayer) {
   const prev = primaryNode();
   if (prev && !isGroup(prev) && prev.op === 'add') l.style = structuredClone(prev.style);
   addNode(l);
+}
+
+// ---------- text ----------
+
+/** Ink that reads on the current background: near-black on light, cream on dark. */
+export function defaultInk(p: Project = store.get().project): string {
+  const [r, g, b] = ambientOf(p.background);
+  const hex = `#${[r, g, b].map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
+  return luminance(hex) > 0.35 ? '#0a0a0a' : '#f4f1ea';
+}
+
+/** Where new things go: the middle of what's on screen, inside the artboard. */
+export function placementPoint(): { x: number; y: number } {
+  const r = getRenderer();
+  const { width: W, height: H } = store.get().project.canvas;
+  const c = r?.viewCentre() ?? { x: 0, y: 0 };
+  const clamp = (v: number, lim: number) => Math.round(Math.max(-lim * 0.45, Math.min(lim * 0.45, v)));
+  return { x: clamp(c.x, W), y: clamp(c.y, H) };
+}
+
+/**
+ * Add a text layer and start typing into it. Without a point it goes in the
+ * middle of the view with its placeholder selected, so typing replaces it.
+ */
+export function startText(at?: { x: number; y: number }) {
+  const s = store.get();
+  const { width: W, height: H } = s.project.canvas;
+  const prev = primaryNode();
+  const inherit = prev && !isGroup(prev) && prev.op === 'add' && prev.content.type === 'text' ? prev : null;
+  const font = inherit?.content.type === 'text' ? inherit.content.font : (s.fonts[0]?.id ?? 'archivo');
+  const size = Math.round(Math.max(24, Math.min(W, H) * 0.14));
+  const p = at ?? placementPoint();
+  const text = at ? '' : 'Text';
+  const l = textLayer(text, font, { x: p.x, y: p.y, style: inherit ? structuredClone(inherit.style) : style('flat', { fill: defaultInk(s.project) }) }, { size, align: at ? 'left' : 'center' });
+  addNode(l);
+  store.set({ editing: { kind: 'text', id: l.id, select: [0, text.length] }, tool: 'select' });
+}
+
+/** Type into an existing text layer, with the caret nearest `at` (artboard point). */
+export function editText(id: string, at?: { x: number; y: number }, selectAll = false) {
+  const n = findNode(store.get().project.layers, id);
+  if (!n || isGroup(n) || n.content.type !== 'text' || n.locked) return;
+  commitEdit();
+  store.set({ selection: [id], editing: { kind: 'text', id, at, select: selectAll ? [0, n.content.text.length] : undefined } });
+}
+
+/** Leave on-canvas typing. A text left empty is removed. */
+export function endTextEdit() {
+  const e = store.get().editing;
+  if (e?.kind !== 'text') return;
+  commitEdit();
+  const n = findNode(store.get().project.layers, e.id);
+  store.set({ editing: null });
+  if (n && !isGroup(n) && n.content.type === 'text' && !n.content.text.trim()) {
+    edit((p) => {
+      removeNodes(p.layers, new Set([e.id]));
+    });
+    select([]);
+  }
 }
 
 export function removeSelected() {

@@ -120,7 +120,10 @@ export interface SceneObject {
 }
 
 /** Strip UI-only fields so style edits don't trigger geometry rebuilds. */
-function engineLayer(l: ShapeLayer, visible: boolean): EngineLayer {
+/** Modifiers that move letters around; paused while typing on the canvas so the caret lines up. */
+export const POSITIONAL = new Set(['slant', 'stretch', 'wave', 'arc', 'warp', 'perspective']);
+
+function engineLayer(l: ShapeLayer, visible: boolean, typing = false): EngineLayer {
   return {
     id: l.id,
     visible,
@@ -131,7 +134,7 @@ function engineLayer(l: ShapeLayer, visible: boolean): EngineLayer {
     scale: l.scale,
     sx: l.sx ?? 1,
     sy: l.sy ?? 1,
-    modifiers: l.modifiers,
+    modifiers: typing ? l.modifiers.filter((m) => !POSITIONAL.has(m.kind)) : l.modifiers,
     content: l.content,
   };
 }
@@ -153,12 +156,12 @@ function members(n: Node, force?: Op): Member[] {
  * clips the nearest non-clipping sibling below it (every object inside, if
  * that sibling is a group), like clipping masks in Photoshop.
  */
-export function buildScene(p: Project, quality?: number): { doc: EngineDocument; objects: SceneObject[] } {
+export function buildScene(p: Project, quality?: number, typing?: string | null): { doc: EngineDocument; objects: SceneObject[] } {
   const layers: EngineLayer[] = [];
   const renders: RenderSpec[] = [];
   const objects: SceneObject[] = [];
   walk(p.layers, (n) => {
-    if (!isGroup(n)) layers.push(engineLayer(n, isVisible(p.layers, n.id)));
+    if (!isGroup(n)) layers.push(engineLayer(n, isVisible(p.layers, n.id), n.id === typing));
   });
   const rec = (nodes: Node[], hidden: boolean): RenderSpec[] => {
     const made: RenderSpec[] = [];

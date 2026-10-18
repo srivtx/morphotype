@@ -2,7 +2,9 @@ import { engine } from '../engine/client';
 import type { FontSpec, GlyphEdit } from '../engine/types';
 import { registerCssFont } from '../fonts/library';
 import { platform } from '../platform';
-import { isGroup, textLayer, type TypeProject } from '../state/model';
+import { isGroup, textLayer, uid, type TypeProject } from '../state/model';
+import type { ModEntry } from '../engine/types';
+import { allLayers } from '../state/tree';
 import { edit, store, toast } from '../state/store';
 import { addShape, errorText, primaryNode, registerFontEntry, slug } from './actions';
 import { zip } from './zip';
@@ -15,29 +17,67 @@ export const CHARSETS = {
 };
 export const DEFAULT_CHARSET = CHARSETS.upper + CHARSETS.lower + CHARSETS.digits + CHARSETS.punct;
 
-/** The font being designed, created on first use from the selected text layer. */
-export function ensureTypeProject(): TypeProject {
+export interface NewFontOptions {
+  family: string;
+  base: string;
+  blank: boolean;
+  charset: string;
+  /** Modifiers to start with (a look). */
+  modifiers?: ModEntry[];
+  axes?: Record<string, number>;
+  morph?: TypeProject['morph'];
+}
+
+/** What a new font starts from when nothing else is said: the selected text layer, if any. */
+export function newFontDefaults(): NewFontOptions {
   const s = store.get();
-  if (s.project.type) return s.project.type;
   const n = primaryNode();
   const t = n && !isGroup(n) && n.content.type === 'text' ? n : null;
   const c = t?.content.type === 'text' ? t.content : null;
-  const base = c?.font ?? (s.fonts.some((f) => f.id === 'archivo') ? 'archivo' : (s.fonts[0]?.id ?? 'archivo'));
+  const base = c?.font && s.fonts.some((f) => f.id === c.font && f.source !== 'custom') ? c.font : s.fonts.some((f) => f.id === 'archivo') ? 'archivo' : (s.fonts[0]?.id ?? 'archivo');
   const info = s.fonts.find((f) => f.id === base)?.info;
-  const tp: TypeProject = {
-    family: `${info?.family ?? 'Morpho'} ${t ? 'Custom' : 'Sans'}`.replace(/^(.{0,40}).*$/, '$1'),
-    style: 'Regular',
+  return {
+    family: `${(info?.family ?? 'Morpho').split(' ')[0]} ${t ? 'Morph' : 'Studio'}`,
     base,
+    blank: false,
+    charset: DEFAULT_CHARSET,
+    modifiers: t ? structuredClone(t.modifiers.filter((m) => !['arc', 'perspective', 'warp', 'wave'].includes(m.kind))) : [],
     axes: c?.axes ?? {},
     morph: c?.morph ?? null,
-    modifiers: t ? structuredClone(t.modifiers.filter((m) => !['arc', 'perspective', 'warp', 'wave'].includes(m.kind))) : [],
+  };
+}
+
+/** Start a font project. */
+export function createTypeProject(o: NewFontOptions): TypeProject {
+  const tp: TypeProject = {
+    id: uid('f'),
+    blank: o.blank || undefined,
+    family: o.family.trim() || 'Untitled Sans',
+    style: 'Regular',
+    base: o.base,
+    axes: o.axes ?? {},
+    morph: o.blank ? null : (o.morph ?? null),
+    modifiers: o.modifiers ?? [],
     tracking: 0,
-    charset: DEFAULT_CHARSET,
+    charset: o.charset,
     glyphs: {},
     sample: 'Sphinx of black quartz, judge my vow',
   };
   edit((p) => (p.type = tp));
+  store.set({ glyph: [...o.charset][0] ?? 'A' });
   return tp;
+}
+
+/** The font being designed (created from defaults if there isn't one). */
+export function ensureTypeProject(): TypeProject {
+  return store.get().project.type ?? createTypeProject(newFontDefaults());
+}
+
+/** Close the current font so a new one can be started (undoable). */
+export function closeTypeProject() {
+  edit((p) => {
+    delete p.type;
+  });
 }
 
 export function editType(fn: (t: TypeProject) => void, key = '') {
@@ -62,18 +102,34 @@ export function specOf(t: TypeProject, opts: { quality?: number; format?: 'ttf' 
     tracking: t.tracking,
     quality: opts.quality,
     format: opts.format,
+    blank: t.blank,
   };
 }
 
-/** Start customising a glyph from its base-font outline. */
-export async function customizeGlyph(ch: string) {
+/** A plain block to start drawing from, sized to the font's lines. */
+function starterShape(ch: string, cap: number, x: number) {
+  const h = /[a-z]/.test(ch) && !/[bdfhklt]/.test(ch) ? x : cap;
+  const w = Math.max(0.3, h * 0.7);
+  const f = (v: number) => Number(v.toFixed(4));
+  return { d: `M0.08 0L0.08 ${f(-h)}L${f(0.08 + w)} ${f(-h)}L${f(0.08 + w)} 0Z`, advance: f(w + 0.16) };
+}
+
+/**
+ * Start customising a glyph. `from` = 'base' copies the base font's outline;
+ * 'scratch' starts from a plain block (the base outline stays as a guide).
+ */
+export async function customizeGlyph(ch: string, from: 'base' | 'scratch' = store.get().project.type?.blank ? 'scratch' : 'base') {
   const t = store.get().project.type;
   if (!t) return;
   if (t.glyphs[ch]?.d) return;
   try {
     const g = await engine.glyphPath(t.base, t.axes, ch);
+    const info = store.get().fonts.find((f) => f.id === t.base)?.info;
+    const upm = info?.unitsPerEm ?? 1000;
+    const starter = starterShape(ch, (info?.capHeight ?? 700) / upm, (info?.xHeight ?? 500) / upm);
+    const useBase = from === 'base' && g.exists;
     editType((tp) => {
-      tp.glyphs[ch] = { ...(tp.glyphs[ch] ?? {}), d: g.exists ? g.d : 'M0.08 0L0.08 -0.7L0.52 -0.7L0.52 0Z', advance: tp.glyphs[ch]?.advance ?? (g.exists ? g.advance : 0.6) };
+      tp.glyphs[ch] = { ...(tp.glyphs[ch] ?? {}), d: useBase ? g.d : starter.d, advance: tp.glyphs[ch]?.advance ?? (useBase ? g.advance : g.exists ? g.advance : starter.advance) };
     });
   } catch (e) {
     toast(errorText(e), 'error');
@@ -182,20 +238,73 @@ export async function installOnMac() {
   }
 }
 
-/** Compile and add the font to the font list so Design mode can use it. */
-export async function useInDesign(addText = false) {
+/** Id of the font in Design mode's font list. */
+export function customFontId(t: TypeProject) {
+  return `custom-${t.id ?? slug(t.family).toLowerCase()}`;
+}
+
+/** Plain-language list of what makes this font different from its base. */
+export function fontChanges(t: TypeProject): string[] {
+  const base = store.get().fonts.find((f) => f.id === t.base)?.name ?? t.base;
+  const out: string[] = [];
+  if (t.blank) out.push(`Drawn from scratch, using ${base}'s line heights`);
+  else out.push(`Built on ${base}`);
+  if (t.morph) out.push(`Blended ${Math.round(t.morph.t * 100)}% towards ${store.get().fonts.find((f) => f.id === t.morph?.font)?.name ?? t.morph.font}`);
+  const looks = t.modifiers.filter((m) => m.on).map((m) => m.kind);
+  if (looks.length) out.push(`Look on every glyph: ${[...new Set(looks)].join(', ')}`);
+  const drawn = Object.entries(t.glyphs).filter(([, g]) => g.d).map(([c]) => c);
+  if (drawn.length) out.push(`${drawn.length} glyph${drawn.length > 1 ? 's' : ''} ${t.blank ? 'drawn' : 'redrawn'}: ${drawn.slice(0, 12).join(' ')}${drawn.length > 12 ? ' …' : ''}`);
+  const widths = Object.values(t.glyphs).filter((g) => g.advance !== undefined && !g.d).length;
+  if (widths) out.push(`${widths} custom width${widths > 1 ? 's' : ''}`);
+  const own = Object.values(t.glyphs).filter((g) => g.modifiers?.length).length;
+  if (own) out.push(`${own} glyph${own > 1 ? 's' : ''} with their own modifiers`);
+  if (Math.abs(t.tracking) > 1e-4) out.push(`Spacing ${t.tracking > 0 ? '+' : ''}${t.tracking.toFixed(3)} em`);
+  if (out.length === 1 && !t.blank) out.push('No changes yet: it will look exactly like the base font');
+  return out;
+}
+
+/** Whether a family name is too close to the base font's (OFL fonts reserve their names). */
+export function nameClash(t: TypeProject, family = t.family): string | null {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const baseFamily = store.get().fonts.find((f) => f.id === t.base)?.info.family ?? '';
+  if (!family.trim()) return 'Give the font a name.';
+  if (baseFamily && !t.blank && norm(family).startsWith(norm(baseFamily)) && norm(baseFamily).length > 2) return `Pick a name that doesn't start with “${baseFamily}”. Modified fonts need their own name, and OFL fonts reserve theirs.`;
+  return null;
+}
+
+export type UseMode = 'list' | 'add' | 'replace';
+
+/**
+ * Compile the font into Design mode's font list. `replace` switches text set
+ * in the base font to it; `add` adds a text layer set in it.
+ */
+export async function useInDesign(mode: UseMode = 'list') {
   const t = store.get().project.type!;
   try {
     const bytes = await compile('ttf', 200);
-    const id = `custom-${slug(t.family).toLowerCase()}`;
+    const id = customFontId(t);
     const info = await engine.loadFont(id, bytes);
     registerCssFont(id, bytes);
     registerFontEntry({ id, name: `${t.family} ${t.style}`.trim(), source: 'custom', info });
-    if (addText) {
-      store.set({ mode: 'design' });
+    // Text already using this font picks up the new outlines on the next build.
+    edit((p) => {
+      if (!p.type) return;
+      p.type.id ??= t.id ?? slug(t.family).toLowerCase();
+    });
+    if (mode === 'replace') {
+      let n = 0;
+      edit((p) => {
+        for (const l of allLayers(p.layers)) if (l.content.type === 'text' && l.content.font === t.base) (l.content.font = id), (l.content.axes = {}), n++;
+      });
+      store.set({ mode: 'design', editing: null });
+      toast(n ? `${t.family} now sets ${n} text layer${n > 1 ? 's' : ''}` : `${t.family} is in your font list`);
+    } else if (mode === 'add') {
+      store.set({ mode: 'design', editing: null });
       addShape(textLayer(t.family.split(' ')[0] || 'Type', id));
+      toast(`${t.family} is ready in Design mode`);
+    } else {
+      toast(`${t.family} is in your font list`, 'info', { label: 'Type with it', run: () => void useInDesign('add') });
     }
-    toast(`${t.family} is ready to use in Design mode`, 'info', addText ? undefined : { label: 'Type with it', run: () => void useInDesign(true) });
   } catch (e) {
     toast(`Couldn't build the font: ${errorText(e)}`, 'error');
   }

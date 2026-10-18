@@ -1,16 +1,20 @@
 import { useRef, useState } from 'react';
-import { alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, unionBox, updateNode } from '../app/actions';
+import { alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
 import type { Content, ModEntry, ModifierKind, SymbolKind } from '../engine/types';
 import { fillCss } from '../render/background';
+import { effectById } from '../render/effects';
+import { QUICK_COLORS, recolor } from '../render/palette';
 import { useShape, viewBoxOf } from '../render/thumbs';
-import { CANVAS_PRESETS, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, SYMBOL_DEFAULTS, SYMBOL_UI, tile, uid, type Fill, type FillKind, type Group, type Node, type ShapeLayer } from '../state/model';
+import { CANVAS_PRESETS, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, symbolLayer, tile, uid, type Fill, type FillKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
 import { BG_PRESETS, SHAPE_RECIPES, type Recipe } from '../state/recipes';
-import { edit, store, toast, undo, useStore } from '../state/store';
+import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
+import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
 import { allLayers, findNode } from '../state/tree';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
 import { Icon } from './icons';
+import { EffectThumb } from './StylePanel';
 import { ModifierPicker, ShapePicker } from './pickers';
 import { IconButton, Menu, MenuItem, MenuSep, NumberBox, Popover, Section, Segmented, Select, Slider, Toggle } from './ui';
 
@@ -26,6 +30,7 @@ export function Inspector() {
     <div className="inspector">
       <SelectionHeader nodes={nodes} />
       <AlignBar count={nodes.length} />
+      <Appearance nodes={nodes} />
       <TransformSection nodes={nodes} />
       {nodes.length === 1 && <NodeEditor node={primary} />}
       {nodes.length > 1 && (
@@ -52,14 +57,16 @@ function SelectionHeader({ nodes }: { nodes: Node[] }) {
     <div className="sel-header">
       <span className="sel-kind">{kind}</span>
       {nodes.length === 1 && (
-        <input
-          className="sel-name"
-          value={n.name ?? ''}
-          placeholder={nodeLabel(n)}
-          aria-label="Layer name"
-          onChange={(e) => updateNode(n.id, (x) => (x.name = e.target.value || undefined), 'name')}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-        />
+        <label className="sel-name-wrap" data-tip="Layer name: how it's listed in Layers. It doesn't change the text itself.">
+          <input
+            className="sel-name"
+            value={n.name ?? ''}
+            placeholder={!isGroup(n) && n.content.type === 'text' ? 'Layer name (optional)' : nodeLabel(n)}
+            aria-label="Layer name"
+            onChange={(e) => updateNode(n.id, (x) => (x.name = e.target.value || undefined), 'name')}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          />
+        </label>
       )}
       <Menu buttonClass="icon-btn" label={<Icon name="more" />} title="More" placement="bottom-end" width={260}>
         {(close) => (
@@ -110,6 +117,68 @@ function AlignBar({ count }: { count: number }) {
       <IconButton icon="flipH" title="Flip horizontal" kbd={shortcutOf('flip-h')} onClick={() => flipSelected('x')} />
       <IconButton icon="flipV" title="Flip vertical" kbd={shortcutOf('flip-v')} onClick={() => flipSelected('y')} />
     </div>
+  );
+}
+
+/** Colour params worth showing up front (hide ones whose feature is off). */
+function shownColors(st: Style) {
+  const def = effectById(st.effect);
+  const off = (k: string) => {
+    const twin: Record<string, string> = { fill2: 'gradient', border: 'borderWidth', line: 'lineWidth', outlineColor: 'outline' };
+    const t = twin[k];
+    return t !== undefined && Number(st.params[t] ?? 0) <= 0;
+  };
+  return def.params.filter((p) => p.type === 'color' && !p.advanced && !off(p.key)).slice(0, 4);
+}
+
+/** Material and colour, right where you select: the most common edits. */
+function Appearance({ nodes }: { nodes: Node[] }) {
+  const owners = nodes.filter((n) => !isGroup(n) || n.merge);
+  const plainGroup = nodes.length === 1 && isGroup(nodes[0]) && !nodes[0].merge;
+  if (plainGroup) return null;
+  if (!owners.length) return null;
+  const st = styleOf(owners.at(-1)!)!;
+  const def = effectById(st.effect);
+  const clipOnly = owners.every((n) => n.op !== 'add');
+  const colors = shownColors(st);
+  const ids = owners.map((n) => n.id);
+  const setParam = (k: string, v: string) =>
+    edit((p) => {
+      for (const id of ids) {
+        const n = findNode(p.layers, id);
+        if (n && n.style.effect === st.effect) n.style.params[k] = v;
+      }
+    }, `ap:${ids.join()}:${k}`);
+  const recolorAll = (hex: string) =>
+    edit((p) => {
+      for (const id of ids) {
+        const n = findNode(p.layers, id);
+        if (n) n.style = recolor(n.style, hex);
+      }
+    }, `ap:${ids.join()}:recolor`);
+  if (clipOnly) return null;
+  return (
+    <Section title="Appearance" id="appearance">
+      <div className="appearance">
+        <button className="material-chip" onClick={() => store.set({ tab: 'style' })} data-tip="Change the material and its settings in the Style tab">
+          <span className="material-thumb">
+            <EffectThumb id={st.effect} />
+          </span>
+          <span className="material-name">{def.name}</span>
+          <Icon name="chevronRight" size={12} />
+        </button>
+        <div className="appearance-colors">
+          {colors.map((c) => (
+            <ColorChip key={c.key} label={c.label} value={String(st.params[c.key] ?? c.default)} onChange={(v) => setParam(c.key, v)} />
+          ))}
+        </div>
+      </div>
+      <div className="quick-colors" role="group" aria-label="Recolour">
+        {QUICK_COLORS.map((c) => (
+          <button key={c} className="quick-color" style={{ background: c }} aria-label={`Recolour ${c}`} data-tip={colors.length > 1 ? 'Recolour the whole material from this colour' : c} onClick={() => recolorAll(c)} />
+        ))}
+      </div>
+    </Section>
   );
 }
 
@@ -359,6 +428,8 @@ function TextEditor({ c, setC }: { c: Of<'text'>; setC: <T extends Content['type
       <Section title="Text" id="text">
         <textarea
           className="text-input"
+          placeholder="Type your text…"
+          data-tip="Or double-click the text on the canvas to type there"
           value={c.text}
           rows={Math.min(5, c.text.split('\n').length + 1)}
           spellCheck={false}
@@ -646,9 +717,62 @@ export function FillEditor({ value, onChange, allowNone = true, keyPrefix }: { v
   );
 }
 
+/** Page fill presets, colours and grain. Shared by the canvas panel and the dock. */
+export function BackgroundEditor() {
+  const bg = useStore((s) => s.project.background);
+  return (
+    <>
+      <div className="bg-presets">
+        {BG_PRESETS.map((b) => (
+          <button
+            key={b.name}
+            className="bg-chip"
+            data-tip={b.name}
+            aria-label={b.name}
+            style={{ background: fillCss(b.bg.fill) }}
+            // Page-only presets keep an app-icon tile you already have.
+            onClick={() => edit((d) => (d.background = { ...structuredClone(b.bg), tile: b.bg.tile ? structuredClone(b.bg.tile) : d.background.tile }))}
+          >
+            {b.bg.tile && <span className="bg-chip-tile" style={{ background: fillCss(b.bg.tile.fill) }} />}
+          </button>
+        ))}
+      </div>
+      <FillEditor value={bg.fill} keyPrefix="page" onChange={(fn, key) => setBackground((b) => fn(b.fill), key)} />
+      <Slider label="Grain" value={bg.grain} min={0} max={1} step={0.01} reset={0} onChange={(v) => setBackground((b) => (b.grain = v), 'grain')} />
+    </>
+  );
+}
+
+/** Replace the background tile with an editable squircle layer at the bottom. */
+function tileToLayer() {
+  const p = store.get().project;
+  const t = p.background.tile;
+  if (!t) return;
+  const side = t.size * Math.min(p.canvas.width, p.canvas.height);
+  const c = t.fill.colors;
+  const st =
+    t.fill.kind === 'solid' || c.length < 2
+      ? style('icon', { glyph: c[0] ?? '#ffffff', shine: t.gloss, shadow: t.shadow, outline: 0 })
+      : style('flat', { fill: c[0], fill2: c.at(-1)!, gradient: 1, angle: t.fill.angle, shadowOpacity: t.shadow * 0.8, shadowY: side * 0.03, shadowBlur: side * 0.04 });
+  const l =
+    t.shape === 'circle'
+      ? symbolLayer('circle', side, { name: 'Tile', style: st })
+      : t.shape === 'rounded'
+        ? symbolLayer('roundRect', side, { name: 'Tile', style: st }, { radius: t.radius * 0.5, aspect: 1 })
+        : symbolLayer('squircle', side, { name: 'Tile', style: st }, { exponent: 12 - 8.8 * t.radius, aspect: 1 });
+  edit((d) => {
+    d.background.tile = null;
+    d.layers.unshift(l);
+  });
+  select([l.id]);
+  toast('The tile is now a layer at the bottom', 'info', { label: 'Undo', run: undo });
+}
+
 function CanvasPanel() {
   const p = useStore((s) => s.project);
+  const settings = useStore((s) => s.settings);
   const bg = p.background;
+  const target = iconTarget(bg.tile);
   const preset = CANVAS_PRESETS.find((c) => c.w === p.canvas.width && c.h === p.canvas.height);
   return (
     <div className="inspector">
@@ -679,25 +803,24 @@ function CanvasPanel() {
         </button>
       </Section>
       <Section title="Background" id="canvas-bg">
-        <div className="bg-presets">
-          {BG_PRESETS.map((b) => (
-            <button
-              key={b.name}
-              className="bg-chip"
-              data-tip={b.name}
-              aria-label={b.name}
-              style={{ background: fillCss(b.bg.fill) }}
-              onClick={() => edit((d) => (d.background = structuredClone(b.bg)))}
-            >
-              {b.bg.tile && <span className="bg-chip-tile" style={{ background: fillCss(b.bg.tile.fill) }} />}
-            </button>
-          ))}
-        </div>
-        <FillEditor value={bg.fill} keyPrefix="page" onChange={(fn, key) => setBackground((b) => fn(b.fill), key)} />
-        <Slider label="Grain" value={bg.grain} min={0} max={1} step={0.01} reset={0} onChange={(v) => setBackground((b) => (b.grain = v), 'grain')} />
+        <BackgroundEditor />
       </Section>
-      <Section title="App icon tile" id="canvas-tile" defaultOpen={!!bg.tile}>
+      <Section title="App icon tile" id="canvas-tile" defaultOpen={!!bg.tile || p.canvas.width === p.canvas.height}>
         <Toggle label="Show a tile behind the artwork" checked={!!bg.tile} onChange={(v) => setBackground((b) => (b.tile = v ? (b.tile ?? tile({ ...{ kind: 'linear', colors: ['#c9b8ff', '#8a63f5'], angle: 180 } })) : null))} />
+        <div className="field">
+          <span>Made for</span>
+          <Segmented
+            size="sm"
+            value={target ?? ('' as IconTarget)}
+            options={ICON_TARGETS.map((t) => ({ value: t.value, label: t.label, title: t.hint }))}
+            onChange={(v) => {
+              setBackground((b) => applyIconTarget(b, v));
+              setSettings({ iconMask: v === 'ios' });
+            }}
+          />
+        </div>
+        <p className="hint">{ICON_TARGETS.find((t) => t.value === target)?.hint ?? 'Pick a platform to set the tile up the way its icons are drawn.'}</p>
+        {target === 'ios' || settings.iconMask ? <Toggle label="Preview the system mask" hint="Shows where iOS and Android crop the corners. Not exported." checked={settings.iconMask} onChange={(v) => setSettings({ iconMask: v })} /> : null}
         {bg.tile && (
           <>
             <div className="field">
@@ -725,6 +848,9 @@ function CanvasPanel() {
                 {!bg.tile.holo && <ColorField label="Rim colour" value={bg.tile.rimColor} onChange={(v) => setBackground((b) => b.tile && (b.tile.rimColor = v), 'trc')} />}
               </>
             )}
+            <button className="link-btn" onClick={tileToLayer} data-tip="Make the tile a normal shape layer so you can give it any material, modifiers or effects">
+              Turn the tile into a layer
+            </button>
           </>
         )}
       </Section>

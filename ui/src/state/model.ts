@@ -84,6 +84,10 @@ export interface Background {
 
 /** A font being designed in Type mode. */
 export interface TypeProject {
+  /** Stable id, so renaming the font keeps it linked to text using it. */
+  id?: string;
+  /** Started blank: only drawn glyphs are in the font. */
+  blank?: boolean;
   family: string;
   style: string;
   base: string;
@@ -299,6 +303,8 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   blob: { kind: 'blob', lobes: 8, depth: 0.08, seed: 0, wobble: 0 },
   eyes: { kind: 'eyes', gap: 0.34, width: 0.14, height: 0.26 },
   catHead: { kind: 'catHead', ears: 0.3 },
+  smile: { kind: 'smile', curve: 0.5, weight: 0.35 },
+  rays: { kind: 'rays', rays: 12, short: 0.55, inner: 0.18, jitter: 0, seed: 0 },
 };
 
 export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Badge' | 'Mascot'; fields: NumberField[] }> = {
@@ -406,6 +412,25 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
     ],
   },
   catHead: { label: 'Cat head', group: 'Mascot', fields: [{ key: 'ears', label: 'Ears', min: 0, max: 0.6, step: 0.005 }] },
+  smile: {
+    label: 'Smile',
+    group: 'Mascot',
+    fields: [
+      { key: 'curve', label: 'Curve', min: -1, max: 1, step: 0.01 },
+      { key: 'weight', label: 'Thickness', min: 0.05, max: 1, step: 0.01 },
+    ],
+  },
+  rays: {
+    label: 'Starburst',
+    group: 'Badge',
+    fields: [
+      { key: 'rays', label: 'Rays', min: 3, max: 48, step: 1, integer: true },
+      { key: 'short', label: 'Short rays', min: 0, max: 1, step: 0.01 },
+      { key: 'inner', label: 'Inner radius', min: 0.05, max: 0.45, step: 0.005 },
+      { key: 'jitter', label: 'Irregular', min: 0, max: 1, step: 0.01 },
+      { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1, integer: true, advanced: true },
+    ],
+  },
 };
 
 // ---------- styles ----------
@@ -510,4 +535,7 @@ export const CANVAS_PRESETS: { label: string; group: string; w: number; h: numbe
   { label: 'Open Graph image', group: 'Web', w: 1200, h: 630, keywords: 'og social share link preview' },
   { label: 'Desktop wallpaper', group: 'Web', w: 2560, h: 1440 },
   { label: 'Poster', group: 'Print', w: 1200, h: 1800 },
+  { label: 'Business card', group: 'Print', w: 1050, h: 600, keywords: '3.5 x 2 in 300 dpi stationery' },
+  { label: 'ID badge', group: 'Print', w: 1011, h: 638, keywords: 'cr80 card lanyard' },
+  { label: 'A4 flyer', group: 'Print', w: 2480, h: 3508, keywords: 'a4 300 dpi print paper' },
 ];

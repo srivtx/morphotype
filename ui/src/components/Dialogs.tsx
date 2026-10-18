@@ -7,9 +7,12 @@ import { TEMPLATES, type Template } from '../state/templates';
 import { replaceProject, store, toast, useStore } from '../state/store';
 import { CommandPalette } from './CommandPalette';
 import { HelpDialog } from './HelpDialog';
-import { Icon } from './icons';
+import { Icon, type IconName } from './icons';
+import { applyIconTarget } from '../state/icon';
 import { SettingsDialog } from './SettingsDialog';
 import { TraceDialog } from './TraceDialog';
+import { TypeGuideDialog } from './type/TypeGuide';
+import { UseFontDialog } from './type/UseFontDialog';
 import { Dialog, Segmented } from './ui';
 
 export function Dialogs() {
@@ -32,6 +35,10 @@ export function Dialogs() {
       return <HelpDialog />;
     case 'palette':
       return <CommandPalette />;
+    case 'typeGuide':
+      return <TypeGuideDialog topic={dialog.topic} />;
+    case 'useFont':
+      return <UseFontDialog />;
     default:
       return null;
   }
@@ -52,17 +59,50 @@ function TemplateCard({ t, onPick }: { t: Template; onPick: () => void }) {
   );
 }
 
+/** Blank starts for the common jobs, so nobody has to know canvas sizes. */
+const INTENTS: { label: string; hint: string; icon: IconName; w?: number; h?: number; tile?: boolean; font?: boolean }[] = [
+  { label: 'Logo', hint: '1200 × 1200', icon: 'sparkle', w: 1200, h: 1200 },
+  { label: 'App icon', hint: 'macOS tile, 1024', icon: 'tile', w: 1024, h: 1024, tile: true },
+  { label: 'Instagram post', hint: '1080 × 1350', icon: 'image', w: 1080, h: 1350 },
+  { label: 'YouTube thumbnail', hint: '1280 × 720', icon: 'canvas', w: 1280, h: 720 },
+  { label: 'Business card', hint: '3.5 × 2 in', icon: 'layers', w: 1050, h: 600 },
+  { label: 'A font', hint: 'Type mode', icon: 'type', font: true },
+];
+
 function TemplatesDialog() {
   const close = () => store.set({ dialog: null });
+  const start = (i: (typeof INTENTS)[number]) => {
+    close();
+    if (i.font) {
+      store.set({ mode: 'type', editing: null });
+      return;
+    }
+    const p = { ...TEMPLATES[0].make(), name: i.label, layers: [], canvas: { width: i.w!, height: i.h! } };
+    if (i.tile) applyIconTarget(p.background, 'macos');
+    replaceProject(p);
+    store.set({ mode: 'design' });
+    window.dispatchEvent(new Event('mt-fit'));
+  };
   const [cat, setCat] = useState<'All' | Template['category']>('All');
   const shown = TEMPLATES.filter((t) => cat === 'All' || t.category === cat);
   return (
-    <Dialog title="Start from a template" subtitle="Every template is a normal document: change anything." onClose={close} size="xl">
+    <Dialog title="New design" subtitle="Every template is a normal document: change anything." onClose={close} size="xl">
+      <h4 className="intent-title">What are you making?</h4>
+      <div className="intents">
+        {INTENTS.map((i) => (
+          <button key={i.label} className="intent" onClick={() => start(i)}>
+            <Icon name={i.icon} size={18} />
+            <strong>{i.label}</strong>
+            <span>{i.hint}</span>
+          </button>
+        ))}
+      </div>
+      <h4 className="intent-title">Or start from a template</h4>
       <div className="templates-head">
         <Segmented
           size="sm"
           value={cat}
-          options={(['All', 'Logo', 'Icon', 'Type', 'Social'] as const).map((c) => ({ value: c, label: c }))}
+          options={(['All', 'Logo', 'Icon', 'Type', 'Social', 'Print'] as const).map((c) => ({ value: c, label: c }))}
           onChange={setCat}
         />
       </div>

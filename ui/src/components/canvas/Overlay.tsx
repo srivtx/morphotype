@@ -6,6 +6,7 @@ import { isGroup, type Node } from '../../state/model';
 import { useStore, type EditMode } from '../../state/store';
 import { findNode, layersOf } from '../../state/tree';
 import { unionOf } from './hit';
+import { maskPath } from '../../state/icon';
 import { PointEditor } from './PointEditor';
 import { WarpEditor } from './WarpEditor';
 
@@ -46,6 +47,7 @@ export function Overlay({
   editing,
   onHandle,
   onCursor,
+  measure = false,
 }: {
   renderer: Renderer;
   tick: number;
@@ -54,6 +56,8 @@ export function Overlay({
   editing: EditMode;
   onHandle: (kind: 'scale' | 'rotate', h: Handle, e: React.PointerEvent) => void;
   onCursor: (c: string) => void;
+  /** ⌥ held: show distances from the selection to what's under the pointer. */
+  measure?: boolean;
 }) {
   void tick;
   const project = useStore((s) => s.project);
@@ -109,6 +113,37 @@ export function Overlay({
   };
 
   const editLayer = editing ? findNode(project.layers, editing.id) : undefined;
+
+  // ⌥ distances: selection to the hovered layer, or to the artboard edges.
+  const measures: { a: Pt; b: Pt; label: string }[] = [];
+  const selBox = measure && nodes.length ? unionOf(nodes.map(nodeBox)) : null;
+  if (selBox) {
+    const hn = hover && !selection.includes(hover) ? findNode(project.layers, hover) : undefined;
+    const other: Box = (hn && nodeBox(hn)) || [-W / 2, -H / 2, W / 2, H / 2];
+    const A = selBox;
+    const cy = (Math.max(A[1], other[1]) + Math.min(A[3], other[3])) / 2;
+    const cx = (Math.max(A[0], other[0]) + Math.min(A[2], other[2])) / 2;
+    const midY = Math.max(A[1], other[1]) <= Math.min(A[3], other[3]) ? cy : (A[1] + A[3]) / 2;
+    const midX = Math.max(A[0], other[0]) <= Math.min(A[2], other[2]) ? cx : (A[0] + A[2]) / 2;
+    const push = (a: Pt, b: Pt) => {
+      const d = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+      if (d > 0.5) measures.push({ a, b, label: String(Math.round(d)) });
+    };
+    // Horizontal gaps.
+    if (A[2] <= other[0]) push({ x: A[2], y: midY }, { x: other[0], y: midY });
+    else if (other[2] <= A[0]) push({ x: other[2], y: midY }, { x: A[0], y: midY });
+    else {
+      if (other[0] < A[0]) push({ x: other[0], y: midY }, { x: A[0], y: midY });
+      if (A[2] < other[2]) push({ x: A[2], y: midY }, { x: other[2], y: midY });
+    }
+    // Vertical gaps.
+    if (A[3] <= other[1]) push({ x: midX, y: A[3] }, { x: midX, y: other[1] });
+    else if (other[3] <= A[1]) push({ x: midX, y: other[3] }, { x: midX, y: A[1] });
+    else {
+      if (other[1] < A[1]) push({ x: midX, y: other[1] }, { x: midX, y: A[1] });
+      if (A[3] < other[3]) push({ x: midX, y: A[3] }, { x: midX, y: other[3] });
+    }
+  }
 
   return (
     <svg className="overlay" width="100%" height="100%">
@@ -176,6 +211,28 @@ export function Overlay({
           <text textAnchor="middle" y={3}>
             {Math.round(size.w)} × {Math.round(size.h)}
           </text>
+        </g>
+      )}
+      {measures.map((m, i) => {
+        const a = S(m.a);
+        const b = S(m.b);
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const w = m.label.length * 7 + 12;
+        return (
+          <g key={i} className="measure">
+            <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} />
+            <rect x={mx - w / 2} y={my - 9} width={w} height={18} rx={5} />
+            <text x={mx} y={my + 4} textAnchor="middle">
+              {m.label}
+            </text>
+          </g>
+        );
+      })}
+      {settings.iconMask && (
+        <g className="icon-mask" pointerEvents="none">
+          <path d={`M${ar.x},${ar.y}h${ar.w}v${ar.h}h${-ar.w}Z ${maskPath(Math.min(ar.w, ar.h), ar.x + ar.w / 2, ar.y + ar.h / 2)}`} fillRule="evenodd" />
+          <path className="icon-mask-line" d={maskPath(Math.min(ar.w, ar.h), ar.x + ar.w / 2, ar.y + ar.h / 2)} />
         </g>
       )}
       {marquee && (

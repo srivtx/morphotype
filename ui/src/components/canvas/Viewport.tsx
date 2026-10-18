@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { duplicateSelected, editPoints, getRenderer, nodeBox, setRenderer } from '../../app/actions';
+import { duplicateSelected, editPoints, editText, endTextEdit, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
 import type { Box } from '../../engine/types';
 import { effectById } from '../../render/effects';
 import { Renderer, type SceneItem } from '../../render/renderer';
@@ -9,6 +9,7 @@ import { beginGesture, commitEdit, edit, select, store, toast, useStore } from '
 import { allLayers, ancestors, buildScene, find, findNode, isLocked, isVisible, layersOf, topmost } from '../../state/tree';
 import { boxesIntersect, hitLayer, resolveTarget, unionOf } from './hit';
 import { Overlay, type Guide, type Handle } from './Overlay';
+import { TextEditor } from './TextEditor';
 import { Toolbar } from './Toolbar';
 import { openContextMenu } from '../ContextMenu';
 
@@ -42,6 +43,9 @@ export function Viewport() {
   const [failure, setFailure] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [guides, setGuides] = useState<Guide[]>([]);
+  /** Live readout next to the pointer while dragging. */
+  const [hint, setHint] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [altHeld, setAltHeld] = useState(false);
   const [marquee, setMarquee] = useState<Box | null>(null);
   const [cursor, setCursor] = useState<string>('default');
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -192,15 +196,22 @@ export function Viewport() {
   useEffect(() => {
     const typing = (t: EventTarget | null) => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || (t as HTMLElement | null)?.isContentEditable;
     const down = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') setAltHeld(true);
       if (e.code === 'Space' && !typing(e.target)) {
         setSpaceHeld(true);
         e.preventDefault();
       }
     };
-    const up = (e: KeyboardEvent) => e.code === 'Space' && setSpaceHeld(false);
+    const up = (e: KeyboardEvent) => {
+      if (e.code === 'Space') setSpaceHeld(false);
+      if (e.key === 'Alt') setAltHeld(false);
+    };
+    const blur = () => (setAltHeld(false), setSpaceHeld(false));
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
+    window.addEventListener('blur', blur);
     return () => {
+      window.removeEventListener('blur', blur);
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
     };
@@ -294,7 +305,22 @@ export function Viewport() {
       return;
     }
     const a = r.toArt(p.x, p.y);
-    const s = store.get();
+    let s = store.get();
+    if (s.tool === 'text') {
+      // Keep the browser from moving focus back to the canvas after this click.
+      e.preventDefault();
+      const hit = hitLayer(s.project, s.build?.layers ?? [], a.x, a.y, 3 / r.view.zoom);
+      if (s.editing?.kind === 'text') endTextEdit();
+      if (hit?.content.type === 'text') editText(hit.id, a);
+      else startText({ x: Math.round(a.x), y: Math.round(a.y) });
+      store.set({ tool: 'select' });
+      return;
+    }
+    if (s.editing?.kind === 'text') {
+      // Clicking anywhere outside the text being typed finishes it.
+      endTextEdit();
+      s = store.get();
+    }
     if (s.editing) {
       // Clicking outside the edited layer leaves editing.
       const hit = hitLayer(s.project, s.build?.layers ?? [], a.x, a.y, 4 / r.view.zoom);
@@ -334,15 +360,8 @@ export function Viewport() {
       select([next.id]);
       return;
     }
-    if (hit.content.type === 'text') {
-      select([hit.id]);
-      store.set({ tab: 'design' });
-      requestAnimationFrame(() => {
-        const t = document.querySelector<HTMLTextAreaElement>('.text-input');
-        t?.focus();
-        t?.select();
-      });
-    } else if (hit.content.type === 'path') void editPoints(hit.id);
+    if (hit.content.type === 'text') editText(hit.id, a);
+    else if (hit.content.type === 'path') void editPoints(hit.id);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -400,6 +419,7 @@ export function Viewport() {
         g = res.guides;
       }
       setGuides(g);
+      if (d.box) setHint({ x: p.x, y: p.y, text: `${dx >= 0 ? '+' : '−'}${Math.abs(Math.round(dx))}, ${dy >= 0 ? '+' : '−'}${Math.abs(Math.round(dy))}${e.shiftKey ? '' : ' · ⇧ one axis'}` });
       edit((proj) => {
         for (const l of allLayers(proj.layers)) {
           const st = d.layers.get(l.id);
@@ -409,10 +429,18 @@ export function Viewport() {
         }
       }, 'canvas-move');
     } else if (d.kind === 'scale') {
-      applyScale(d, a, e.shiftKey, e.altKey);
+      const corner = d.handle[0] !== 0 && d.handle[1] !== 0;
+      const s = store.get();
+      const only = d.single ? findNode(s.project.layers, d.single.id) : null;
+      const text = !!only && !isGroup(only) && only.content.type === 'text';
+      // Figma convention: ⇧ keeps proportions. Text never squashes from a corner.
+      const uniform = corner ? text || (s.settings.keepRatio ? !e.shiftKey : e.shiftKey) : e.shiftKey;
+      applyScale(d, a, uniform, e.altKey);
+      setHint({ x: p.x, y: p.y, text: `${uniform ? 'Proportional' : '⇧ keeps proportions'} · ⌥ from centre` });
     } else if (d.kind === 'rotate') {
       let ang = ((Math.atan2(a.y - d.center.y, a.x - d.center.x) - d.startAngle) * 180) / Math.PI;
       if (e.shiftKey) ang = Math.round(ang / 15) * 15;
+      setHint({ x: p.x, y: p.y, text: `${Math.round(ang)}°${e.shiftKey ? '' : ' · ⇧ snaps to 15°'}` });
       const rad = (ang * Math.PI) / 180;
       const c = Math.cos(rad);
       const sn = Math.sin(rad);
@@ -430,7 +458,7 @@ export function Viewport() {
     }
   };
 
-  const applyScale = (d: Extract<Drag, { kind: 'scale' }>, a: Pt, free: boolean, fromCenter: boolean) => {
+  const applyScale = (d: Extract<Drag, { kind: 'scale' }>, a: Pt, uniform: boolean, fromCenter: boolean) => {
     const [ix, iy] = d.handle;
     const corner = ix !== 0 && iy !== 0;
     if (d.single) {
@@ -444,7 +472,11 @@ export function Viewport() {
       let fx = ix !== 0 && hp.x !== anchor.x ? (p.x - anchor.x) / (hp.x - anchor.x) : 1;
       let fy = iy !== 0 && hp.y !== anchor.y ? (p.y - anchor.y) / (hp.y - anchor.y) : 1;
       let next: Xform;
-      if (corner && !free) {
+      if (!corner && uniform) {
+        // ⇧ on a side handle scales evenly from that side.
+        const f = ix !== 0 ? fx : fy;
+        next = { ...st, scale: st.scale * (Math.abs(f) < 0.01 ? 0.01 : Math.abs(f)) };
+      } else if (corner && uniform) {
         const vx = hp.x - anchor.x;
         const vy = hp.y - anchor.y;
         const f = ((p.x - anchor.x) * vx + (p.y - anchor.y) * vy) / (vx * vx + vy * vy || 1);
@@ -479,7 +511,10 @@ export function Viewport() {
     const Hy = iy < 0 ? b[1] : iy > 0 ? b[3] : cy;
     let fx = ix !== 0 ? (a.x - A.x) / (Hx - A.x || 1) : 1;
     let fy = iy !== 0 ? (a.y - A.y) / (Hy - A.y || 1) : 1;
-    if (corner && !free) {
+    if (!corner && uniform) {
+      if (ix !== 0) fy = Math.abs(fx);
+      else fx = Math.abs(fy);
+    } else if (corner && uniform) {
       const vx = Hx - A.x;
       const vy = Hy - A.y;
       const f = ((a.x - A.x) * vx + (a.y - A.y) * vy) / (vx * vx + vy * vy || 1);
@@ -517,6 +552,7 @@ export function Viewport() {
     const d = drag.current;
     drag.current = null;
     setGuides([]);
+    setHint(null);
     setMarquee(null);
     if (d?.kind === 'pan') setCursor('default');
     commitEdit();
@@ -575,7 +611,7 @@ export function Viewport() {
       className={`viewport ${panning ? 'panning' : ''}`}
       ref={wrapRef}
       tabIndex={-1}
-      style={{ cursor: panning ? (cursor === 'grabbing' ? 'grabbing' : 'grab') : cursor }}
+      style={{ cursor: panning ? (cursor === 'grabbing' ? 'grabbing' : 'grab') : tool === 'text' ? 'text' : cursor }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -585,7 +621,13 @@ export function Viewport() {
       onContextMenu={onContextMenu}
     >
       <canvas ref={canvasRef} />
-      {r && <Overlay renderer={r} tick={tick} guides={guides} marquee={marquee} editing={editing} onHandle={beginHandle} onCursor={setCursor} />}
+      {r && <Overlay renderer={r} tick={tick} guides={guides} marquee={marquee} editing={editing} onHandle={beginHandle} onCursor={setCursor} measure={altHeld && !drag.current} />}
+      {hint && (
+        <div className="drag-hint" style={{ left: hint.x + 16, top: hint.y + 18 }}>
+          {hint.text}
+        </div>
+      )}
+      {r && <TextEditor renderer={r} tick={tick} />}
       {failure && (
         <div className="gl-failure">
           <h3>GPU rendering isn't available</h3>

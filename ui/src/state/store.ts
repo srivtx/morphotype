@@ -20,10 +20,18 @@ export type Dialog =
   | { kind: 'settings'; query?: string }
   | { kind: 'help' }
   | { kind: 'palette' }
-  | { kind: 'canvas' };
+  | { kind: 'canvas' }
+  | { kind: 'typeGuide'; topic?: string }
+  | { kind: 'useFont' }
+  | { kind: 'welcome' };
 
 /** On-canvas sub-editors. */
-export type EditMode = null | { kind: 'points'; id: string } | { kind: 'warp'; id: string; uid: string };
+export type EditMode =
+  | null
+  | { kind: 'points'; id: string }
+  | { kind: 'warp'; id: string; uid: string }
+  /** Typing on the canvas. `select` is the initial selection (UTF-16 offsets). */
+  | { kind: 'text'; id: string; select?: [number, number]; at?: { x: number; y: number } };
 
 export interface State {
   project: Project;
@@ -44,7 +52,7 @@ export interface State {
   settings: Settings;
   /** Right panel tab. */
   tab: 'design' | 'style';
-  tool: 'select' | 'hand';
+  tool: 'select' | 'hand' | 'text';
 }
 
 type Listener = () => void;

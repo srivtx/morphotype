@@ -60,6 +60,13 @@ pub fn split(doc_json: &str, id: &str) -> Result<String, JsError> {
     ENGINE.with(|e| json(&e.borrow_mut().split(&doc, id).map_err(|m| JsError::new(&m))?))
 }
 
+/// Caret positions of a text content: `{ lines: [{ start, baseline, carets }], ascent, descent, cap }`.
+#[wasm_bindgen(js_name = textLayout)]
+pub fn text_layout(content_json: &str) -> Result<String, JsError> {
+    let content: morpho_core::engine::Content = parse(content_json, "text")?;
+    ENGINE.with(|e| json(&e.borrow_mut().text_layout(&content).map_err(|m| JsError::new(&m))?))
+}
+
 /// One character of a loaded font: `{ d, advance, exists }` in em units.
 #[wasm_bindgen(js_name = glyphPath)]
 pub fn glyph_path(font: &str, axes_json: &str, ch: &str) -> Result<String, JsError> {

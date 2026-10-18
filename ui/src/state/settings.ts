@@ -18,6 +18,14 @@ export interface Settings {
   previewQuality: 'fast' | 'balanced' | 'sharp';
   reduceMotion: boolean;
   confirmConvert: boolean;
+  /** Corner handles keep proportions without ⇧ (⇧ then stretches). */
+  keepRatio: boolean;
+  /** Preview the iOS / Android corner mask over the artboard. */
+  iconMask: boolean;
+  /** Seen the first-run welcome. */
+  welcomed: boolean;
+  /** Seen the Type mode tour. */
+  typeTour: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -37,6 +45,10 @@ export const DEFAULT_SETTINGS: Settings = {
   previewQuality: 'balanced',
   reduceMotion: false,
   confirmConvert: true,
+  keepRatio: false,
+  iconMask: false,
+  welcomed: false,
+  typeTour: false,
 };
 
 export type SettingDef =
@@ -56,6 +68,7 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: 'nudge', type: 'number', section: 'Keyboard', label: 'Nudge distance', hint: 'Arrow keys move the selection by this much.', min: 0.1, max: 100, step: 0.1, suffix: 'px', keywords: 'arrow move' },
   { key: 'bigNudge', type: 'number', section: 'Keyboard', label: 'Big nudge distance', hint: '⇧ + arrow keys move by this much.', min: 1, max: 500, step: 1, suffix: 'px', keywords: 'shift arrow move' },
   { key: 'advanced', type: 'toggle', section: 'Editing', label: 'Advanced controls', hint: 'Show every parameter (seeds, phases, raw numbers) instead of just the essentials.', keywords: 'simple expert pro' },
+  { key: 'keepRatio', type: 'toggle', section: 'Editing', label: 'Corners keep proportions', hint: 'Off (like Figma): hold ⇧ while dragging a corner to keep proportions. On: corners keep proportions and ⇧ stretches. Text always scales evenly from corners.', keywords: 'resize scale shift aspect ratio uniform' },
   { key: 'confirmConvert', type: 'toggle', section: 'Editing', label: 'Ask before converting to outlines', hint: 'Editing the points of text or a shape turns it into an outline first.', keywords: 'bake points nodes' },
   { key: 'previewQuality', type: 'choice', section: 'Performance', label: 'Preview quality', hint: 'Sharper previews cost more GPU time on large artboards.', options: [{ value: 'fast', label: 'Fast' }, { value: 'balanced', label: 'Balanced' }, { value: 'sharp', label: 'Sharp' }], keywords: 'resolution speed gpu' },
   { key: 'reduceMotion', type: 'toggle', section: 'Performance', label: 'Pause animated effects', hint: 'Stop animated chrome and neon flicker in the preview.', keywords: 'animation battery' },

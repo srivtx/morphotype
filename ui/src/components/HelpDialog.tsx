@@ -9,8 +9,9 @@ const GUIDE: { title: string; steps: string[] }[] = [
   {
     title: 'Make a logo',
     steps: [
-      'Start from a template (⌘N) or add text (T) and shapes from the dock at the bottom.',
-      'Click to select, drag to move, pull the handles to resize, and grab just outside a corner to rotate. Hold ⇧ to keep proportions or snap angles, ⌥ to scale from the centre, ⌘ to skip snapping.',
+      'Start from a template (⌘N), or press T and click anywhere to type. Double-click any text to edit it right on the canvas; Esc or a click outside finishes.',
+      'Click to select, drag to move, pull the handles to resize, and grab just outside a corner to rotate. Hold ⇧ to keep proportions or snap angles, ⌥ to scale from the centre, ⌘ to skip snapping. Hold ⌥ with something selected to measure distances.',
+      'Change colours right in the Design tab: the colour row recolours the whole material from one pick. The Background row at the bottom of Layers (or the round chip in the dock) changes the backdrop.',
       'Pick a look in the Style tab. Every layer has its own material, so eyes can be ink while the body is puffy.',
       'Set a layer to Cut to punch it out of the layer directly below it (eyes in a mascot, a cursor in a pin).',
       'Group (⌘G) to move things together, or Merge (⇧⌘M) to fuse them into one shape with one material.',
@@ -28,10 +29,11 @@ const GUIDE: { title: string; steps: string[] }[] = [
   {
     title: 'Design a font',
     steps: [
-      'Switch to Type mode (⌘2). Pick a base font, then apply a style to every glyph at once: pixels, dots, rounding, weight, slant.',
+      'Switch to Type mode (⌘2). Name your font and start from a typeface or a blank set, then apply a look to every glyph at once: pixels, dots, rounding, weight, slant.',
       'Click a glyph to open it. Drag its points, give it its own modifiers, change its width, or reset it to the base font.',
       'Add any character you like, even ones the base font doesn’t have, and draw it or trace it from an image.',
-      'Export a .ttf to install, a .woff for the web, or the web kit with a ready-to-paste @font-face snippet.',
+      'Use in Design adds it to your font list under its own name. Export a .ttf to install, a .woff for the web, or the web kit with a ready-to-paste @font-face snippet.',
+      'New to type design? Type basics (in the ⋯ menu of the Font tab, or ⌘K) explains cap height, x-height, spacing and more in five minutes.',
     ],
   },
   {
@@ -39,7 +41,8 @@ const GUIDE: { title: string; steps: string[] }[] = [
     steps: [
       'PNG at 1×, 2× or 4× (⌘E), JPG for social posts, or copy the image straight to the clipboard (⇧⌘C).',
       'SVG (⇧⌘E) keeps clean vector outlines, with one path per object and its main colour.',
-      'Pick a canvas format (Instagram, Story, YouTube thumbnail, App icon…) in the Design tab when nothing is selected.',
+      'Pick a canvas format (Instagram, Story, YouTube thumbnail, App icon, business card…) in the Design tab when nothing is selected.',
+      'App icons: macOS icons include their rounded tile and shadow, while iOS and Android round the corners for you, so export a full square. Choose the platform under App icon tile.',
     ],
   },
 ];

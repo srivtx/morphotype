@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { addShape, importImage, moveNodes, toggleLocked, toggleVisible, updateNode } from '../app/actions';
+import { addShape, importImage, moveNodes, startText, toggleLocked, toggleVisible, updateNode } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
 import type { SymbolKind } from '../engine/types';
+import { fillCss } from '../render/background';
 import { viewBoxOf } from '../render/thumbs';
-import { isGroup, morphLayer, nodeLabel, symbolLayer, textLayer, type Group, type Node } from '../state/model';
+import { isGroup, morphLayer, nodeLabel, symbolLayer, type Group, type Node } from '../state/model';
 import { edit, select, store, useStore } from '../state/store';
 import { allLayers, ancestors, clipBase, find } from '../state/tree';
 import { openContextMenu } from './ContextMenu';
@@ -45,12 +46,38 @@ function Thumb({ node }: { node: Node }) {
   );
 }
 
+/** The artboard background as the bottom row, like a frame or background layer. */
+function BackgroundRow() {
+  const bg = useStore((s) => s.project.background);
+  const selected = useStore((s) => s.selection.length === 0 && s.mode === 'design');
+  return (
+    <div
+      className={`row bg-row ${selected ? 'selected' : ''}`}
+      role="treeitem"
+      aria-selected={selected}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        select([]);
+        store.set({ tab: 'design' });
+      }}
+      data-tip="Background and app-icon tile"
+    >
+      <span className="row-caret" />
+      <span className="row-kind">
+        <span className="bg-swatch" style={{ background: fillCss(bg.fill) }}>
+          {bg.tile && <span style={{ background: fillCss(bg.tile.fill) }} />}
+        </span>
+      </span>
+      <span className="row-name">Background{bg.tile ? ' + tile' : ''}</span>
+    </div>
+  );
+}
+
 export function LayersPanel() {
   const layers = useStore((s) => s.project.layers);
   const selection = useStore((s) => s.selection);
   const hover = useStore((s) => s.hover);
   const results = useStore((s) => s.build?.layers);
-  const firstFont = useStore((s) => s.fonts[0]?.id ?? 'archivo');
   const rows = useMemo(() => flatten(layers), [layers]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
@@ -88,7 +115,7 @@ export function LayersPanel() {
   };
 
   const dropAt = (clientY: number): Drop | null => {
-    const els = Array.from(listRef.current?.querySelectorAll<HTMLElement>('.row') ?? []);
+    const els = Array.from(listRef.current?.querySelectorAll<HTMLElement>('.row:not(.bg-row)') ?? []);
     for (let i = 0; i < els.length; i++) {
       const rect = els[i].getBoundingClientRect();
       if (clientY < rect.top || clientY > rect.bottom) continue;
@@ -158,14 +185,14 @@ export function LayersPanel() {
       <div className="panel-head">
         <h3>Layers</h3>
         <div className="panel-head-tools">
-          <IconButton icon="text" title="Add text" kbd="T" onClick={() => addShape(textLayer('Type', firstFont))} />
+          <IconButton icon="text" title="Add text" kbd="T" onClick={() => startText()} />
           <button ref={shapeBtn} className={`icon-btn ${shapes ? 'on' : ''}`} aria-label="Add shape" data-tip="Add shape" onClick={() => setShapes(!shapes)}>
             <Icon name="shapes" />
           </button>
           <Menu buttonClass="icon-btn" label={<Icon name="plus" />} title="Add…" placement="bottom-end" width={230}>
             {(close) => (
               <div className="menu-list">
-                <MenuItem icon="text" label="Text" kbd="T" onClick={() => (close(), addShape(textLayer('Type', firstFont)))} />
+                <MenuItem icon="text" label="Text" kbd="T" onClick={() => (close(), startText())} />
                 <MenuItem icon="image" label="Trace an image…" kbd={shortcutOf('trace')} onClick={() => (close(), void importImage())} />
                 <MenuItem
                   icon="morph"
@@ -288,6 +315,7 @@ export function LayersPanel() {
             </div>
           );
         })}
+        <BackgroundRow />
         {rows.length === 0 && (
           <div className="empty-layers">
             <p>Your canvas is empty.</p>

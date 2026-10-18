@@ -43,6 +43,9 @@ self.onmessage = async (ev: MessageEvent<Request>) => {
       case 'split':
         reply({ id: req.rid, ok: true, value: JSON.parse(morpho.split(req.doc, req.id)) });
         break;
+      case 'textLayout':
+        reply({ id: req.rid, ok: true, value: JSON.parse(morpho.textLayout(req.content)) });
+        break;
       case 'glyphPath':
         reply({ id: req.rid, ok: true, value: JSON.parse(morpho.glyphPath(req.font, req.axes, req.ch)) });
         break;

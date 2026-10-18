@@ -278,6 +278,45 @@ pub struct GlyphPreview {
     pub edited: bool,
 }
 
+/// A positioned glyph from text layout, in em units.
+struct PlacedGlyph {
+    a: u16,
+    b: u16,
+    pen: f64,
+    xo: f64,
+    yo: f64,
+    /// Byte offset of the glyph's cluster within its line.
+    cluster: usize,
+}
+
+struct LineLayout {
+    baseline: f64,
+    text: String,
+    glyphs: Vec<PlacedGlyph>,
+    x0: f64,
+    width: f64,
+}
+
+/// One line of caret positions for on-canvas text editing.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaretLine {
+    /// UTF-16 offset of the line's first character in the whole text.
+    pub start: usize,
+    pub baseline: f64,
+    /// x before each UTF-16 unit of the line, plus the end of the line.
+    pub carets: Vec<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLayout {
+    pub lines: Vec<CaretLine>,
+    pub ascent: f64,
+    pub descent: f64,
+    pub cap: f64,
+}
+
 struct Local {
     geo: Geo,
     em: f64,
@@ -386,10 +425,10 @@ impl Engine {
         Ok(m)
     }
 
-    /// Lay out text in em units. Returns per-glyph (geometry, pen x, pen y) and
-    /// a flag telling whether exact curves survived (no morph).
+    /// Shape and position every line of a text, in em units. Both the outline
+    /// builder and the caret layout use this, so the caret always matches.
     #[allow(clippy::too_many_arguments)]
-    fn text_geo(
+    fn lay_out(
         &mut self,
         text: &str,
         font: &str,
@@ -399,10 +438,9 @@ impl Engine {
         align: Align,
         morph: Option<&TextMorph>,
         ligatures: bool,
-    ) -> Result<Geo, String> {
+    ) -> Result<Vec<LineLayout>, String> {
         let info = self.font(font)?.info.clone();
         let upm_a = info.units_per_em.max(1) as f64;
-        let morph = morph.filter(|m| m.t > 1e-6 && self.fonts.contains_key(&m.font));
         let upm_b = match morph {
             Some(m) => self.font(&m.font)?.info.units_per_em.max(1) as f64,
             None => upm_a,
@@ -416,12 +454,11 @@ impl Engine {
         let block_top = -cap;
         let block_bottom = (n_lines - 1) as f64 * lh;
         let y_shift = -(block_top + block_bottom) * 0.5;
-        let mut poly = Shape::default();
-        let mut curves: Option<CurveShape> = if morph.is_none() { Some(Vec::new()) } else { None };
+        let mut out = Vec::with_capacity(n_lines);
         for (li, line) in lines.iter().enumerate() {
             let baseline = li as f64 * lh + y_shift;
-            // (glyph a, glyph b, advance in em)
-            let mut placed: Vec<(u16, u16, f64, f64, f64)> = Vec::new();
+            // (glyph a, glyph b, advance, x offset, y offset, cluster) in em.
+            let mut placed: Vec<(u16, u16, f64, f64, f64, usize)> = Vec::new();
             {
                 let fa = self.font(font)?;
                 let face_a = fa.face(&axes_vec(axes)).ok_or("The font couldn't be opened.")?;
@@ -430,7 +467,7 @@ impl Engine {
                 match morph {
                     None => {
                         for g in &ga {
-                            placed.push((g.glyph, 0, g.x_advance as f64 / upm_a, g.x_offset as f64 / upm_a, g.y_offset as f64 / upm_a));
+                            placed.push((g.glyph, 0, g.x_advance as f64 / upm_a, g.x_offset as f64 / upm_a, g.y_offset as f64 / upm_a, g.cluster as usize));
                         }
                     }
                     Some(m) => {
@@ -441,16 +478,16 @@ impl Engine {
                         if aligned {
                             for (x, y) in ga.iter().zip(&gb) {
                                 let adv = x.x_advance as f64 / upm_a * (1.0 - t) + y.x_advance as f64 / upm_b * t;
-                                placed.push((x.glyph, y.glyph, adv, 0.0, 0.0));
+                                placed.push((x.glyph, y.glyph, adv, 0.0, 0.0, x.cluster as usize));
                             }
                         } else {
                             // Fall back to one glyph per character via cmap.
-                            for ch in line.chars() {
+                            for (bi, ch) in line.char_indices() {
                                 let a = face_a.glyph_index(ch).map_or(0, |g| g.0);
                                 let b = face_b.glyph_index(ch).map_or(0, |g| g.0);
                                 let aa = face_a.glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(a)).unwrap_or(0) as f64 / upm_a;
                                 let ab = face_b.glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(b)).unwrap_or(0) as f64 / upm_b;
-                                placed.push((a, b, aa * (1.0 - t) + ab * t, 0.0, 0.0));
+                                placed.push((a, b, aa * (1.0 - t) + ab * t, 0.0, 0.0, bi));
                             }
                         }
                     }
@@ -458,19 +495,50 @@ impl Engine {
             }
             let n = placed.len();
             let width: f64 = placed.iter().map(|p| p.2).sum::<f64>() + tracking * n.saturating_sub(1) as f64;
-            let mut pen = match align {
+            let x0 = match align {
                 Align::Left => 0.0,
                 Align::Center => -width * 0.5,
                 Align::Right => -width,
             };
-            for (ga, gb, adv, xo, yo) in placed {
-                let m = Affine::translate(pen + xo, baseline - yo);
+            let mut pen = x0;
+            let mut glyphs = Vec::with_capacity(n);
+            for (a, b, adv, xo, yo, cluster) in placed {
+                glyphs.push(PlacedGlyph { a, b, pen, xo, yo, cluster });
+                pen += adv + tracking;
+            }
+            out.push(LineLayout { baseline, text: line.to_string(), glyphs, x0, width });
+        }
+        Ok(out)
+    }
+
+    /// Lay out text in em units. Returns the outline and, when no morph is
+    /// involved, the exact curves too.
+    #[allow(clippy::too_many_arguments)]
+    fn text_geo(
+        &mut self,
+        text: &str,
+        font: &str,
+        axes: &BTreeMap<String, f32>,
+        tracking: f64,
+        line_height: f64,
+        align: Align,
+        morph: Option<&TextMorph>,
+        ligatures: bool,
+    ) -> Result<Geo, String> {
+        let morph = morph.filter(|m| m.t > 1e-6 && self.fonts.contains_key(&m.font));
+        let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
+        let lines = self.lay_out(text, font, axes, tracking, line_height, align, morph, ligatures)?;
+        let mut poly = Shape::default();
+        let mut curves: Option<CurveShape> = if morph.is_none() { Some(Vec::new()) } else { None };
+        for line in &lines {
+            for g in &line.glyphs {
+                let m = Affine::translate(g.pen + g.xo, line.baseline - g.yo);
                 match morph {
                     None => {
-                        let g = self.glyph(font, axes, ga)?;
-                        poly.extend(g.poly.clone().transformed(&m));
+                        let geo = self.glyph(font, axes, g.a)?;
+                        poly.extend(geo.poly.clone().transformed(&m));
                         if let Some(cs) = &mut curves {
-                            for c in &g.curves {
+                            for c in &geo.curves {
                                 let mut c = c.clone();
                                 c.transform(&m);
                                 cs.push(c);
@@ -478,14 +546,68 @@ impl Engine {
                         }
                     }
                     Some(mo) => {
-                        let mm = self.glyph_morph(font, axes, ga, &mo.font, &mo.axes, gb)?;
+                        let mm = self.glyph_morph(font, axes, g.a, &mo.font, &mo.axes, g.b)?;
                         poly.extend(mm.at(t).transformed(&m));
                     }
                 }
-                pen += adv + tracking;
             }
         }
         Ok(Geo { poly, curves })
+    }
+
+    /// Caret positions of a text layer in its local units (before modifiers
+    /// and the layer transform), for editing text on the canvas. Indices are
+    /// UTF-16 offsets so they match the browser's text selection.
+    pub fn text_layout(&mut self, content: &Content) -> Result<TextLayout, String> {
+        let Content::Text { text, font, size, tracking, line_height, align, axes, morph, ligatures } = content else {
+            return Err("Not a text layer.".into());
+        };
+        let morph = morph.as_ref().filter(|m| m.t > 1e-6 && self.fonts.contains_key(&m.font));
+        let info = self.font(font)?.info.clone();
+        let upm = info.units_per_em.max(1) as f64;
+        let lines = self.lay_out(text, font, axes, *tracking, *line_height, *align, morph, *ligatures)?;
+        let mut out = Vec::with_capacity(lines.len());
+        let mut start16 = 0usize;
+        for line in &lines {
+            // Pen position at the start of each cluster (left to right).
+            let mut stops: Vec<(usize, f64)> = Vec::new();
+            for g in &line.glyphs {
+                match stops.iter_mut().find(|s| s.0 == g.cluster) {
+                    Some(s) => s.1 = s.1.min(g.pen),
+                    None => stops.push((g.cluster, g.pen)),
+                }
+            }
+            stops.sort_by_key(|s| s.0);
+            let end_x = line.x0 + line.width;
+            let len = line.text.len();
+            let x_at = |b: usize| -> f64 {
+                let i = stops.iter().rposition(|s| s.0 <= b);
+                let Some(i) = i else { return stops.first().map_or(line.x0, |s| s.1) };
+                let (c0, x0) = stops[i];
+                let (c1, x1) = stops.get(i + 1).copied().unwrap_or((len, end_x));
+                if c1 <= c0 {
+                    return x0;
+                }
+                x0 + (x1 - x0) * (b - c0) as f64 / (c1 - c0) as f64
+            };
+            let mut carets = Vec::new();
+            for (bi, ch) in line.text.char_indices() {
+                let x = x_at(bi);
+                for _ in 0..ch.len_utf16() {
+                    carets.push(x * size);
+                }
+            }
+            carets.push(if line.text.is_empty() { line.x0 * size } else { end_x * size });
+            let len16 = carets.len() - 1;
+            out.push(CaretLine { start: start16, baseline: line.baseline * size, carets });
+            start16 += len16 + 1;
+        }
+        Ok(TextLayout {
+            lines: out,
+            ascent: info.ascender as f64 / upm * size,
+            descent: -(info.descender as f64) / upm * size,
+            cap: info.cap_height as f64 / upm * size,
+        })
     }
 
     /// Local geometry of a layer (modifiers applied, transform not), cached.
@@ -885,6 +1007,9 @@ impl Engine {
             face.glyph_index(ch).map(|g| (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / fu))
         };
         let edited_d = edit.and_then(|e| e.d.as_deref()).filter(|d| !d.trim().is_empty());
+        if spec.blank && edited_d.is_none() && !ch.is_whitespace() {
+            return Ok(None);
+        }
         let (poly, curves, mut adv) = if let Some(d) = edited_d {
             let cs = svg::parse_path(d)?;
             let mut poly = flatten_curves(&cs, 0.0006).cleaned(1e-10);
@@ -1104,6 +1229,10 @@ pub struct FontSpec {
     /// "ttf" (default) or "woff".
     #[serde(default)]
     pub format: Option<String>,
+    /// Start from nothing: only drawn glyphs (and spaces) are included; the
+    /// base font only lends its metrics.
+    #[serde(default)]
+    pub blank: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1164,6 +1293,46 @@ mod tests {
         let out = e.build(&d);
         assert!(out.points > 50);
         assert!(out.layers[0].error.is_none(), "{:?}", out.layers[0].error);
+    }
+
+    #[test]
+    fn caret_layout_matches_outline() {
+        let mut e = engine();
+        let c: Content = serde_json::from_str(r#"{"type":"text","text":"MO\nRPH","font":"archivo","size":100,"align":"center"}"#).unwrap();
+        let l = e.text_layout(&c).unwrap();
+        assert_eq!(l.lines.len(), 2);
+        assert_eq!(l.lines[0].carets.len(), 3);
+        assert_eq!(l.lines[1].start, 3);
+        assert_eq!(l.lines[1].carets.len(), 4);
+        // Carets increase left to right and the line is centred.
+        let c0 = &l.lines[0].carets;
+        assert!(c0[0] < c0[1] && c0[1] < c0[2]);
+        assert!((c0[0] + c0[2]).abs() < 1.0, "{c0:?}");
+        assert!(l.lines[1].baseline > l.lines[0].baseline);
+        // The outline sits between the first and last carets.
+        let out = e.build(&doc(r#"{"layers":[{"id":"t","content":{"type":"text","text":"MO","font":"archivo","size":100}}]}"#));
+        let b = out.bbox.unwrap();
+        assert!(b[0] >= c0[0] - 5.0 && b[2] <= c0[2] + 5.0, "{b:?} vs {c0:?}");
+        // Empty text still has a caret.
+        let empty: Content = serde_json::from_str(r#"{"type":"text","text":"","font":"archivo","size":100}"#).unwrap();
+        assert_eq!(e.text_layout(&empty).unwrap().lines[0].carets, vec![0.0]);
+    }
+
+    #[test]
+    fn blank_font_has_only_drawn_glyphs() {
+        let mut e = engine();
+        let spec: FontSpec = serde_json::from_str(
+            r#"{"font":"archivo","family":"Blank Test","charset":"AB ","blank":true,
+            "glyphs":[{"ch":"A","d":"M0.1 0L0.3 -0.7L0.5 0Z","advance":0.6}]}"#,
+        )
+        .unwrap();
+        let prev = e.font_preview(&spec, "AB").unwrap();
+        assert!(!prev[0].d.is_empty());
+        assert!(prev[1].d.is_empty(), "B isn't drawn yet");
+        let bytes = e.export_font(&spec).unwrap();
+        e.load_font("blank", &bytes, 0).unwrap();
+        let g = e.glyph_path("blank", &BTreeMap::new(), 'B').unwrap();
+        assert!(!g.exists || g.d.is_empty());
     }
 
     #[test]

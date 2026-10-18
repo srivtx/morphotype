@@ -1,5 +1,5 @@
 import type { Request, RequestBody, Response } from './protocol';
-import type { BakeOut, BuildOut, EngineDocument, FontInfo, FontSpec, GlyphOut, GlyphPreview, PathsOut, PieceOut, SvgOptions, TraceOptions, TraceOut } from './types';
+import type { BakeOut, BuildOut, Content, EngineDocument, FontInfo, FontSpec, GlyphOut, GlyphPreview, PathsOut, PieceOut, SvgOptions, TextLayout, TraceOptions, TraceOut } from './types';
 
 export type BuildResult = BuildOut & { ms: number };
 
@@ -156,6 +156,11 @@ export class EngineClient {
 
   split(doc: EngineDocument, id: string): Promise<PieceOut[]> {
     return this.post({ type: 'split', doc: JSON.stringify(doc), id });
+  }
+
+  /** Caret positions of a text content, for on-canvas editing. */
+  textLayout(content: Content): Promise<TextLayout> {
+    return this.post({ type: 'textLayout', content: JSON.stringify(content) });
   }
 
   glyphPath(font: string, axes: Record<string, number>, ch: string): Promise<GlyphOut> {

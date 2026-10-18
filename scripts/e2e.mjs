@@ -227,8 +227,60 @@ try {
   const jpg = await download(exportMenu, () => page.getByRole('menuitem', { name: /^JPG/ }).click());
   check(jpg[0] === 0xff && jpg[1] === 0xd8, 'JPG export');
 
+  // ---- typing on the canvas ----
+  await openTemplate('Glow glass');
+  const textCount = async () => layersOf(await state()).filter((l) => l.content?.type === 'text').length;
+  const n0 = await textCount();
+  await page.keyboard.press('t');
+  await page.keyboard.press('Escape');
+  check((await textCount()) === n0 && (await state()).tool === 'select', 'T then Esc leaves nothing behind');
+  await page.keyboard.press('t');
+  await page.mouse.click(vb.x + 140, vb.y + 140);
+  await settle(400);
+  await page.keyboard.type('Hi there', { delay: 20 });
+  await settle(500);
+  s = await state();
+  const typed = layersOf(s).find((l) => l.content?.text === 'Hi there');
+  check(!!typed && s.editing?.kind === 'text', 'T + click starts typing on the canvas');
+  check((await page.locator('.text-caret, .text-sel').count()) > 0, 'a caret is drawn on the canvas');
+  await page.screenshot({ path: path.join(out, 'text-01-typing.png') });
+  await page.keyboard.press('Escape');
+  await settle(300);
+  check((await state()).editing === null, 'Esc finishes typing');
+  const tb = await page.evaluate((id) => window.morphotype.store.get().build.layers.find((l) => l.id === id)?.bbox, typed.id);
+  const r = await page.evaluate(() => {
+    const c = document.querySelector('.viewport canvas').getBoundingClientRect();
+    return { x: c.left, y: c.top };
+  });
+  const toScreen = await page.evaluate(([x, y]) => window.morphotype.renderer?.toScreen?.(x, y) ?? null, [(tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2]);
+  if (toScreen) {
+    await page.mouse.dblclick(r.x + toScreen.x, r.y + toScreen.y);
+    await settle(500);
+    await page.keyboard.press(`${mod}+a`);
+    await page.keyboard.type('Yo');
+    await settle(500);
+    s = await state();
+    check(layersOf(s).some((l) => l.id === typed.id && l.content.text === 'Yo'), 'double-click edits text in place');
+    await page.keyboard.press('Escape');
+  }
+  await page.keyboard.press('t');
+  await page.mouse.click(vb.x + 140, vb.y + vb.height - 160);
+  await settle(300);
+  await page.keyboard.press('Escape');
+  await settle(300);
+  check(!layersOf(await state()).some((l) => l.content?.type === 'text' && !l.content.text.trim()), 'an empty text is removed when typing ends');
+
   // ---- Type mode ----
   await page.keyboard.press(`${mod}+2`);
+  await page.waitForSelector('.type-start', { timeout: 15_000 });
+  check(true, 'Type mode opens on the new-font screen');
+  await page.locator('.ts-name input').fill('Archivo Black Copy');
+  check(await page.locator('.type-start footer .btn.primary').isDisabled(), 'a name that reuses the base font name is refused');
+  await page.locator('.ts-name input').fill('Testa Grotesk');
+  await page.locator('.type-start footer .btn.primary').click();
+  await page.waitForSelector('.tour-card', { timeout: 10_000 });
+  await page.screenshot({ path: path.join(out, 'type-00-tour.png') });
+  await page.keyboard.press('Escape');
   await page.waitForSelector('.glyph-cell svg path', { timeout: 30_000 });
   await settle(1500);
   check((await page.locator('.glyph-cell').count()) > 80, 'glyph grid lists the character set');
@@ -236,16 +288,19 @@ try {
   await settle(1800);
   await page.screenshot({ path: path.join(out, 'type-01-dots.png') });
   await page.locator('.glyph-cell', { hasText: 'B' }).first().click();
-  await page.getByRole('button', { name: 'Edit points' }).click();
+  await page.getByRole('button', { name: 'Edit points' }).first().click();
   await settle(900);
   check((await page.locator('.glyph-canvas .pe-node').count()) > 4, 'glyph point editor opens');
+  await page.locator('.metric-label', { hasText: 'Cap height' }).click();
+  check((await page.locator('.term-tip').count()) === 1, 'metric lines explain themselves');
   await page.locator('.add-chars input').fill('★');
   await page.keyboard.press('Enter');
   await settle(1000);
   s = await state();
   check(s.project.type.charset.includes('★') && s.glyph === '★', 'adding a character outside the base font');
-  await page.getByRole('button', { name: 'Draw it' }).click();
+  await page.getByRole('button', { name: 'Start from a block' }).first().click();
   await settle(600);
+  await page.getByRole('tab', { name: /Use & export/ }).click();
   const woff = await download(async () => {}, () => page.getByRole('button', { name: '.woff (web)' }).click());
   check(woff.subarray(0, 4).toString() === 'wOFF', `WOFF export (${(woff.length / 1024).toFixed(0)} KB)`);
   const kit = await download(async () => {}, () => page.getByRole('button', { name: /Web font kit/ }).click());
@@ -253,6 +308,13 @@ try {
   const ttf = await download(async () => {}, () => page.getByRole('button', { name: '.ttf' }).click());
   check(ttf.readUInt32BE(0) === 0x00010000, `TTF export (${(ttf.length / 1024).toFixed(0)} KB)`);
   await page.screenshot({ path: path.join(out, 'type-02-star.png') });
+  await page.getByRole('button', { name: /Use in Design/ }).click();
+  await page.waitForSelector('.use-font');
+  await page.screenshot({ path: path.join(out, 'type-03-use.png') });
+  await page.getByRole('button', { name: 'Use font' }).click();
+  check(await until((st) => st.mode === 'design' && st.fonts.some((f) => f.name.startsWith('Testa Grotesk'))), 'Use in Design adds the font under its own name');
+  s = await state();
+  check(layersOf(s).some((l) => l.content?.font?.startsWith('custom-')), 'a text layer is set in the new font');
 } catch (e) {
   errors.push(`crashed: ${e.message.split('\n')[0]}`);
   const pages = browser.contexts().flatMap((c) => c.pages());

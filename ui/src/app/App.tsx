@@ -12,7 +12,7 @@ import { Viewport } from '../components/canvas/Viewport';
 import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
 import { buildScene } from '../state/tree';
-import { store, toast, useStore } from '../state/store';
+import { setSettings, store, toast, useStore } from '../state/store';
 import { importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
 import { allCommands, matchKey } from './commands';
 
@@ -46,17 +46,18 @@ function useBuildLoop() {
   const layers = useStore((s) => s.project.layers);
   const ready = useStore((s) => s.ready);
   const fonts = useStore((s) => s.fonts);
+  const typing = useStore((s) => (s.editing?.kind === 'text' ? s.editing.id : null));
   useEffect(() => {
     if (!ready) return;
     let live = true;
-    engine.build(buildScene(store.get().project).doc).then(
+    engine.build(buildScene(store.get().project, undefined, typing).doc).then(
       (b) => live && store.set({ build: b }),
       (e: Error) => toast(`Engine error: ${e.message}`, 'error'),
     );
     return () => {
       live = false;
     };
-  }, [layers, ready, fonts]);
+  }, [layers, ready, fonts, typing]);
 }
 
 function isTyping(e: KeyboardEvent) {
@@ -156,6 +157,7 @@ function useDropFiles() {
 function DesignMode() {
   const tab = useStore((s) => s.tab);
   const editing = useStore((s) => s.editing);
+  const tool = useStore((s) => s.tool);
   return (
     <main className="workspace">
       <aside className="panel left">
@@ -163,7 +165,16 @@ function DesignMode() {
       </aside>
       <section className="center">
         <Viewport />
-        {editing && (
+        {tool === 'text' && !editing && (
+          <div className="edit-pill" role="status">
+            <Icon name="text" size={14} />
+            Click anywhere to type, or click a text to edit it
+            <button className="link-btn" onClick={() => store.set({ tool: 'select' })}>
+              Cancel <kbd>Esc</kbd>
+            </button>
+          </div>
+        )}
+        {editing && editing.kind !== 'text' && (
           <div className="edit-pill" role="status">
             <Icon name={editing.kind === 'warp' ? 'warp' : 'points'} size={14} />
             {editing.kind === 'warp' ? 'Drag the 16 points to warp' : 'Editing points'}
@@ -200,6 +211,11 @@ export function App() {
       (fonts) => {
         store.set({ fonts, ready: true });
         prewarmThumbs();
+        // First launch: ask what they're making.
+        if (!store.get().settings.welcomed) {
+          setSettings({ welcomed: true });
+          store.set({ dialog: { kind: 'templates' } });
+        }
       },
       (e: Error) => toast(`Couldn't start the engine: ${e.message}`, 'error'),
     );

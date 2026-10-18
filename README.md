@@ -13,19 +13,22 @@ Download the latest `.dmg` from [Releases](https://github.com/srivtx/morphotype/
 Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and **Type** for designing a whole font.
 
 **Design mode**
-- **Direct editing.** Click to select, drag to move, and use the handles to resize, stretch or rotate. Smart guides snap to the artboard and other layers. Also marquee selection, multi-select, align and distribute, flip, lock, hide, groups and right-click menus.
-- **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed and Flat/gradient. There are 34 presets with GPU-rendered previews.
+- **Type on the canvas.** Press T and click anywhere to type, or double-click any text to edit it in place, with a real caret and selection and a small bar for font, size, colour and alignment.
+- **Direct editing.** Click to select, drag to move, and use the handles to resize, stretch or rotate (⇧ keeps proportions, as in Figma). Smart guides snap to the artboard and other layers, hold ⌥ to measure distances, and drags show live readouts. Also marquee selection, multi-select, align and distribute, flip, lock, hide, groups and right-click menus.
+- **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed, Letterpress, Halftone, Risograph and Flat/gradient with print texture. There are 43 presets with GPU-rendered previews, and the Design tab recolours any material from a single colour.
 - **Shapes that work like a logo tool.** Cut and Mask clip into the layer directly below, Merge fuses layers into one outline with one material, and Break apart splits text or traced images into one layer per letter.
 - **Reshape anything.** Quick looks (Bitmap, Dot matrix, Soft pixel, Tiles, Arch, Flag, Melting…) apply a whole modifier stack in one click. Warp gives Photoshop-style envelope presets plus 16 draggable points. Edit points gives real bezier editing. The modifiers are Weight, Round, Outline, Pixels (blocks, dots, soft tiles), Slant, Stretch, Warp, Arc, Wave, Perspective, Wobble, Melt and Ink bleed.
-- **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, and an app-icon tile with gloss, shadow and a holographic rim. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons and more.
+- **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, and an app-icon tile with gloss, shadow and a holographic rim, set up for macOS (rounded tile in the artwork) or iOS and Android (full square, with a preview of the system mask). The background is the bottom row in Layers and a chip in the dock. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons, business cards, ID badges and more.
 - **Fonts.** TTF, OTF, TTC and WOFF, shaped with a HarfBuzz port, with variable axes. Text can morph into another font glyph by glyph.
 - **Image tracing.** PNG, JPG, WebP or SVG become smooth vector outlines, or keep hard pixel edges.
 
 **Type mode**
+- Start a font by naming it and picking a typeface to reshape, or start blank and draw every glyph over a guide.
+- Type basics: a short guide to cap height, x-height, spacing, optical tricks and naming, plus clickable metric lines in the glyph editor.
 - A glyph grid (A–Z, a–z, 0–9, punctuation and any character you add), previewed with your style.
 - Font-wide looks and modifiers, per-glyph point editing, widths and modifiers, and tracing images into glyphs.
 - A live tester using the real compiled font.
-- Export as `.ttf`, `.woff`, or a **web font kit** (TTF, WOFF, `@font-face` CSS and a specimen page). On the Mac app you can also install the font, and **Use in Design** adds it to your fonts straight away.
+- Export as `.ttf`, `.woff`, or a **web font kit** (TTF, WOFF, `@font-face` CSS and a specimen page). On the Mac app you can also install the font, and **Use in Design** adds it to your fonts under its own name, with a summary of how it differs from the font it started from.
 
 **Export**: PNG at 1×, 2× or 4× (optionally transparent), JPG, copy to clipboard, SVG with one path per object, fonts, and `.morpho` project files that embed imported fonts.
 
@@ -87,7 +90,9 @@ CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-
 | | |
 | --- | --- |
 | ⌘K | Search every command |
-| V / H / T / O / R | Select, hand, text, circle, squircle |
+| V / H / T / O / R | Select, hand, text tool, circle, squircle |
+| Enter / ⇧Enter | Edit the selected text or enter a group / select the parent group |
+| Hold ⌥ | Measure distances from the selection |
 | P / W | Edit points / warp |
 | ⌘G / ⇧⌘G / ⇧⌘M | Group / ungroup / merge into one shape |
 | ⌥A ⌥H ⌥D / ⌥W ⌥V ⌥S | Align left, centre, right / top, middle, bottom |

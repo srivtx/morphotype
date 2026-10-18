@@ -555,11 +555,12 @@ const flat: EffectDef = {
     num('shadowX', 'Shadow X', -100, 100, 1, 0, true),
     num('shadowY', 'Shadow Y', -100, 100, 1, 12, true),
     num('shadowBlur', 'Shadow blur', 0.5, 100, 0.5, 14, true),
+    num('texture', 'Print texture', 0, 1, 0.01, 0),
   ],
   reach: (p) => n(p, 'outline') + Math.max(Math.abs(n(p, 'shadowX')), Math.abs(n(p, 'shadowY'))) + n(p, 'shadowBlur') * 2,
   glsl: /* glsl */ `
 uniform vec3 u_fill, u_fill2, u_outlineColor;
-uniform float u_gradient, u_angle, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity;
+uniform float u_gradient, u_angle, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture;
 vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   vec4 f = dropShadow(uv, vec2(u_shadowX, u_shadowY), u_outline, u_shadowBlur, u_shadowOpacity);
@@ -571,11 +572,131 @@ vec4 effect(vec2 uv) {
   float a = radians(u_angle);
   float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(a), -cos(a))) + 0.5, 0.0, 1.0);
   vec3 colr = mix(u_fill, u_fill2, g * u_gradient);
+  if (u_texture > 0.0) {
+    // Ink on paper: soft blotches, fibres and a slightly worn edge.
+    vec2 p = artPx(uv);
+    colr *= 1.0 - u_texture * (0.1 * fbm3(p / 40.0) + 0.06 * hash12(floor(p * u_k)));
+    c *= 1.0 - u_texture * 0.35 * smoothstep(0.62, 0.8, fbm(p / 5.0)) * smoothstep(-6.0, 0.0, dt / u_k);
+  }
   return over(vec4(colr * c, c), f);
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed];
+
+const emboss: EffectDef = {
+  id: 'emboss',
+  name: 'Letterpress',
+  description: 'Pressed into or raised from paper, lit from one side. Match the backdrop for a blind emboss.',
+  params: [
+    col('color', 'Colour', '#e8442e'),
+    num('match', 'Match backdrop', 0, 1, 0.01, 1),
+    num('depth', 'Depth', -3, 3, 0.05, -1.2),
+    num('bevel', 'Edge width', 1, 80, 0.5, 9),
+    num('light', 'Light angle', 0, 360, 1, 225),
+    num('highlight', 'Highlight', 0, 1, 0.01, 0.45),
+    num('shade', 'Shadow', 0, 1, 0.01, 0.5),
+    num('paper', 'Paper texture', 0, 1, 0.01, 0.35),
+  ],
+  height: (p) => ({ profile: 2, bevel: n(p, 'bevel'), softness: 2 }),
+  reach: () => 3,
+  glsl: /* glsl */ `
+uniform vec3 u_color;
+uniform float u_match, u_depth, u_light, u_highlight, u_shade, u_paper;
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float cov = cover(dt - 1.5 * u_k);
+  if (cov <= 0.0) return vec4(0.0);
+  vec3 nrm = normalAt(uv, u_depth);
+  float a = radians(u_light);
+  vec2 L = vec2(cos(a), sin(a));
+  float s = dot(nrm.xy, -L) * 2.2;
+  vec3 base = mix(u_color, u_ambient, u_match);
+  vec2 p = artPx(uv);
+  float tex = (fbm3(p / 3.0) - 0.5) * u_paper * 0.12 + (hash12(floor(p * u_k)) - 0.5) * u_paper * 0.05;
+  vec3 c = base * (1.0 + tex);
+  c = mix(c, vec3(1.0), clamp(s, 0.0, 1.0) * u_highlight * 0.7);
+  c *= 1.0 - clamp(-s, 0.0, 1.0) * u_shade * 0.75;
+  // Pressed letters catch a little shade on the floor too.
+  float floorShade = u_depth < 0.0 ? 0.06 * smoothstep(0.0, 0.5, H(uv)) : 0.0;
+  c *= 1.0 - floorShade;
+  return vec4(c * cov, cov);
+}`,
+};
+
+const halftone: EffectDef = {
+  id: 'halftone',
+  name: 'Halftone',
+  description: 'Printed dots or lines that grow along a gradient or towards the middle, like comics and risograph prints.',
+  params: [
+    col('ink', 'Ink', '#0a0a0a'),
+    num('cell', 'Dot spacing', 2, 80, 0.5, 14),
+    num('angle', 'Screen angle', 0, 180, 1, 45),
+    num('lines', 'Lines instead of dots', 0, 1, 1, 0),
+    num('ramp', 'Fade', 0, 1, 0.01, 0.7),
+    num('rampAngle', 'Fade direction', 0, 360, 1, 180),
+    num('edge', 'Grow towards the middle', 0, 1, 0.01, 0, true),
+    num('min', 'Smallest dot', 0, 1, 0.01, 0.08, true),
+    num('max', 'Largest dot', 0, 1.5, 0.01, 1.15, true),
+  ],
+  reach: () => 2,
+  glsl: /* glsl */ `
+uniform vec3 u_ink;
+uniform float u_cell, u_angle, u_lines, u_ramp, u_rampAngle, u_edge, u_min, u_max;
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float cov = cover(dt);
+  if (cov <= 0.0) return vec4(0.0);
+  float ra = radians(u_rampAngle);
+  float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(ra), -cos(ra))) + 0.5, 0.0, 1.0);
+  float tone = mix(1.0, g, u_ramp);
+  tone *= mix(1.0, smoothstep(0.0, u_cell * 4.0, -dt / u_k), u_edge);
+  tone = mix(u_min, u_max, tone);
+  vec2 p = artPx(uv);
+  float a = radians(u_angle);
+  vec2 q = mat2(cos(a), -sin(a), sin(a), cos(a)) * p / max(u_cell, 0.5);
+  vec2 f = fract(q) - 0.5;
+  float d = u_lines > 0.5 ? (abs(f.y) - tone * 0.5) : (length(f) - sqrt(max(tone, 0.0)) * 0.5);
+  d *= u_cell * u_k;
+  float m = clamp(0.5 - d / max(fwidth(d), 1e-3), 0.0, 1.0);
+  float a2 = m * cov;
+  return vec4(u_ink * a2, a2);
+}`,
+};
+
+const riso: EffectDef = {
+  id: 'riso',
+  name: 'Risograph',
+  description: 'Two overprinted inks slightly out of register, with grainy, uneven coverage.',
+  params: [
+    col('ink', 'Ink', '#ff4fb1'),
+    col('ink2', 'Second ink', '#2b6bff'),
+    num('offsetX', 'Misregister X', -40, 40, 0.5, 7),
+    num('offsetY', 'Misregister Y', -40, 40, 0.5, 5),
+    num('second', 'Second ink', 0, 1, 0.01, 0.85),
+    num('grain', 'Grain', 0, 1, 0.01, 0.55),
+    num('patchy', 'Uneven ink', 0, 1, 0.01, 0.35),
+    num('seed', 'Seed', 0, 100, 1, 3, true),
+  ],
+  reach: (p) => Math.max(Math.abs(n(p, 'offsetX')), Math.abs(n(p, 'offsetY'))) + 3,
+  glsl: /* glsl */ `
+uniform vec3 u_ink, u_ink2;
+uniform float u_offsetX, u_offsetY, u_second, u_grain, u_patchy, u_seed;
+float density(vec2 p, float seed) {
+  float g = hash12(floor(p * u_k * 0.8) + seed * 31.0);
+  float blot = fbm3(p / 90.0 + seed);
+  return clamp(1.0 - u_grain * 0.55 * g - u_patchy * 0.6 * smoothstep(0.35, 0.75, blot), 0.0, 1.0);
+}
+vec4 effect(vec2 uv) {
+  vec2 p = artPx(uv);
+  float a1 = cover(sdfPx(uv)) * density(p, u_seed);
+  float a2 = cover(sdfPx(uv - offsetUv(vec2(u_offsetX, u_offsetY)))) * density(p + 17.0, u_seed + 5.0) * u_second;
+  // Overprint: where both inks land they multiply.
+  vec3 c = u_ink * a1 * (1.0 - a2) + u_ink2 * a2 * (1.0 - a1) + u_ink * u_ink2 * a1 * a2;
+  return vec4(c, a1 + a2 - a1 * a2);
+}`,
+};
+
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;
@@ -622,6 +743,15 @@ export const PRESETS: Preset[] = [
   { name: 'Glossy ink', effect: 'icon', params: {}, bg: '#a98bff', tags: 'icon black' },
   { name: 'Sunset glyph', effect: 'icon', params: { glyph: '#ffc61a' }, bg: '#ff5a10', tags: 'icon yellow' },
   { name: 'Candy glyph', effect: 'icon', params: { glyph: '#fff2fb', shine: 0.6 }, bg: '#ff3d86', tags: 'icon white' },
+  { name: 'Blind emboss', effect: 'emboss', params: {}, bg: '#e8442e', tags: 'letterpress deboss paper business card pressed' },
+  { name: 'Raised cream', effect: 'emboss', params: { color: '#f2e9d8', match: 0, depth: 1.3, highlight: 0.55, shade: 0.45 }, bg: '#e8442e', tags: 'letterpress emboss paper card' },
+  { name: 'Paper deboss', effect: 'emboss', params: { color: '#efe8dc', match: 1, depth: -1.6, bevel: 12 }, bg: '#efe8dc', tags: 'letterpress white paper stationery' },
+  { name: 'Printed ink', effect: 'flat', params: { fill: '#f4ead8', texture: 0.8 }, bg: '#e8442e', tags: 'paper print texture card cream' },
+  { name: 'Comic dots', effect: 'halftone', params: {}, bg: '#ffd23f', tags: 'halftone pop art print dots' },
+  { name: 'Pink halftone', effect: 'halftone', params: { ink: '#ff3d7f', cell: 10, ramp: 1, rampAngle: 135 }, bg: '#fff3e6', tags: 'halftone gradient dots print' },
+  { name: 'Line screen', effect: 'halftone', params: { ink: '#2b6bff', lines: 1, cell: 9, ramp: 0.85, angle: 0 }, bg: '#f4f1ea', tags: 'halftone lines engraving print' },
+  { name: 'Riso pink + blue', effect: 'riso', params: {}, bg: '#f4f1ea', tags: 'risograph print overprint zine' },
+  { name: 'Riso orange + green', effect: 'riso', params: { ink: '#ff7a1a', ink2: '#1a8a6a', offsetX: -6, offsetY: 6 }, bg: '#f4f1ea', tags: 'risograph print overprint poster' },
   { name: 'Distressed', effect: 'distressed', params: {}, bg: '#0b0b0b', tags: 'grunge print' },
   { name: 'Neon pink', effect: 'neon', params: {}, bg: '#07030d', tags: 'glow' },
   { name: 'Neon cyan', effect: 'neon', params: { color: '#28f0ff', core: '#f0ffff' }, bg: '#02070b', tags: 'glow' },

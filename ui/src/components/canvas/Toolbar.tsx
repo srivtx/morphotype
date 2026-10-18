@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react';
 import { addShape, importImage, primaryNode } from '../../app/actions';
 import { run, shortcutOf } from '../../app/commands';
-import { isGroup, symbolLayer, textLayer } from '../../state/model';
-import { store, useStore } from '../../state/store';
+import { isGroup, symbolLayer } from '../../state/model';
+import { select, store, useStore } from '../../state/store';
+import { fillCss } from '../../render/background';
+import { BackgroundEditor } from '../Inspector';
 import { Icon } from '../icons';
 import { ShapePicker } from '../pickers';
 import { IconButton, MenuItem, Popover } from '../ui';
@@ -16,16 +18,18 @@ export function Toolbar({ zoom, onFit, onZoom }: { zoom: number; onFit: () => vo
   const [zoomMenu, setZoomMenu] = useState(false);
   const shapesBtn = useRef<HTMLButtonElement>(null);
   const zoomBtn = useRef<HTMLButtonElement>(null);
-  const firstFont = useStore((s) => s.fonts[0]?.id ?? 'archivo');
+  const bgBtn = useRef<HTMLButtonElement>(null);
+  const [bgOpen, setBgOpen] = useState(false);
+  const bg = useStore((s) => s.project.background);
   return (
     <div className="dock" onPointerDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
       <div className="dock-group">
-        <IconButton icon="select" title="Select" kbd="V" active={tool === 'select' && !editing} onClick={() => store.set({ tool: 'select', editing: null })} />
+        <IconButton icon="select" title="Select" kbd="V" active={tool === 'select' && (!editing || editing.kind === 'text')} onClick={() => store.set({ tool: 'select', editing: null })} />
         <IconButton icon="hand" title="Hand — or hold Space" kbd="H" active={tool === 'hand'} onClick={() => store.set({ tool: 'hand' })} />
       </div>
       <span className="dock-sep" />
       <div className="dock-group">
-        <IconButton icon="text" title="Text" kbd="T" onClick={() => addShape(textLayer('Type', firstFont))} />
+        <IconButton icon="text" title="Text: click the canvas to type" kbd="T" active={tool === 'text' || editing?.kind === 'text'} onClick={() => store.set({ tool: tool === 'text' ? 'select' : 'text', editing: null })} />
         <button ref={shapesBtn} className={`icon-btn ${shapes ? 'on' : ''}`} aria-label="Shapes" data-tip="Shapes" onClick={() => setShapes(!shapes)}>
           <Icon name="shapes" />
           <Icon name="chevronDown" size={10} className="caret" />
@@ -36,6 +40,14 @@ export function Toolbar({ zoom, onFit, onZoom }: { zoom: number; onFit: () => vo
       <div className="dock-group">
         <IconButton icon="points" title="Edit points" kbd="P" active={editing?.kind === 'points'} disabled={!canShape} onClick={() => run('points')} />
         <IconButton icon="warp" title="Warp" kbd="W" active={editing?.kind === 'warp'} disabled={!canShape} onClick={() => run('add-warp')} />
+      </div>
+      <span className="dock-sep" />
+      <div className="dock-group">
+        <button ref={bgBtn} className={`icon-btn bg-dock ${bgOpen ? 'on' : ''}`} aria-label="Background" data-tip="Background" onClick={() => setBgOpen(!bgOpen)}>
+          <span className="bg-swatch" style={{ background: fillCss(bg.fill) }}>
+            {bg.tile && <span style={{ background: fillCss(bg.tile.fill) }} />}
+          </span>
+        </button>
       </div>
       <span className="dock-sep" />
       <div className="dock-group">
@@ -53,6 +65,15 @@ export function Toolbar({ zoom, onFit, onZoom }: { zoom: number; onFit: () => vo
               setShapes(false);
             }}
           />
+        </Popover>
+      )}
+      {bgOpen && (
+        <Popover anchor={bgBtn.current} onClose={() => setBgOpen(false)} placement="top-start" width={300} className="bg-pop">
+          <div className="pop-title">Background</div>
+          <BackgroundEditor />
+          <button className="link-btn" onClick={() => (setBgOpen(false), select([]), store.set({ tab: 'design' }))}>
+            App-icon tile and canvas size…
+          </button>
         </Popover>
       )}
       {zoomMenu && (
