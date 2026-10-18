@@ -1,0 +1,12 @@
+[package]
+name = "morpho-core"
+description = "Morphotype engine: font outlines, morphing, shape modifiers, image tracing and font export."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rustybuzz = "0.20"
+miniz_oxide = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

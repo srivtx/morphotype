@@ -1,0 +1,36 @@
+{
+  "name": "morphotype",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Mac-first type and logo lab: morph fonts, build new ones, trace images and render GPU effects.",
+  "scripts": {
+    "wasm": "node scripts/build-wasm.mjs",
+    "wasm:dev": "node scripts/build-wasm.mjs --dev",
+    "dev": "npm run wasm:dev && vite",
+    "build": "npm run wasm && tsc --noEmit -p ui && vite build",
+    "preview": "vite preview",
+    "test": "cargo test --workspace --exclude morphotype-app && vitest run",
+    "test:e2e": "node scripts/e2e.mjs",
+    "typecheck": "tsc --noEmit -p ui",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-fs": "^2.7.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "playwright": "^1.64.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  }
+}

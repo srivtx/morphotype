@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/morpho-core", "crates/morpho-wasm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# The engine is called on every slider tick; keep it fast in dev builds too.
+[profile.dev.package.morpho-core]
+opt-level = 2

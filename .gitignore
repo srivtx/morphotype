@@ -1,0 +1,8 @@
+target/
+node_modules/
+dist/
+ui/src/engine/pkg/
+*.log
+.DS_Store
+test-results/
+playwright-report/
