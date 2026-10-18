@@ -53,6 +53,26 @@ export function renderThumb(key: string, make: () => Promise<{ items: SceneItem[
   return job;
 }
 
+/** Render a scene to a PNG blob, uncached (project previews change as you work). */
+export function renderSceneBlob(make: () => Promise<{ items: SceneItem[]; background: Background; w: number; h: number; px: number }>): Promise<Blob | null> {
+  const job = (chain = chain.then(async () => {
+    const r = renderer();
+    if (!r) return null;
+    try {
+      const s = await make();
+      r.setArtboard(s.w, s.h);
+      r.setBackground(s.background);
+      r.setScene(s.items);
+      const c = r.toCanvas(s.px / Math.max(s.w, s.h), false);
+      return await new Promise<Blob | null>((res) => c.toBlob(res, 'image/png'));
+    } catch (e) {
+      console.warn('project preview failed', e);
+      return null;
+    }
+  })) as Promise<Blob | null>;
+  return job;
+}
+
 export function useThumb(key: string | null, make: () => Promise<{ items: SceneItem[]; background: Background; w: number; h: number; px: number }>) {
   const [url, setUrl] = useState<string | null>(null);
   const ready = useStore((s) => s.ready);

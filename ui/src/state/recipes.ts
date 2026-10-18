@@ -89,3 +89,27 @@ export const BG_PRESETS: BgPreset[] = [
   { name: 'White tile', bg: background(fill('solid', '#000000'), { tile: tile(lin('#ffffff', '#e9e9ee'), { gloss: 0.1 }) }) },
   { name: 'Aura tile', bg: background(fill('solid', '#1b1b1d'), { tile: tile({ ...fill('aura', '#ff4fb1', '#1d0030', '#ffffff', '#ffd0f0'), angle: 300 }, { rim: 6, rimColor: '#ffd0f0', gloss: 0 }) }) },
 ];
+
+/**
+ * The look a modifier stack is, if it's exactly one of the recipes (same
+ * modifiers, same settings, all switched on). Tweaked stacks match nothing.
+ */
+export function lookOf(mods: readonly ModEntryLike[], recipes: readonly Recipe[] = SHAPE_RECIPES): Recipe | null {
+  if (!mods.length || mods.some((m) => !m.on)) return null;
+  return recipes.find((r) => r.mods.length === mods.length && r.mods.every((rm, i) => sameMod(rm, mods[i]))) ?? null;
+}
+
+type ModEntryLike = Modifier & { on?: boolean };
+
+function sameMod(r: Modifier, m: Modifier): boolean {
+  if (r.kind !== m.kind) return false;
+  const a = r as unknown as Record<string, unknown>;
+  const b = m as unknown as Record<string, unknown>;
+  return Object.keys(a).every((k) => {
+    const x = a[k];
+    const y = b[k];
+    if (typeof x === 'number' && typeof y === 'number') return Math.abs(x - y) < 1e-6;
+    if (typeof x === 'object') return JSON.stringify(x) === JSON.stringify(y);
+    return x === y;
+  });
+}

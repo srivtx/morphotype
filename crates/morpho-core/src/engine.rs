@@ -360,6 +360,9 @@ pub struct Engine {
     glyphs: HashMap<(String, u64, u16), Rc<GlyphGeo>>,
     morphs: HashMap<(String, u64, u16, String, u64, u16), Rc<Morph>>,
     layers: HashMap<u64, Rc<Local>>,
+    /// Finished font glyphs by spec, character and quality: editing one
+    /// glyph or recompiling the tester only rebuilds what changed.
+    font_glyphs: HashMap<u64, Option<(Geo, f64, bool)>>,
 }
 
 const PREVIEW_QUALITY: f64 = 120.0;
@@ -398,6 +401,7 @@ impl Engine {
         self.glyphs.retain(|k, _| k.0 != id);
         self.morphs.retain(|k, _| k.0 != id && k.3 != id);
         self.layers.clear();
+        self.font_glyphs.clear();
     }
 
     pub fn has_font(&self, id: &str) -> bool {
@@ -1019,9 +1023,13 @@ impl Engine {
         (scale, extra, shift, slant)
     }
 
-    /// Final outline of one character in font units (y-down) and its advance.
+    /// A glyph's outline before the font look, in font units (y-down): the
+    /// base or redrawn outline plus its parts, and its advance in em.
     /// `None` when neither the fonts nor the edits define the character.
-    fn font_glyph(&mut self, spec: &FontSpec, ch: char, upm: f64, quality: f64) -> Result<Option<(Geo, f64, bool)>, String> {
+    fn glyph_raw(&mut self, spec: &FontSpec, ch: char, upm: f64, quality: f64, depth: u32) -> Result<Option<(Geo, f64)>, String> {
+        if depth > 3 {
+            return Err("Glyph components are nested too deeply.".into());
+        }
         let edit = spec.glyphs.iter().find(|g| g.ch.starts_with(ch));
         let morph = spec.morph.as_ref().filter(|m| m.t > 1e-6);
         let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
@@ -1032,7 +1040,9 @@ impl Engine {
             face.glyph_index(ch).map(|g| (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / fu))
         };
         let edited_d = edit.and_then(|e| e.d.as_deref()).filter(|d| !d.trim().is_empty());
-        if spec.blank && edited_d.is_none() && !ch.is_whitespace() {
+        let has_parts = edit.is_some_and(|e| e.parts.iter().any(|p| p.visible));
+        let hide_base = edit.is_some_and(|e| e.hide_base);
+        if spec.blank && edited_d.is_none() && !has_parts && !ch.is_whitespace() {
             return Ok(None);
         }
         let (poly, curves, mut adv) = if let Some(d) = edited_d {
@@ -1042,52 +1052,143 @@ impl Engine {
             let b = poly.bbox();
             let fallback = base.map_or(if b.is_empty() { 0.5 } else { b.x1 + 0.08 }, |b| b.1);
             (poly, Some(cs), fallback)
+        } else if spec.blank {
+            (Shape::default(), Some(Vec::new()), base.map_or(0.6, |b| b.1))
         } else {
-            let Some((ga, adv_a)) = base else {
-                return Ok(None);
-            };
-            match morph {
-                None => {
-                    let g = self.glyph(&spec.font, &spec.axes, ga)?;
-                    (g.poly.clone(), Some(g.curves.clone()), adv_a)
-                }
-                Some(m) => {
-                    let (gb, adv_b) = {
-                        let f = self.font(&m.font)?;
-                        let face = f.face(&axes_vec(&m.axes)).ok_or("The font couldn't be opened.")?;
-                        let ub = f.info.units_per_em.max(1) as f64;
-                        match face.glyph_index(ch) {
-                            Some(g) => (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / ub),
-                            None => (0, adv_a),
-                        }
-                    };
-                    let mm = self.glyph_morph(&spec.font, &spec.axes, ga, &m.font, &m.axes, gb)?;
-                    (mm.at(t), None, adv_a * (1.0 - t) + adv_b * t)
-                }
+            match base {
+                None if has_parts => (Shape::default(), Some(Vec::new()), 0.6),
+                None => return Ok(None),
+                Some((ga, adv_a)) => match morph {
+                    None => {
+                        let g = self.glyph(&spec.font, &spec.axes, ga)?;
+                        (g.poly.clone(), Some(g.curves.clone()), adv_a)
+                    }
+                    Some(m) => {
+                        let (gb, adv_b) = {
+                            let f = self.font(&m.font)?;
+                            let face = f.face(&axes_vec(&m.axes)).ok_or("The font couldn't be opened.")?;
+                            let ub = f.info.units_per_em.max(1) as f64;
+                            match face.glyph_index(ch) {
+                                Some(g) => (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / ub),
+                                None => (0, adv_a),
+                            }
+                        };
+                        let mm = self.glyph_morph(&spec.font, &spec.axes, ga, &m.font, &m.axes, gb)?;
+                        (mm.at(t), None, adv_a * (1.0 - t) + adv_b * t)
+                    }
+                },
             }
         };
         if let Some(a) = edit.and_then(|e| e.advance) {
             adv = a.max(0.0);
         }
-        let mut mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
-        if let Some(e) = edit {
-            mods.extend(e.modifiers.iter().filter(|m| m.on).cloned());
-        }
         let em_to_units = Affine::scale(upm, upm);
-        let mut geo = Geo {
-            poly: poly.transformed(&em_to_units),
-            curves: curves.map(|mut cs| {
-                for c in &mut cs {
-                    c.transform(&em_to_units);
-                }
-                cs
-            }),
+        let mut geo = if hide_base {
+            Geo { poly: Shape::default(), curves: Some(Vec::new()) }
+        } else {
+            Geo {
+                poly: poly.transformed(&em_to_units),
+                curves: curves.map(|mut cs| {
+                    for c in &mut cs {
+                        c.transform(&em_to_units);
+                    }
+                    cs
+                }),
+            }
         };
-        geo = apply_all(geo, &mods, &Ctx { em: upm, quality });
-        let (scale, extra, shift, _) = Self::spacing_of(&mods);
-        geo.transform(&Affine::translate(shift * upm, 0.0));
-        let advance = (adv * scale + extra + spec.tracking) * upm;
-        Ok(Some((geo, advance.max(0.0), edit.is_some())))
+        for part in edit.map_or(&[][..], |e| &e.parts[..]).iter().filter(|p| p.visible) {
+            let g = self.glyph_part(spec, part, upm, quality, depth)?;
+            match part.op {
+                Op::Add => {
+                    geo.poly.extend(g.poly);
+                    match (&mut geo.curves, g.curves) {
+                        (Some(a), Some(b)) => a.extend(b),
+                        _ => geo.curves = None,
+                    }
+                }
+                op => {
+                    geo.poly = boolean(&geo.poly, &g.poly, op, upm / quality);
+                    geo.curves = None;
+                }
+            }
+        }
+        Ok(Some((geo, adv)))
+    }
+
+    /// One part of a glyph in font units, its own modifiers applied.
+    fn glyph_part(&mut self, spec: &FontSpec, part: &GlyphPart, upm: f64, quality: f64, depth: u32) -> Result<Geo, String> {
+        let place = Affine::translate(part.x * upm, part.y * upm).then(Affine::rotate(part.rotation.to_radians()));
+        if let Some(ch) = part.glyph.as_deref().and_then(|g| g.chars().next()) {
+            let Some((mut g, _)) = self.glyph_raw(spec, ch, upm, quality, depth + 1)? else {
+                return Ok(Geo::default());
+            };
+            let k = part.size.abs().max(1e-3);
+            if part.modifiers.iter().any(|m| m.on) {
+                g = apply_all(g, &part.modifiers, &Ctx { em: upm, quality });
+            }
+            g.transform(&place.then(Affine::scale(k * part.sx, k * part.sy)));
+            return Ok(g);
+        }
+        let size = part.size.abs().max(1e-3) * upm;
+        let content = match (&part.symbol, &part.d) {
+            (Some(symbol), _) => Content::Symbol { symbol: symbol.clone(), size },
+            (None, Some(d)) if !d.trim().is_empty() => Content::Path { d: d.clone(), size },
+            _ => return Ok(Geo::default()),
+        };
+        let layer = Layer {
+            id: String::new(),
+            visible: true,
+            op: part.op,
+            x: 0.0,
+            y: 0.0,
+            rotation: 0.0,
+            scale: 1.0,
+            sx: 1.0,
+            sy: 1.0,
+            modifiers: part.modifiers.clone(),
+            content,
+        };
+        let local = self.layer_local(&Document::default(), &layer, quality, 0)?;
+        let mut g = local.geo.clone();
+        g.transform(&place.then(Affine::scale(part.sx, part.sy)));
+        Ok(g)
+    }
+
+    /// Final outline of one character in font units (y-down) and its advance.
+    /// `None` when neither the fonts nor the edits define the character.
+    fn font_glyph(&mut self, spec: &FontSpec, ch: char, upm: f64, quality: f64) -> Result<Option<(Geo, f64, bool)>, String> {
+        let edit = spec.glyphs.iter().find(|g| g.ch.starts_with(ch));
+        let key = {
+            let mut k = serde_json::to_string(&(&spec.font, &spec.axes, &spec.morph, &spec.modifiers, spec.tracking, spec.blank, edit)).unwrap_or_default();
+            // Components depend on other glyphs' edits too.
+            if edit.is_some_and(|e| e.parts.iter().any(|p| p.glyph.is_some())) {
+                k.push_str(&serde_json::to_string(&spec.glyphs).unwrap_or_default());
+            }
+            hash_of(&(k, ch, upm.to_bits(), quality.to_bits()))
+        };
+        if let Some(hit) = self.font_glyphs.get(&key) {
+            return Ok(hit.clone());
+        }
+        let out = match self.glyph_raw(spec, ch, upm, quality, 0)? {
+            None => None,
+            Some((geo, adv)) => {
+                let own = edit.is_some_and(|e| e.own_look);
+                let mut mods: Vec<ModEntry> = if own { Vec::new() } else { spec.modifiers.iter().filter(|m| m.on).cloned().collect() };
+                if let Some(e) = edit {
+                    mods.extend(e.modifiers.iter().filter(|m| m.on).cloned());
+                }
+                let mut geo = apply_all(geo, &mods, &Ctx { em: upm, quality });
+                let (scale, extra, shift, _) = Self::spacing_of(&mods);
+                geo.transform(&Affine::translate(shift * upm, 0.0));
+                let advance = (adv * scale + extra + spec.tracking) * upm;
+                Some((geo, advance.max(0.0), edit.is_some()))
+            }
+        };
+        if self.font_glyphs.len() > 4000 {
+            self.font_glyphs.clear();
+        }
+        self.font_glyphs.insert(key, out.clone());
+        Ok(out)
     }
 
     /// Previews of some characters of a font spec, in em units.
@@ -1260,7 +1361,7 @@ pub struct FontSpec {
     pub blank: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlyphEdit {
     pub ch: String,
@@ -1273,6 +1374,49 @@ pub struct GlyphEdit {
     /// Extra modifiers for this glyph, after the font-wide ones.
     #[serde(default)]
     pub modifiers: Vec<ModEntry>,
+    /// Layers on top of the outline, combined in order (bottom to top).
+    #[serde(default)]
+    pub parts: Vec<GlyphPart>,
+    /// Skip the font-wide modifiers: this glyph has its own look.
+    #[serde(default)]
+    pub own_look: bool,
+    /// Leave out the base (or redrawn) outline: the glyph is only its parts.
+    #[serde(default)]
+    pub hide_base: bool,
+}
+
+/// One layer of a glyph: a library shape, a path or another glyph (a
+/// component, which follows edits to that glyph). Units are em, y-down,
+/// baseline at 0; `x`/`y` place the part's origin (a shape's centre, a
+/// component's pen position).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlyphPart {
+    #[serde(default)]
+    pub symbol: Option<Symbol>,
+    #[serde(default)]
+    pub glyph: Option<String>,
+    #[serde(default)]
+    pub d: Option<String>,
+    #[serde(default)]
+    pub op: Op,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    /// A shape's size in em, or a component's or path's scale.
+    #[serde(default = "one")]
+    pub size: f64,
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default = "one")]
+    pub sx: f64,
+    #[serde(default = "one")]
+    pub sy: f64,
+    #[serde(default)]
+    pub modifiers: Vec<ModEntry>,
+    #[serde(default = "yes")]
+    pub visible: bool,
 }
 
 /// Convenience used by tests and the CLI: centre of a shape's bbox.
@@ -1456,6 +1600,53 @@ mod tests {
         let face = rustybuzz::ttf_parser::Face::parse(&ttf, 0).unwrap();
         assert!(face.glyph_index('☃').is_some());
         assert!(face.glyph_index('A').is_some());
+    }
+
+    #[test]
+    fn glyph_parts_add_cut_and_components() {
+        let mut e = engine();
+        let spec = |glyphs: &str| -> FontSpec {
+            serde_json::from_str(&format!(r#"{{"font":"archivo","family":"T","charset":"AIi","glyphs":{glyphs}}}"#)).unwrap()
+        };
+        let area = |e: &mut Engine, s: &FontSpec, ch: &str| -> f64 {
+            let p = e.font_preview(s, ch).unwrap();
+            let cs = svg::parse_path(&p[0].d).unwrap();
+            flatten_curves(&cs, 0.001).area().abs()
+        };
+        let plain = spec("[]");
+        let a0 = area(&mut e, &plain, "A");
+        // A circle added above the glyph grows its area by about the circle's.
+        let dot = spec(r#"[{"ch":"A","parts":[{"symbol":{"kind":"circle"},"x":0.3,"y":-1.0,"size":0.2}]}]"#);
+        let a1 = area(&mut e, &dot, "A");
+        let circle = std::f64::consts::PI * 0.1 * 0.1;
+        assert!((a1 - a0 - circle).abs() < circle * 0.15, "{a0} {a1}");
+        // Cutting a big square through it removes most of it.
+        let cut = spec(r#"[{"ch":"A","parts":[{"symbol":{"kind":"roundRect","radius":0,"aspect":1},"op":"subtract","x":0.3,"y":-0.35,"size":2}]}]"#);
+        assert!(area(&mut e, &cut, "A") < a0 * 0.05);
+        // A glyph made only of a component of another glyph matches it, and
+        // follows edits to that glyph.
+        let comp = spec(r#"[{"ch":"I","hideBase":true,"parts":[{"glyph":"A"}]}]"#);
+        let ai = area(&mut e, &comp, "I");
+        assert!((ai - a0).abs() < a0 * 0.02, "{ai} vs {a0}");
+        let comp_dot = spec(r#"[{"ch":"I","hideBase":true,"parts":[{"glyph":"A"}]},{"ch":"A","parts":[{"symbol":{"kind":"circle"},"x":0.3,"y":-1.0,"size":0.2}]}]"#);
+        assert!(area(&mut e, &comp_dot, "I") > ai + circle * 0.8);
+        // In a blank font, a glyph of parts alone is drawn.
+        let blank: FontSpec = serde_json::from_str(r#"{"font":"archivo","family":"T","blank":true,"charset":"i","glyphs":[{"ch":"i","advance":0.4,"parts":[{"symbol":{"kind":"circle"},"x":0.2,"y":-0.3,"size":0.2}]}]}"#).unwrap();
+        assert!(area(&mut e, &blank, "i") > circle * 0.8);
+    }
+
+    #[test]
+    fn own_look_skips_the_font_modifiers() {
+        let mut e = engine();
+        let s: FontSpec = serde_json::from_str(r#"{"font":"archivo","family":"T","charset":"AB","modifiers":[{"kind":"outline","width":0.02,"on":true,"uid":"m"}],"glyphs":[{"ch":"B","ownLook":true}]}"#).unwrap();
+        let plain: FontSpec = serde_json::from_str(r#"{"font":"archivo","family":"T","charset":"AB"}"#).unwrap();
+        let p = e.font_preview(&s, "AB").unwrap();
+        let q = e.font_preview(&plain, "AB").unwrap();
+        // A is outlined (different), B kept the plain outline.
+        assert_ne!(p[0].d, q[0].d);
+        assert_eq!(p[1].d, q[1].d);
+        // Cached results are identical to fresh ones.
+        assert_eq!(e.font_preview(&s, "AB").unwrap()[0].d, p[0].d);
     }
 
     #[test]

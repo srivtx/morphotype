@@ -7,7 +7,7 @@ import { effectById } from '../render/effects';
 import { luminance, QUICK_COLORS, recolor } from '../render/palette';
 import { useShape, viewBoxOf } from '../render/thumbs';
 import { CANVAS_PRESETS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
-import { BG_PRESETS, SHAPE_RECIPES, type Recipe } from '../state/recipes';
+import { BG_PRESETS, lookOf, SHAPE_RECIPES, type Recipe } from '../state/recipes';
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
 import { allLayers, findNode } from '../state/tree';
@@ -604,14 +604,17 @@ function RecipeThumb({ recipe, layer }: { recipe: Recipe; layer: ShapeLayer }) {
 /** One-click modifier stacks, previewed on this layer's own content. */
 function QuickLooks({ layer }: { layer: ShapeLayer }) {
   const [all, setAll] = useState(false);
-  const shown = all ? SHAPE_RECIPES : SHAPE_RECIPES.slice(0, 8);
+  const current = lookOf(layer.modifiers);
+  // Keep the active look visible even when it's past the first row.
+  const shown = all ? SHAPE_RECIPES : SHAPE_RECIPES.slice(0, 8).concat(current && SHAPE_RECIPES.indexOf(current) >= 8 ? [current] : []);
   return (
     <Section title="Quick looks" id="looks">
       <div className="looks">
         {shown.map((r) => (
           <button
             key={r.name}
-            className="look"
+            className={`look ${current === r ? 'on' : ''}`}
+            aria-pressed={current === r}
             data-tip={`${r.name} · ⇧-click to add on top`}
             onClick={(e) => {
               const add = e.shiftKey;

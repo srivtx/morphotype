@@ -24,6 +24,8 @@ export interface Settings {
   iconMask: boolean;
   /** Seen the first-run welcome. */
   welcomed: boolean;
+  /** What opens at launch: Home, or the last project. */
+  launch: 'home' | 'last';
   /** Seen the Type mode tour. */
   typeTour: boolean;
   /** Draw tool. */
@@ -52,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   keepRatio: false,
   iconMask: false,
   welcomed: false,
+  launch: 'home',
   brush: 'marker',
   brushWidth: 18,
   brushColor: '#ff6fb5',
@@ -74,6 +77,18 @@ export const SETTING_DEFS: SettingDef[] = [
   { key: 'checker', type: 'toggle', section: 'Canvas', label: 'Checkerboard for transparency', hint: 'Show a checkerboard where the background is empty.', keywords: 'transparent alpha' },
   { key: 'nudge', type: 'number', section: 'Keyboard', label: 'Nudge distance', hint: 'Arrow keys move the selection by this much.', min: 0.1, max: 100, step: 0.1, suffix: 'px', keywords: 'arrow move' },
   { key: 'bigNudge', type: 'number', section: 'Keyboard', label: 'Big nudge distance', hint: '⇧ + arrow keys move by this much.', min: 1, max: 500, step: 1, suffix: 'px', keywords: 'shift arrow move' },
+  {
+    key: 'launch',
+    type: 'choice',
+    section: 'General',
+    label: 'At launch',
+    hint: 'Projects save on this device as you work, so either way nothing is lost.',
+    keywords: 'start open home recent last project',
+    options: [
+      { value: 'home', label: 'Show Home' },
+      { value: 'last', label: 'Reopen the last project' },
+    ],
+  },
   { key: 'advanced', type: 'toggle', section: 'Editing', label: 'Advanced controls', hint: 'Show every parameter (seeds, phases, raw numbers) instead of just the essentials.', keywords: 'simple expert pro' },
   { key: 'keepRatio', type: 'toggle', section: 'Editing', label: 'Corners keep proportions', hint: 'Off (like Figma): hold ⇧ while dragging a corner to keep proportions. On: corners keep proportions and ⇧ stretches. Text always scales evenly from corners.', keywords: 'resize scale shift aspect ratio uniform' },
   { key: 'confirmConvert', type: 'toggle', section: 'Editing', label: 'Ask before converting to outlines', hint: 'Editing the points of text or a shape turns it into an outline first.', keywords: 'bake points nodes' },

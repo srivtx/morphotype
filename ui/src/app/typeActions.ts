@@ -1,11 +1,11 @@
 import { engine } from '../engine/client';
-import type { FontSpec, GlyphEdit } from '../engine/types';
+import type { FontSpec, GlyphEdit, GlyphPart, SymbolKind } from '../engine/types';
 import { registerCssFont } from '../fonts/library';
 import { platform } from '../platform';
-import { isGroup, textLayer, uid, type TypeProject } from '../state/model';
+import { isGroup, SYMBOL_DEFAULTS, SYMBOL_UI, textLayer, uid, type TypeProject } from '../state/model';
 import type { ModEntry } from '../engine/types';
 import { allLayers } from '../state/tree';
-import { edit, store, toast } from '../state/store';
+import { edit, store, toast, undo } from '../state/store';
 import { addShape, errorText, primaryNode, registerFontEntry, slug } from './actions';
 import { zip } from './zip';
 
@@ -88,8 +88,8 @@ export function editType(fn: (t: TypeProject) => void, key = '') {
 
 export function specOf(t: TypeProject, opts: { quality?: number; format?: 'ttf' | 'woff' } = {}): FontSpec {
   const glyphs: GlyphEdit[] = Object.entries(t.glyphs)
-    .filter(([, g]) => g.d || g.advance !== undefined || g.modifiers?.length)
-    .map(([ch, g]) => ({ ch, d: g.d, advance: g.advance, modifiers: g.modifiers ?? [] }));
+    .filter(([, g]) => g.d || g.advance !== undefined || g.modifiers?.length || g.parts?.length || g.ownLook || g.hideBase)
+    .map(([ch, g]) => ({ ch, d: g.d, advance: g.advance, modifiers: g.modifiers ?? [], parts: g.parts, ownLook: g.ownLook, hideBase: g.hideBase }));
   return {
     font: t.base,
     axes: t.axes,
@@ -307,5 +307,105 @@ export async function useInDesign(mode: UseMode = 'list') {
     }
   } catch (e) {
     toast(`Couldn't build the font: ${errorText(e)}`, 'error');
+  }
+}
+
+// ---------- glyph layers ----------
+
+function fontMetrics(t: TypeProject) {
+  const info = store.get().fonts.find((f) => f.id === t.base)?.info;
+  const upm = info?.unitsPerEm ?? 1000;
+  return { cap: (info?.capHeight ?? 700) / upm, x: (info?.xHeight ?? 500) / upm };
+}
+
+/** Add a layer to a glyph (a library shape or another glyph) and select it. */
+export function addGlyphPart(ch: string, what: { symbol: SymbolKind } | { glyph: string }, advance = 0.6) {
+  const t = store.get().project.type;
+  if (!t) return;
+  const m = fontMetrics(t);
+  const lower = /[a-z]/.test(ch);
+  const part: GlyphPart =
+    'symbol' in what
+      ? {
+          id: uid('gp'),
+          name: SYMBOL_UI[what.symbol]?.label,
+          symbol: structuredClone(SYMBOL_DEFAULTS[what.symbol]),
+          op: 'add',
+          x: advance / 2,
+          y: -(lower ? m.x : m.cap) / 2,
+          size: (lower ? m.x : m.cap) * 0.45,
+          rotation: 0,
+          sx: 1,
+          sy: 1,
+          modifiers: [],
+          visible: true,
+        }
+      : { id: uid('gp'), name: `“${what.glyph}”`, glyph: what.glyph, op: 'add', x: 0, y: 0, size: 1, rotation: 0, sx: 1, sy: 1, modifiers: [], visible: true };
+  editType((tp) => {
+    const g = (tp.glyphs[ch] ??= {});
+    g.parts = [...(g.parts ?? []), part];
+  });
+  store.set({ glyphPart: part.id });
+  return part.id;
+}
+
+export function editGlyphPart(ch: string, id: string, fn: (p: GlyphPart) => void, key = '') {
+  editType((tp) => {
+    const p = tp.glyphs[ch]?.parts?.find((x) => x.id === id);
+    if (p) fn(p);
+  }, key ? `part:${id}:${key}` : '');
+}
+
+export function removeGlyphPart(ch: string, id: string) {
+  editType((tp) => {
+    const g = tp.glyphs[ch];
+    if (g?.parts) g.parts = g.parts.filter((p) => p.id !== id);
+  });
+  if (store.get().glyphPart === id) store.set({ glyphPart: null });
+}
+
+export function duplicateGlyphPart(ch: string, id: string) {
+  const src = store.get().project.type?.glyphs[ch]?.parts?.find((p) => p.id === id);
+  if (!src) return;
+  const copy: GlyphPart = { ...structuredClone(src), id: uid('gp'), x: src.x + 0.05, y: src.y - 0.05 };
+  editType((tp) => {
+    const g = tp.glyphs[ch];
+    if (!g?.parts) return;
+    g.parts.splice(g.parts.findIndex((p) => p.id === id) + 1, 0, copy);
+  });
+  store.set({ glyphPart: copy.id });
+}
+
+/** Move a layer up (toward the top, +1) or down in its glyph's stack. */
+export function reorderGlyphPart(ch: string, id: string, dir: 1 | -1) {
+  editType((tp) => {
+    const parts = tp.glyphs[ch]?.parts;
+    if (!parts) return;
+    const i = parts.findIndex((p) => p.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= parts.length) return;
+    [parts[i], parts[j]] = [parts[j], parts[i]];
+  });
+}
+
+/**
+ * Turn the finished glyph (layers, look and all) into one editable outline,
+ * so its points can be reshaped by hand. The glyph then has its own look.
+ */
+export async function bakeGlyph(ch: string) {
+  const t = store.get().project.type;
+  if (!t) return;
+  try {
+    const [p] = await engine.fontPreview(specOf(t, { quality: 320 }), ch);
+    if (!p?.d) return toast(`“${ch}” is empty, so there's nothing to bake.`, 'error');
+    // Fit curves so the outline has few, editable points.
+    const baked = await engine.bake({ layers: [{ id: 'g', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1, sx: 1, sy: 1, modifiers: [], content: { type: 'path', d: p.d, size: 1 } }] }, 'g');
+    editType((tp) => {
+      tp.glyphs[ch] = { d: baked.d, advance: Math.max(0, p.advance - tp.tracking), ownLook: true };
+    });
+    store.set({ glyphPart: null });
+    toast(`Baked “${ch}” into points`, 'info', { label: 'Undo', run: undo });
+  } catch (e) {
+    toast(errorText(e), 'error');
   }
 }

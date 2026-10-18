@@ -1,4 +1,4 @@
-import type { Content, EngineLayer, ModEntry, Modifier, ModifierKind, Op, SymbolKind, SymbolSpec, TextMorph } from '../engine/types';
+import type { Content, EngineLayer, GlyphPart, ModEntry, Modifier, ModifierKind, Op, SymbolKind, SymbolSpec, TextMorph } from '../engine/types';
 import { defaultParams, effectById, type ParamValues } from '../render/effects';
 
 export interface ProjectFont {
@@ -143,6 +143,12 @@ export interface GlyphEdit {
   d?: string;
   advance?: number;
   modifiers?: ModEntry[];
+  /** Layers on top of the outline, bottom to top. */
+  parts?: GlyphPart[];
+  /** Skip the font-wide look for this glyph. */
+  ownLook?: boolean;
+  /** Leave out the base or drawn outline: the glyph is only its parts. */
+  hideBase?: boolean;
 }
 
 export interface Project {

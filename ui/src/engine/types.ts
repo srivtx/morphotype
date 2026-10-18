@@ -210,6 +210,31 @@ export interface GlyphEdit {
   d?: string;
   advance?: number;
   modifiers?: ModEntry[];
+  parts?: GlyphPart[];
+  ownLook?: boolean;
+  hideBase?: boolean;
+}
+
+/**
+ * A layer of a glyph, in em units (y-down, baseline 0): a library shape
+ * (centred on x, y), a path, or another glyph used as a component.
+ */
+export interface GlyphPart {
+  id: string;
+  name?: string;
+  symbol?: SymbolSpec;
+  glyph?: string;
+  d?: string;
+  op: Op;
+  x: number;
+  y: number;
+  /** A shape's size in em, or a component's or path's scale. */
+  size: number;
+  rotation: number;
+  sx: number;
+  sy: number;
+  modifiers: ModEntry[];
+  visible: boolean;
 }
 
 export interface Axis {

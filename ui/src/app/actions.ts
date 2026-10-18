@@ -936,7 +936,7 @@ export async function importImage(files?: { name: string; bytes: Uint8Array }[],
 
 // ---------- projects ----------
 
-function usedImportedFonts(p: Project): string[] {
+export function usedImportedFonts(p: Project): string[] {
   const ids = new Set<string>();
   for (const l of allLayers(p.layers)) {
     if (l.content.type !== 'text') continue;
@@ -963,19 +963,23 @@ export async function saveProject() {
   if (ok) toast('Project saved');
 }
 
+/** Make a project's imported fonts available (skipping ones already loaded). */
+export async function loadProjectFonts(fonts: { id: string; name?: string; bytes: Uint8Array }[]) {
+  for (const font of fonts) {
+    if (store.get().fonts.some((x) => x.id === font.id)) continue;
+    const info = await engine.loadFont(font.id, font.bytes);
+    registerCssFont(font.id, font.bytes);
+    registerFonts([{ id: font.id, name: font.name ?? info.family, source: 'imported', info }]);
+  }
+}
+
 export async function openProject(files?: { name: string; bytes: Uint8Array }[]) {
   const picked = files ?? (await platform().open([PROJECT_FILTER]));
   const f = picked[0];
   if (!f) return;
   try {
     const p = migrate(JSON.parse(new TextDecoder().decode(f.bytes)));
-    for (const font of p.fonts ?? []) {
-      if (!font.data || store.get().fonts.some((x) => x.id === font.id)) continue;
-      const bytes = fromBase64(font.data);
-      const info = await engine.loadFont(font.id, bytes);
-      registerCssFont(font.id, bytes);
-      registerFonts([{ id: font.id, name: font.name ?? info.family, source: 'imported', info }]);
-    }
+    await loadProjectFonts((p.fonts ?? []).flatMap((f) => (f.data ? [{ id: f.id, name: f.name, bytes: fromBase64(f.data) }] : [])));
     unpackImages(p.images);
     replaceProject({ ...p, fonts: [], images: undefined });
     window.dispatchEvent(new Event('mt-fit'));

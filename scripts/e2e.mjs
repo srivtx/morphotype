@@ -47,12 +47,41 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, acceptDownloads: true });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
+  const state = () => page.evaluate(() => window.morphotype.store.get());
+
+  // ---- Home: new design, autosave, reopen ----
   await page.goto(`http://127.0.0.1:${port}/`);
+  await page.waitForSelector('.home', { timeout: 30_000 });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(out, '00-home.png') });
+  check((await page.locator('.home-start').count()) === 1, 'Home opens at launch with new design and font');
+  await page.locator('.home-sizes .chip', { hasText: 'Portrait' }).click();
+  await page.waitForSelector('.stat', { timeout: 30_000 });
+  let st0 = await state();
+  check(st0.screen === 'editor' && st0.projectId && st0.project.canvas.height === 1350 && st0.project.layers.length === 0, 'a portrait design starts blank with its own id');
+  await page.keyboard.press('o');
+  await page.waitForTimeout(1500);
+  await page.locator('.home-btn').click();
+  await page.waitForSelector('.home-card', { timeout: 10_000 });
+  check((await page.locator('.home-card').count()) === 1, 'the design saved itself and is listed on Home');
+  await page.waitForSelector('.home-card img', { timeout: 10_000 }).catch(() => {});
+  await page.screenshot({ path: path.join(out, '00-home-recent.png') });
+  await page.locator('.home-card-open').first().click();
+  await page.waitForSelector('.stat', { timeout: 10_000 });
+  const st1 = await state();
+  check(st1.projectId === st0.projectId && st1.project.layers.length === 1 && st1.past.length === 1, 'back from Home: the same design, undo history kept');
+  // A reload must bring it back from the library.
+  await page.reload();
+  await page.waitForSelector('.home-card', { timeout: 30_000 });
+  await page.locator('.home-card-open').first().click();
+  await page.waitForSelector('.stat', { timeout: 10_000 });
+  const st2 = await state();
+  check(st2.projectId === st0.projectId && st2.project.layers.length === 1 && st2.past.length === 0, 'after a reload the design opens from the library');
+
+  await page.goto(`http://127.0.0.1:${port}/?editor`);
   await page.waitForSelector('.stat', { timeout: 30_000 });
   await page.waitForTimeout(600);
   await page.screenshot({ path: path.join(out, '00-start.png') });
-
-  const state = () => page.evaluate(() => window.morphotype.store.get());
   const layersOf = (s) => {
     const all = [];
     const walk = (ns) => ns.forEach((n) => (n.type === 'group' ? (all.push(n), walk(n.children)) : all.push(n)));
@@ -340,6 +369,26 @@ try {
   await page.locator('.look', { hasText: 'Dot matrix' }).click();
   await settle(1800);
   await page.screenshot({ path: path.join(out, 'type-01-dots.png') });
+  const onLooks = await page.locator('.look.on').allTextContents();
+  check(onLooks.length === 1 && onLooks[0].includes('Dot matrix'), 'only the picked look is highlighted');
+  // Glyph layers: a circle cut out of "O", then a look of its own.
+  await page.locator('.glyph-cell', { hasText: 'O' }).first().click();
+  await page.getByRole('tab', { name: /Glyph/ }).click();
+  await page.locator('.section:has(.section-toggle:text-is("Layers")) .chip-btn').click();
+  await page.locator('.popover .pick', { hasText: 'Star' }).first().click();
+  await settle(400);
+  await page.getByRole('radio', { name: 'Cut', exact: true }).click();
+  await settle(1500);
+  s = await state();
+  const oEdit = s.project.type.glyphs.O;
+  check(oEdit?.parts?.length === 1 && oEdit.parts[0].op === 'subtract' && s.glyphPart === oEdit.parts[0].id, 'a shape layer cuts into a glyph');
+  await page.locator('.toggle-row', { hasText: "Use the font's look" }).locator('input, button, .toggle').first().click();
+  await settle(1500);
+  s = await state();
+  check(s.project.type.glyphs.O.ownLook === true, 'a glyph can opt out of the font look');
+  await page.screenshot({ path: path.join(out, 'type-01b-layers.png') });
+  await page.getByRole('button', { name: 'Bake into points' }).click();
+  check(await until((st) => !!st.project.type.glyphs.O?.d && !st.project.type.glyphs.O.parts?.length), 'baking turns the finished glyph into points');
   await page.locator('.glyph-cell', { hasText: 'B' }).first().click();
   await page.getByRole('button', { name: 'Edit points' }).first().click();
   await settle(900);

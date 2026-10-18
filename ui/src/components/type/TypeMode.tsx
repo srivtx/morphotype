@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { importImage } from '../../app/actions';
-import { addCharacters, CHARSETS, closeTypeProject, customFontId, customizeGlyph, editType, exportFontFile, exportWebKit, installOnMac, removeCharacter, resetGlyph, specOf } from '../../app/typeActions';
+import { addCharacters, addGlyphPart, CHARSETS, closeTypeProject, customFontId, customizeGlyph, editType, exportFontFile, exportWebKit, installOnMac, removeCharacter, resetGlyph, specOf } from '../../app/typeActions';
 import { TypeStart } from './TypeStart';
+import { GlyphLayers, GlyphLook, GlyphPartPanel, PartsOverlay } from './GlyphLayers';
 import { TYPE_TERMS } from './TypeGuide';
 import { Tour } from '../Tour';
 import { engine } from '../../engine/client';
 import type { GlyphPreview, ModEntry } from '../../engine/types';
 import { platform } from '../../platform';
 import { uid, type TypeProject } from '../../state/model';
-import { SHAPE_RECIPES } from '../../state/recipes';
+import { lookOf, SHAPE_RECIPES } from '../../state/recipes';
 import { setSettings, store, toast, undo, useStore } from '../../state/store';
 import { PathPointEditor } from '../canvas/PointEditor';
 import { FontPicker } from '../FontPicker';
@@ -30,11 +31,20 @@ function geoKey(t: TypeProject) {
   return JSON.stringify([t.base, t.axes, t.morph, t.modifiers, t.tracking, t.glyphs]);
 }
 
-/** Styled outlines of the font's characters, refreshed after edits settle. */
+/** Inputs every glyph depends on; when they change, every preview is stale. */
+function globalKey(t: TypeProject) {
+  return JSON.stringify([t.base, t.axes, t.morph, t.modifiers, t.tracking, t.blank]);
+}
+
+/**
+ * Styled outlines of the font's characters, refreshed after edits settle.
+ * Editing one glyph only rebuilds that glyph (and glyphs using it as a part).
+ */
 function usePreviews(t: TypeProject | undefined) {
   const [map, setMap] = useState<Map<string, GlyphPreview>>(new Map());
   const [busy, setBusy] = useState(false);
   const glyph = useStore((s) => s.glyph);
+  const done = useRef<{ global: string; glyphs: Record<string, string> }>({ global: '', glyphs: {} });
   const key = t ? geoKey(t) + t.charset : '';
   useEffect(() => {
     if (!t) return;
@@ -43,15 +53,28 @@ function usePreviews(t: TypeProject | undefined) {
     const timer = setTimeout(async () => {
       try {
         const spec = specOf(t, { quality: 80 });
-        // The open glyph first so the editor responds quickly.
+        const g = globalKey(t);
+        const edits = Object.fromEntries([...t.charset].map((c) => [c, JSON.stringify(t.glyphs[c] ?? null)]));
+        const prev = done.current;
+        const all = prev.global !== g;
+        // Glyphs whose own edit changed, plus any glyph that uses one of them.
+        const changed = new Set([...t.charset].filter((c) => all || prev.glyphs[c] !== edits[c]));
+        for (const [c, e] of Object.entries(t.glyphs)) if (e.parts?.some((p) => p.glyph && changed.has(p.glyph))) changed.add(c);
+        // The open glyph first, sharper, so the editor responds quickly.
         const first = await engine.fontPreview({ ...spec, quality: 140 }, glyph);
         if (!live) return;
-        setMap((m) => new Map([...m, ...first.map((g) => [g.ch, g] as const)]));
-        const rest = await engine.fontPreview(spec, t.charset);
+        setMap((m) => new Map([...m, ...first.map((p) => [p.ch, p] as const)]));
+        changed.delete(glyph);
+        const rest = changed.size ? await engine.fontPreview(spec, [...changed].join('')) : [];
         if (!live) return;
-        const next = new Map(rest.map((g) => [g.ch, g] as const));
-        next.set(glyph, first[0] ?? next.get(glyph)!);
-        setMap(next);
+        setMap((m) => {
+          const next = all ? new Map<string, GlyphPreview>() : new Map(m);
+          for (const p of rest) next.set(p.ch, p);
+          if (first[0]) next.set(glyph, first[0]);
+          if (!all) for (const c of [...next.keys()]) if (!t.charset.includes(c)) next.delete(c);
+          return next;
+        });
+        done.current = { global: g, glyphs: edits };
       } catch (e) {
         if (live) toast((e as Error).message, 'error');
       } finally {
@@ -174,6 +197,7 @@ function GlyphGrid({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
 
 function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<string, GlyphPreview>; busy: boolean }) {
   const glyph = useStore((s) => s.glyph);
+  const partSel = useStore((s) => s.glyphPart);
   const fonts = useStore((s) => s.fonts);
   const ref = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -220,6 +244,11 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
   const all = [...t.charset];
   const idx = all.indexOf(glyph);
   const drawn = !!edit?.d;
+  const part = edit?.parts?.find((x) => x.id === partSel) ?? null;
+  const toLocal = (e: { clientX: number; clientY: number }) => {
+    const r = svgRef.current!.getBoundingClientRect();
+    return { x: (e.clientX - r.left - ox) / k, y: (e.clientY - r.top - oy) / k };
+  };
   const empty = !drawn && p && !p.d;
   // In a blank font the base outline is only a guide to trace over.
   const guide = base?.exists && (t.blank || drawn);
@@ -258,7 +287,7 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
         </button>
       </div>
       <div className="glyph-canvas" ref={ref}>
-        <svg ref={svgRef} width={size.w} height={size.h}>
+        <svg ref={svgRef} width={size.w} height={size.h} onPointerDown={(e) => e.target === e.currentTarget && part && store.set({ glyphPart: null })}>
           {line(m.desc * -1, 'Descender', 'descender', 'soft')}
           {line(0, 'Baseline', 'baseline', 'base')}
           {line(-m.x, 'x-height', 'xheight', 'soft')}
@@ -272,18 +301,16 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
           <g transform={`matrix(${k},0,0,${k},${ox},${oy})`}>
             {guide && <path className="glyph-base" d={base!.d} />}
             {p?.d && <path className="glyph-fill" d={p.d} />}
+            {!!edit?.parts?.length && <PartsOverlay t={t} glyph={glyph} previews={previews} k={k} toLocal={toLocal} />}
           </g>
-          {drawn && (
+          {drawn && !part && !edit?.hideBase && (
             <PathPointEditor
               key={glyph}
               d={edit!.d!}
               scale={1}
               pxPerUnit={k}
               toScreen={S}
-              toLocal={(e) => {
-                const r = svgRef.current!.getBoundingClientRect();
-                return { x: (e.clientX - r.left - ox) / k, y: (e.clientY - r.top - oy) / k };
-              }}
+              toLocal={toLocal}
               onChange={(d, key) => editType((tp) => (tp.glyphs[glyph] = { ...(tp.glyphs[glyph] ?? {}), d }), key ? `${glyph}:${key}` : '')}
               onExit={() => undefined}
               viewKey={`${k},${ox},${oy}`}
@@ -306,6 +333,9 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
               <button className="btn primary" onClick={() => void customizeGlyph(glyph, 'scratch')}>
                 <Icon name="points" size={13} /> Start from a block
               </button>
+              <button className="btn" onClick={() => addGlyphPart(glyph, { symbol: 'circle' }, adv)} data-tip="Build the glyph from circles, quarters, pills and other shapes">
+                <Icon name="shapes" size={13} /> Build from shapes
+              </button>
               {base?.exists && (
                 <button className="btn" onClick={() => void customizeGlyph(glyph, 'base')} data-tip={`Copy ${baseName}'s outline and reshape it`}>
                   Copy the guide
@@ -316,7 +346,11 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
           </div>
         )}
       </div>
-      {drawn && <p className="glyph-hint">Drag points · double-click a line to add one · double-click a point for smooth/sharp · ⌫ deletes · ⌘A selects all</p>}
+      {part ? (
+        <p className="glyph-hint">Drag the layer to move it · drag its corner to resize · ⇧ keeps it on one axis · click empty space for the outline</p>
+      ) : (
+        drawn && <p className="glyph-hint">Drag points · double-click a line to add one · double-click a point for smooth/sharp · ⌫ deletes · ⌘A selects all</p>
+      )}
     </div>
   );
 }
@@ -326,6 +360,7 @@ function Tester({ t }: { t: TypeProject }) {
   const [family, setFamily] = useState<string | null>(null);
   const [size, setSize] = useState(64);
   const counter = useRef(0);
+  const faceRef = useRef<FontFace | null>(null);
   const key = geoKey(t) + t.charset;
   useEffect(() => {
     let live = true;
@@ -336,8 +371,12 @@ function Tester({ t }: { t: TypeProject }) {
         const name = `mt-tester-${++counter.current}`;
         const face = new FontFace(name, bytes.slice().buffer as ArrayBuffer);
         await face.load();
+        if (!live) return;
         document.fonts.add(face);
-        if (live) setFamily(name);
+        // Each edit compiles a new font; drop the one it replaces.
+        if (faceRef.current) document.fonts.delete(faceRef.current);
+        faceRef.current = face;
+        setFamily(name);
       } catch {
         // Previews are best-effort; export reports real errors.
       }
@@ -373,6 +412,10 @@ type PanelTab = 'font' | 'glyph' | 'export';
 function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, GlyphPreview> }) {
   const [tab, setTab] = useState<PanelTab>('font');
   const glyph = useStore((s) => s.glyph);
+  const partSel = useStore((s) => s.glyphPart);
+  useEffect(() => {
+    if (partSel) setTab('glyph');
+  }, [partSel]);
   return (
     <>
       <div className="tabs type-tabs" role="tablist">
@@ -399,7 +442,7 @@ function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
 
 function FontTab({ t }: { t: TypeProject }) {
   const looks = SHAPE_RECIPES.filter((r) => !r.mods.some((m) => ['arc', 'warp', 'wave'].includes(m.kind)));
-  const active = (r: (typeof looks)[number]) => t.modifiers.length === r.mods.length && r.mods.every((m, i) => t.modifiers[i]?.kind === m.kind);
+  const current = lookOf(t.modifiers, looks);
   return (
     <div className="inspector">
       <div className="sel-header">
@@ -431,7 +474,8 @@ function FontTab({ t }: { t: TypeProject }) {
           {looks.slice(0, 12).map((r) => (
             <button
               key={r.name}
-              className={`look text ${active(r) ? 'on' : ''}`}
+              className={`look text ${current === r ? 'on' : ''}`}
+              aria-pressed={current === r}
               onClick={(e) =>
                 editType((tp) => {
                   const fresh = r.mods.map((m) => ({ ...structuredClone(m), on: true, uid: uid('m') }) as ModEntry);
@@ -447,7 +491,9 @@ function FontTab({ t }: { t: TypeProject }) {
             <span>Plain</span>
           </button>
         </div>
-        <p className="hint">One rule for every glyph keeps the font consistent. Fine-tune it under Modifiers.</p>
+        <p className="hint">
+          {t.modifiers.length && !current ? 'Custom look: your own modifier settings. ' : ''}One rule for every glyph keeps the font consistent. Fine-tune it under Modifiers, or give a glyph its own look in the Glyph tab.
+        </p>
       </Section>
       <Section title="Spacing" id="type-spacing">
         <Slider label="Letter spacing" value={t.tracking} min={-0.2} max={0.5} step={0.005} reset={0} onChange={(v) => editType((tp) => (tp.tracking = v), 'tracking')} />
@@ -487,7 +533,10 @@ function FontTab({ t }: { t: TypeProject }) {
 
 function GlyphTab({ t, previews }: { t: TypeProject; previews: Map<string, GlyphPreview> }) {
   const glyph = useStore((s) => s.glyph);
+  const partSel = useStore((s) => s.glyphPart);
   const g = t.glyphs[glyph];
+  const part = g?.parts?.find((x) => x.id === partSel) ?? null;
+  const advance = g?.advance ?? previews.get(glyph)?.advance ?? 0.6;
   return (
     <div className="inspector">
       <div className="sel-header">
@@ -532,6 +581,9 @@ function GlyphTab({ t, previews }: { t: TypeProject; previews: Map<string, Glyph
         )}
         <p className="hint">The box the glyph takes up, including the space on each side.</p>
       </Section>
+      <GlyphLayers t={t} glyph={glyph} advance={advance} previews={previews} />
+      {part && <GlyphPartPanel glyph={glyph} part={part} />}
+      <GlyphLook t={t} glyph={glyph} />
       <Modifiers
         mods={g?.modifiers ?? []}
         owner={`glyph:${glyph}`}

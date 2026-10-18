@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { BuildResult } from '../engine/client';
 import type { FontEntry } from '../fonts/library';
-import { emptyProject, type Project } from './model';
+import { emptyProject, uid, type Project } from './model';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { find } from './tree';
 
@@ -35,12 +35,18 @@ export type EditMode =
 
 export interface State {
   project: Project;
+  /** Library id of the open project (null until it's started). */
+  projectId: string | null;
+  /** Home lists projects; the editor works on one. */
+  screen: 'home' | 'editor';
   /** Selected node ids (layers or groups). */
   selection: string[];
   hover: string | null;
   mode: 'design' | 'type';
   /** Glyph open in Type mode. */
   glyph: string;
+  /** Selected layer of the open glyph (null: its outline). */
+  glyphPart: string | null;
   editing: EditMode;
   fonts: FontEntry[];
   build: BuildResult | null;
@@ -64,10 +70,13 @@ function initial(): State {
   const project = emptyProject();
   return {
     project,
+    projectId: null,
+    screen: 'home',
     selection: project.layers[0] ? [project.layers[0].id] : [],
     hover: null,
     mode: 'design',
     glyph: 'A',
+    glyphPart: null,
     editing: null,
     fonts: [],
     build: null,
@@ -136,11 +145,39 @@ export function commitEdit() {
   lastKey = '';
 }
 
-/** Replace the whole project (open file, template) as one undoable step. */
-export function replaceProject(p: Project) {
+const beforeOpen = new Set<() => void>();
+/** Run just before another project replaces the open one (autosave flushes). */
+export function onBeforeOpen(fn: () => void) {
+  beforeOpen.add(fn);
+  return () => beforeOpen.delete(fn);
+}
+
+/**
+ * Start working on a project (new, template, opened file or from the
+ * library). It gets its own library entry and history, so undo never
+ * crosses into another project.
+ */
+export function openDocument(p: Project, opts: { id?: string; mode?: State['mode'] } = {}) {
+  beforeOpen.forEach((fn) => fn());
   lastKey = '';
   const top = p.layers.at(-1);
-  store.set({ project: p, past: [...state.past, state.project], future: [], selection: top ? [top.id] : [], editing: null });
+  store.set({
+    project: p,
+    projectId: opts.id ?? uid('p'),
+    screen: 'editor',
+    mode: opts.mode ?? (p.type && !p.layers.length ? 'type' : 'design'),
+    past: [],
+    future: [],
+    selection: top ? [top.id] : [],
+    editing: null,
+    glyphPart: null,
+    tool: 'select',
+  });
+}
+
+/** Replace the whole project (opened file, template): a new library entry. */
+export function replaceProject(p: Project) {
+  openDocument(p);
 }
 
 export function undo() {

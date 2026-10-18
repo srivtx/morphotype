@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { addSystemFont } from '../app/actions';
+import { newFont, startTemplate } from '../app/projects';
 import { platform, type SystemFont } from '../platform';
 import { projectScene } from '../render/thumbs';
 import { useThumb } from '../render/thumbs';
@@ -44,7 +45,16 @@ export function Dialogs() {
   }
 }
 
-function TemplateCard({ t, onPick }: { t: Template; onPick: () => void }) {
+/** Start a blank project for one of the common jobs. */
+export function startIntent(i: (typeof INTENTS)[number]) {
+  if (i.font) return newFont();
+  const p = { ...TEMPLATES[0].make(), name: i.label, layers: [], canvas: { width: i.w!, height: i.h! } };
+  if (i.tile) applyIconTarget(p.background, 'macos');
+  replaceProject(p);
+  window.dispatchEvent(new Event('mt-fit'));
+}
+
+export function TemplateCard({ t, onPick }: { t: Template; onPick: () => void }) {
   const url = useThumb(`tpl:${t.name}`, () => projectScene(t.make(), 300));
   const p = useMemo(() => t.make(), [t]);
   const aspect = p.canvas.width / p.canvas.height;
@@ -63,7 +73,7 @@ function TemplateCard({ t, onPick }: { t: Template; onPick: () => void }) {
 }
 
 /** Blank starts for the common jobs, so nobody has to know canvas sizes. */
-const INTENTS: { label: string; hint: string; icon: IconName; w?: number; h?: number; tile?: boolean; font?: boolean }[] = [
+export const INTENTS: { label: string; hint: string; icon: IconName; w?: number; h?: number; tile?: boolean; font?: boolean }[] = [
   { label: 'Logo', hint: '1200 × 1200', icon: 'sparkle', w: 1200, h: 1200 },
   { label: 'App icon', hint: 'macOS tile, 1024', icon: 'tile', w: 1024, h: 1024, tile: true },
   { label: 'Instagram post', hint: '1080 × 1350', icon: 'image', w: 1080, h: 1350 },
@@ -76,15 +86,7 @@ function TemplatesDialog() {
   const close = () => store.set({ dialog: null });
   const start = (i: (typeof INTENTS)[number]) => {
     close();
-    if (i.font) {
-      store.set({ mode: 'type', editing: null });
-      return;
-    }
-    const p = { ...TEMPLATES[0].make(), name: i.label, layers: [], canvas: { width: i.w!, height: i.h! } };
-    if (i.tile) applyIconTarget(p.background, 'macos');
-    replaceProject(p);
-    store.set({ mode: 'design' });
-    window.dispatchEvent(new Event('mt-fit'));
+    startIntent(i);
   };
   const [cat, setCat] = useState<'All' | Template['category']>('All');
   const shown = TEMPLATES.filter((t) => cat === 'All' || t.category === cat);
@@ -129,9 +131,8 @@ function TemplatesDialog() {
             key={t.name}
             t={t}
             onPick={() => {
-              replaceProject(t.make());
               close();
-              window.dispatchEvent(new Event('mt-fit'));
+              startTemplate(t);
             }}
           />
         ))}

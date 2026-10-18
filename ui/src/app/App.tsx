@@ -6,6 +6,7 @@ import { Inspector } from '../components/Inspector';
 import { LayersPanel } from '../components/LayersPanel';
 import { prewarmThumbs, StylePanel } from '../components/StylePanel';
 import { TopBar } from '../components/TopBar';
+import { Home } from '../components/Home';
 import { TypeMode } from '../components/type/TypeMode';
 import { Tooltips } from '../components/ui';
 import { BrushBar } from '../components/canvas/BrushBar';
@@ -16,6 +17,10 @@ import { buildScene } from '../state/tree';
 import { setSettings, store, toast, useStore } from '../state/store';
 import { importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
 import { allCommands, matchKey } from './commands';
+import { startAutosave } from './autosave';
+import { newDesign, openLast } from './projects';
+import { emptyProject } from '../state/model';
+import { openDocument } from '../state/store';
 
 function Toasts() {
   const toasts = useStore((s) => s.toasts);
@@ -91,6 +96,8 @@ function useShortcuts() {
       // Inside a focused list or menu, arrows and Enter belong to it.
       const t = e.target as HTMLElement;
       if (t.closest?.('.popover, [role=tree], [role=grid]') && /^(arrow|enter|space|tab|shift\+tab)/.test(combo)) return;
+      // Home: only app-level commands.
+      if (s.screen === 'home' && !/^(palette|settings|help|new|open|home|mode-)/.test(allCommands().find((c) => c.keys?.includes(combo))?.id ?? '')) return;
       // Type mode: canvas-only commands don't apply.
       const designOnly = /^(nudge|align|distribute|flip|group|ungroup|merge|forward|backward|front|back|points|add-|tool-|outline|break|lock|hide|duplicate|delete|cut|copy$|paste$|select-all|copy-style|paste-style|next-layer|prev-layer|zoom|fit)/;
       for (const c of allCommands()) {
@@ -204,6 +211,7 @@ function DesignMode() {
 export function App() {
   const ready = useStore((s) => s.ready);
   const mode = useStore((s) => s.mode);
+  const screen = useStore((s) => s.screen);
   useBuildLoop();
   useShortcuts();
   const dropping = useDropFiles();
@@ -213,20 +221,28 @@ export function App() {
       (fonts) => {
         store.set({ fonts, ready: true });
         prewarmThumbs();
-        // First launch: ask what they're making.
-        if (!store.get().settings.welcomed) {
-          setSettings({ welcomed: true });
-          store.set({ dialog: { kind: 'templates' } });
-        }
+        startAutosave();
+        // `?editor` (tests, demos) opens straight into a scratch design.
+        const q = new URLSearchParams(location.search);
+        if (q.has('editor')) openDocument(emptyProject());
+        else if (q.has('new')) newDesign();
+        else if (store.get().settings.launch === 'last') void openLast();
+        if (!store.get().settings.welcomed) setSettings({ welcomed: true });
       },
       (e: Error) => toast(`Couldn't start the engine: ${e.message}`, 'error'),
     );
   }, []);
 
   return (
-    <div className={`app mode-${mode}`}>
-      <TopBar />
-      {mode === 'design' ? <DesignMode /> : <TypeMode />}
+    <div className={`app mode-${mode} screen-${screen}`}>
+      {screen === 'home' ? (
+        <Home />
+      ) : (
+        <>
+          <TopBar />
+          {mode === 'design' ? <DesignMode /> : <TypeMode />}
+        </>
+      )}
       {!ready && (
         <div className="boot">
           <span className="spinner" /> Loading engine…

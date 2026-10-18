@@ -1,5 +1,6 @@
 import { copyPNG, exportJPG, exportPNG, exportSVG, importFonts, importImage, openProject, saveProject } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
+import { goHome } from '../app/projects';
 import { platform } from '../platform';
 import { edit, redo, store, undo, useStore } from '../state/store';
 import { Icon, Logo } from './icons';
@@ -16,6 +17,7 @@ export function TopBar() {
   const cmd = mac ? '⌘' : 'Ctrl+';
   return (
     <header className={`topbar ${p.kind === 'desktop' && mac ? 'traffic' : ''}`} data-tauri-drag-region>
+      <IconButton icon="grid" title="Home: all designs and fonts" kbd={shortcutOf('home')} onClick={() => void goHome()} className="home-btn" />
       <Menu
         buttonClass="brand"
         label={
@@ -29,6 +31,8 @@ export function TopBar() {
       >
         {(close) => (
           <div className="menu-list">
+            <MenuItem icon="grid" label="Home" kbd={shortcutOf('home')} onClick={() => (close(), void goHome())} />
+            <MenuSep />
             <MenuItem icon="sparkle" label="New from template…" kbd={shortcutOf('new')} onClick={() => (close(), store.set({ dialog: { kind: 'templates' } }))} />
             <MenuItem icon="open" label="Open project…" kbd={shortcutOf('open')} onClick={() => (close(), void openProject())} />
             <MenuItem icon="save" label="Save project…" kbd={shortcutOf('save')} onClick={() => (close(), void saveProject())} />
