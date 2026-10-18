@@ -69,43 +69,67 @@ jobs:
             target/universal-apple-darwin/release/bundle/dmg/*.dmg
             target/universal-apple-darwin/release/bundle/macos/*.app
 
+  # Publishes a release for the version in package.json the first time it
+  # reaches main (or when a v* tag is pushed). Bump the version to ship.
   release:
     name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: mac
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Decide the release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; nothing to publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.tag.outputs.skip != 'true'
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        if: steps.tag.outputs.skip != 'true'
       - name: Install wasm-bindgen
+        if: steps.tag.outputs.skip != 'true'
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - uses: actions/setup-node@v4
+        if: steps.tag.outputs.skip != 'true'
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+        if: steps.tag.outputs.skip != 'true'
       - name: Build the web app
+        if: steps.tag.outputs.skip != 'true'
         run: |
           npm run build
           (cd dist && zip -qr ../Morphotype-web.zip .)
       - uses: actions/download-artifact@v4
+        if: steps.tag.outputs.skip != 'true'
         with:
           name: Morphotype-macOS
           path: mac
       - name: Collect release files
+        if: steps.tag.outputs.skip != 'true'
         run: |
           mkdir -p release
           find mac -name '*.dmg' -exec cp {} release/ \;
           cp Morphotype-web.zip release/
           ls -la release
       - uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.skip != 'true'
         with:
-          name: Morphotype ${{ github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Morphotype ${{ steps.tag.outputs.tag }}
           body_path: docs/RELEASE_NOTES.md
           files: release/*
           fail_on_unmatched_files: true

@@ -80,7 +80,7 @@ npm install
 | Rust and UI unit tests | `npm test` |
 | Browser end-to-end test | `npm run build && npm run test:e2e` |
 
-CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-macOS* artifact). Pushing a `v*` tag also publishes a GitHub Release with the `.dmg` and the web build attached.
+CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-macOS* artifact). The first build of a new version (the `version` in `package.json`) on `main` also publishes a GitHub Release with the `.dmg` and the web build attached.
 
 ### Shortcuts
 
