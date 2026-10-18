@@ -6,7 +6,7 @@ A Mac-first type and logo lab. Morph one typeface into another, reshape letterin
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/srivtx/morphotype/releases). It's a universal app for Apple silicon and Intel Macs. Open it, drag **Morphotype** to Applications, and the first time right-click it and choose **Open** (the app isn't notarised yet). `Morphotype-web.zip` in the same release is the browser version, ready to host anywhere.
+Download the latest `.dmg` from [Releases](https://github.com/srivtx/morphotype/releases). It's a universal app for Apple silicon and Intel Macs. Open it and drag **Morphotype** to Applications. The app isn't notarised yet, so the first time macOS blocks it: go to **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Morphotype.app` once in Terminal. `Morphotype-web.zip` in the same release is the browser version, ready to host anywhere.
 
 ## What it does
 

@@ -6,7 +6,8 @@ A redesigned editor, per-layer materials and a font editor.
 
 1. Download `Morphotype_0.2.0_universal.dmg` below (it runs on Apple silicon and Intel).
 2. Open it and drag **Morphotype** into **Applications**.
-3. The app isn't notarised yet, so the first time, right-click it and choose **Open**. If macOS says it is damaged, run `xattr -dr com.apple.quarantine /Applications/Morphotype.app` once.
+3. The app isn't notarised yet, so macOS blocks it the first time. Either go to **System Settings → Privacy & Security** and click **Open Anyway** next to Morphotype, or run this once in Terminal (it also fixes a "damaged" message):
+   `xattr -dr com.apple.quarantine /Applications/Morphotype.app && open /Applications/Morphotype.app`
 
 `Morphotype-web.zip` is the same app as a static website: unzip it and serve the folder from any web host.
 
