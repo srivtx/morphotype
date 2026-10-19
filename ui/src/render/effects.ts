@@ -5,7 +5,8 @@
 // (see background.ts) so every object can have its own material.
 
 export type ParamDef =
-  | { key: string; label: string; type: 'number'; min: number; max: number; step: number; default: number; advanced?: boolean }
+  /** `options` turns a number into a named choice (the value is the option's index). */
+  | { key: string; label: string; type: 'number'; min: number; max: number; step: number; default: number; advanced?: boolean; options?: string[] }
   | { key: string; label: string; type: 'color'; default: string; advanced?: boolean };
 
 export type ParamValues = Record<string, number | string>;
@@ -48,6 +49,7 @@ const num = (key: string, label: string, min: number, max: number, step: number,
   advanced,
 });
 const col = (key: string, label: string, def: string, advanced = false): ParamDef => ({ key, label, type: 'color', default: def, advanced });
+const choice = (key: string, label: string, options: string[], def: number): ParamDef => ({ key, label, type: 'number', min: 0, max: options.length - 1, step: 1, default: def, options });
 
 const n = (p: ParamValues, k: string) => Number(p[k] ?? 0);
 
@@ -580,6 +582,10 @@ const flat: EffectDef = {
     col('fill2', 'Gradient to', '#ff5a1f'),
     num('gradient', 'Gradient', 0, 1, 0.01, 0),
     num('angle', 'Gradient angle', 0, 360, 1, 180, true),
+    choice('gradType', 'Gradient shape', ['Linear', 'Radial'], 0),
+    num('gradX', 'Radial centre X', -1, 1, 0.01, 0, true),
+    num('gradY', 'Radial centre Y', -1, 1, 0.01, 0, true),
+    num('gradSize', 'Radial size', 0.05, 3, 0.01, 1, true),
     num('outline', 'Outline', 0, 60, 0.5, 0),
     col('outlineColor', 'Outline colour', '#ff5a1f'),
     num('shadowOpacity', 'Shadow', 0, 1, 0.01, 0),
@@ -592,7 +598,7 @@ const flat: EffectDef = {
   reach: (p) => n(p, 'outline') + Math.max(Math.abs(n(p, 'shadowX')), Math.abs(n(p, 'shadowY'))) + n(p, 'shadowBlur') * 2,
   glsl: /* glsl */ `
 uniform vec3 u_fill, u_fill2, u_outlineColor, u_shadowColor;
-uniform float u_gradient, u_angle, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture;
+uniform float u_gradient, u_angle, u_gradType, u_gradX, u_gradY, u_gradSize, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture;
 vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   // Blur 0 gives a hard offset shadow, as in flat "neo-brutalist" graphics.
@@ -605,6 +611,8 @@ vec4 effect(vec2 uv) {
   float c = cover(dt);
   float a = radians(u_angle);
   float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(a), -cos(a))) + 0.5, 0.0, 1.0);
+  // Radial: 0 at the centre, 1 on an ellipse fitted to the box (× size).
+  if (u_gradType > 0.5) g = clamp(length((boxUv(uv) - 0.5 - 0.5 * vec2(u_gradX, u_gradY)) * 2.0) / max(u_gradSize, 0.01), 0.0, 1.0);
   vec3 colr = mix(u_fill, u_fill2, g * u_gradient);
   if (u_texture > 0.0) {
     // Ink on paper: soft blotches, fibres and a slightly worn edge.
@@ -1362,6 +1370,173 @@ vec4 effect(vec2 uv) {
 };
 
 
+export const PATTERN_KINDS = ['Stripes', 'Dots', 'Grid', 'Checker', 'Sunburst', 'Rings', 'Waves', 'Chevron', 'Truchet', 'Scales', 'Houndstooth', 'Op-art bulge', 'Spiral', 'Crosses', 'Triangles', 'Diamonds', 'Honeycomb', 'Squiggles', 'Crosshatch', 'Gingham'];
+
+const patternFx: EffectDef = {
+  id: 'pattern',
+  name: 'Pattern',
+  description: 'Fills the shape with a crisp repeating pattern drawn on the GPU: stripes, dots, sunbursts, Truchet arcs, houndstooth, op-art and more.',
+  params: [
+    choice('kind', 'Pattern', PATTERN_KINDS, 0),
+    col('ink', 'Ink', '#111111'),
+    col('paper', 'Paper', '#f4f1ea'),
+    num('paperAlpha', 'Paper opacity', 0, 1, 0.01, 1),
+    num('scale', 'Scale', 2, 600, 0.5, 40),
+    num('weight', 'Weight', 0.01, 0.99, 0.005, 0.35),
+    num('angle', 'Angle', -180, 180, 0.5, 0),
+    num('rays', 'Rays / arms', 1, 128, 1, 24),
+    num('amount', 'Wave / bulge', 0, 2, 0.01, 0.35),
+    num('stagger', 'Stagger rows', 0, 1, 1, 0, true),
+    num('cx', 'Centre X', -1, 1, 0.001, 0, true),
+    num('cy', 'Centre Y', -1, 1, 0.001, 0, true),
+    num('phaseX', 'Shift X', -1, 1, 0.001, 0, true),
+    num('phaseY', 'Shift Y', -1, 1, 0.001, 0, true),
+    num('seed', 'Shuffle', 0, 100, 1, 3, true),
+  ],
+  reach: () => 2,
+  glsl: /* glsl */ `
+uniform vec3 u_ink, u_paper;
+uniform float u_kind, u_paperAlpha, u_scale, u_weight, u_angle, u_rays, u_amount, u_stagger, u_cx, u_cy, u_phaseX, u_phaseY, u_seed;
+const float TAU = 6.2831853;
+float band(float t, float w) { return abs(fract(t) - 0.5) - w * 0.5; }
+float hexDist(vec2 p) { p = abs(p); return max(dot(p, vec2(0.5, 0.8660254)), p.x); }
+/** Signed distance (in cells; negative = ink) of the pattern at q (cells) and pixel offset px from the centre. */
+float pattern(vec2 q, vec2 px) {
+  float w = u_weight;
+  int k = int(u_kind + 0.5);
+  vec2 g = floor(q), f = fract(q) - 0.5;
+  if (k == 0) return band(q.y, w);
+  if (k == 1) {
+    vec2 qq = q + vec2(u_stagger * 0.5 * mod(floor(q.y), 2.0), 0.0);
+    return length(fract(qq) - 0.5) - w * 0.5;
+  }
+  if (k == 2) return min(abs(f.x), abs(f.y)) - w * 0.25;
+  if (k == 3) {
+    float c = mod(g.x + g.y, 2.0);
+    float e = min(0.5 - abs(f.x), 0.5 - abs(f.y));
+    return c > 0.5 ? -e : e;
+  }
+  if (k == 4) {
+    float r = length(px) / u_scale;
+    float t = (atan(px.y, px.x) / TAU) * u_rays;
+    return band(t, w) * (TAU * max(r, 1e-3) / u_rays);
+  }
+  if (k == 5) return band(length(px) / u_scale, w);
+  if (k == 6) {
+    float y = q.y + u_amount * sin(q.x * TAU);
+    float slope = u_amount * TAU * cos(q.x * TAU);
+    return band(y, w) / sqrt(1.0 + slope * slope);
+  }
+  if (k == 7) {
+    float tri = abs(fract(q.x) - 0.5) * 2.0;
+    float y = q.y + u_amount * 2.0 * tri;
+    return band(y, w) / sqrt(1.0 + 16.0 * u_amount * u_amount);
+  }
+  if (k == 8) {
+    vec2 ff = fract(q);
+    if (hash12(g + u_seed * 13.0) > 0.5) ff.x = 1.0 - ff.x;
+    return min(abs(length(ff) - 0.5), abs(length(ff - 1.0) - 0.5)) - w * 0.5;
+  }
+  if (k == 9) {
+    // Fish scales: rows half a cell apart, every other one shifted; lower rows lie on top.
+    for (int j = 1; j >= -1; j--) {
+      float row = floor(q.y * 2.0) + float(j);
+      float sh = mod(row, 2.0) * 0.5;
+      vec2 c = vec2(floor(q.x - sh + 0.5) + sh, row * 0.5);
+      float d = length(q - c) - 0.5;
+      if (d < 0.0) return -d - w * 0.25;
+    }
+    return 1.0;
+  }
+  if (k == 10) {
+    // Houndstooth: per cell one solid quarter, one empty, two with diagonal teeth.
+    vec2 t = fract(q);
+    bool l = t.x < 0.5, top = t.y < 0.5;
+    if (l && top) return -0.25;
+    if (!l && !top) return 0.25;
+    // Stripe edges pass through the solid quarters' corners, so they read as teeth.
+    return band((q.x + q.y) * 2.0 + 0.25, 0.5) / 2.828;
+  }
+  if (k == 11) {
+    float r = length(px) / u_scale;
+    float bulge = u_amount * exp(-r * r / max(u_rays * u_rays * 0.01, 0.01));
+    return band(q.y * (1.0 - bulge), w) / max(1.0 - bulge, 0.2);
+  }
+  if (k == 12) {
+    float r = length(px) / u_scale;
+    float a = atan(px.y, px.x) / TAU;
+    // Arms one cell apart: each turn moves out by the number of arms.
+    return band(r - a * max(floor(u_rays), 1.0), w);
+  }
+  if (k == 13) {
+    vec2 a = abs(f);
+    float arm = 0.32, t = w * 0.25;
+    vec2 d1 = a - vec2(arm, t), d2 = a - vec2(t, arm);
+    float b1 = length(max(d1, 0.0)) + min(max(d1.x, d1.y), 0.0);
+    float b2 = length(max(d2, 0.0)) + min(max(d2.x, d2.y), 0.0);
+    return min(b1, b2);
+  }
+  if (k == 14) {
+    // Equilateral triangles: up ones in ink, down ones in paper.
+    vec2 t = vec2(q.x - q.y * 0.5773503, q.y * 1.1547005);
+    vec2 tf = fract(t);
+    bool up = tf.x + tf.y > 1.0;
+    float e = (up ? min(min(1.0 - tf.x, 1.0 - tf.y), tf.x + tf.y - 1.0) : min(min(tf.x, tf.y), 1.0 - tf.x - tf.y)) * 0.8660254;
+    return up ? -e : e;
+  }
+  if (k == 15) {
+    vec2 r = vec2(q.x + q.y, q.y - q.x) * 0.7071068;
+    vec2 rg = floor(r), rf = fract(r) - 0.5;
+    float c = mod(rg.x + rg.y, 2.0);
+    float e = min(0.5 - abs(rf.x), 0.5 - abs(rf.y));
+    return c > 0.5 ? -e : e;
+  }
+  if (k == 16) {
+    vec2 s = vec2(1.0, 1.7320508);
+    vec2 a = mod(q, s) - s * 0.5, b = mod(q - s * 0.5, s) - s * 0.5;
+    vec2 h = dot(a, a) < dot(b, b) ? a : b;
+    return abs(hexDist(h) - 0.5) - w * 0.15;
+  }
+  if (k == 17) {
+    // Memphis squiggles: one short wave per cell, randomly turned and placed.
+    float best = 1e9;
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+      vec2 c = g + vec2(float(i), float(j));
+      float h1 = hash12(c + u_seed * 7.0), h2 = hash12(c * 1.7 + u_seed), h3 = hash12(c * 2.3 + 5.0);
+      vec2 o = c + 0.5 + (vec2(h1, h2) - 0.5) * 0.35;
+      float an = h3 * TAU;
+      vec2 l = mat2(cos(an), -sin(an), sin(an), cos(an)) * (q - o);
+      float x = clamp(l.x, -0.32, 0.32);
+      float y = 0.08 * (0.5 + u_amount) * sin(x * TAU * 1.5);
+      best = min(best, length(vec2(l.x - x, (l.y - y) / sqrt(1.0 + pow(0.08 * (0.5 + u_amount) * TAU * 1.5, 2.0) * 0.5))) - w * 0.12);
+    }
+    return best;
+  }
+  if (k == 18) return min(band((q.x + q.y) * 0.7071068, w), band((q.x - q.y) * 0.7071068, w));
+  // Gingham: crossing bands; the shader mixes half ink where one band runs.
+  return min(band(q.x, w), band(q.y, w));
+}
+vec4 effect(vec2 uv) {
+  float cov = cover(sdfPx(uv));
+  if (cov <= 0.0) return vec4(0.0);
+  vec2 lo = u_region.xy + u_bbox.xy * u_region.zw, hi = u_region.xy + u_bbox.zw * u_region.zw;
+  vec2 ctr = (lo + hi) * 0.5 + (hi - lo) * 0.5 * vec2(u_cx, u_cy);
+  vec2 px = artPx(uv) - ctr;
+  float an = radians(u_angle);
+  px = mat2(cos(an), sin(an), -sin(an), cos(an)) * px;
+  vec2 q = px / u_scale + vec2(u_phaseX, u_phaseY);
+  float d = pattern(q, px);
+  int k = int(u_kind + 0.5);
+  // Distance in cells → screen pixels for a one-pixel anti-aliased edge.
+  float aa = max(length(fwidth(q)), 1e-4) * 0.75;
+  float ink = clamp(0.5 - d / aa, 0.0, 1.0);
+  if (k == 19) ink = (clamp(0.5 - band(q.x, u_weight) / aa, 0.0, 1.0) + clamp(0.5 - band(q.y, u_weight) / aa, 0.0, 1.0)) * 0.5;
+  vec4 paper = vec4(u_paper, 1.0) * u_paperAlpha;
+  vec4 c = mix(paper, vec4(u_ink, 1.0), ink);
+  return c * cov;
+}`,
+};
+
 const keycap: EffectDef = {
   id: 'keycap',
   name: 'Keycap',
@@ -1513,7 +1688,7 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic, keycap];
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic, keycap, patternFx];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;

@@ -106,6 +106,12 @@ pub enum Content {
         width: f64,
         #[serde(default)]
         cap: crate::stroke::LineCap,
+        /// Zigzag, wave, meander, coil or scallop along the centre line.
+        #[serde(default)]
+        squiggle: Option<crate::along::Squiggle>,
+        /// Dashes or dots along the (squiggled) line.
+        #[serde(default)]
+        dash: Option<crate::along::Dash>,
     },
     /// Freehand brush stroke: points `[x, y, pressure]` in layer pixels.
     Stroke {
@@ -689,18 +695,33 @@ impl Engine {
                 normalize_winding(&mut poly);
                 (Geo { poly, curves: None }, em)
             }
-            Content::Line { d, size, width, cap } => {
+            Content::Line { d, size, width, cap, squiggle, dash } => {
                 let subs = svg::parse_subpaths(d)?;
                 let m = Affine::scale(*size, *size);
                 let tol = (width.abs() * 0.02).clamp(0.02, 1.0);
-                let lines: Vec<(Vec<Pt>, bool)> = subs
+                let mut lines: Vec<(Vec<Pt>, bool)> = subs
                     .into_iter()
                     .map(|(mut c, closed)| {
                         c.transform(&m);
-                        (c.flatten(tol), closed)
+                        match squiggle {
+                            Some(sq) => (crate::along::squiggle(&c, closed, sq, tol), closed),
+                            None => (c.flatten(tol), closed),
+                        }
                     })
                     .collect();
-                let cell = (em + width.abs()) / quality.clamp(24.0, 1024.0) * 0.5;
+                if let Some(dd) = dash {
+                    lines = lines
+                        .into_iter()
+                        .flat_map(|(mut l, closed)| {
+                            if closed && l.first().zip(l.last()).is_some_and(|(a, b)| a.dist(*b) > 1e-9) {
+                                l.push(l[0]);
+                            }
+                            crate::along::dashes(&l, dd).into_iter().map(|p| (p, false))
+                        })
+                        .collect();
+                }
+                // At most ~2 px cells: coarser fields show as steps along long lines.
+                let cell = ((em + width.abs()) / quality.clamp(24.0, 1024.0) * 0.5).min(2.0 * 120.0 / quality.clamp(24.0, 1024.0)).max(0.05);
                 (Geo::poly_only(crate::stroke::polylines_capped(&lines, *width, cell, *cap)), em)
             }
             Content::Stroke { points, width, taper, smooth } => {

@@ -7,6 +7,7 @@
 //! stack → layer booleans → SVG path (for the GPU renderer) or exports
 //! (SVG, TrueType).
 
+pub mod along;
 pub mod engine;
 pub mod field;
 pub mod fit;

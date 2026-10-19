@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { addIconGrid, alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
-import type { Content, ModEntry, ModifierKind, SymbolKind } from '../engine/types';
+import type { Content, Dash, ModEntry, ModifierKind, Squiggle, SquiggleKind, SymbolKind } from '../engine/types';
 import { backgroundCss, fillCss } from '../render/background';
 import { effectById } from '../render/effects';
 import { luminance, QUICK_COLORS, recolor } from '../render/palette';
@@ -369,6 +369,56 @@ function BlendRow({ node }: { node: Node }) {
   );
 }
 
+const SQUIGGLE_DEFAULT: Squiggle = { kind: 'zigzag', amplitude: 20, spacing: 24, smooth: 0, round: 0, loops: 1.2, perSegment: true, flatEnds: false, flip: false };
+const DASH_DEFAULT: Dash = { dash: 16, gap: 12, offset: 0 };
+
+/** Squiggles and dashes along a pen line: zigzag, wave, meander, coil, scallop; dashes or dots. */
+function LineAlong({ c, setC }: { c: Of<'line'>; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
+  const sq = c.squiggle ?? null;
+  const da = c.dash ?? null;
+  const setSq = (fn: (q: Squiggle) => void, key = '') => setC<'line'>((x) => x.squiggle && fn(x.squiggle), key);
+  const setDa = (fn: (q: Dash) => void, key = '') => setC<'line'>((x) => x.dash && fn(x.dash), key);
+  return (
+    <>
+      <div className="field">
+        <span>Along</span>
+        <Select<SquiggleKind | 'none'>
+          value={sq?.kind ?? 'none'}
+          label="Along the line"
+          options={[
+            { value: 'none', label: 'Plain line' },
+            { value: 'zigzag', label: 'Zigzag / wave', hint: 'Smooth turns the zigzag into a wave' },
+            { value: 'meander', label: 'Meander', hint: 'Back and forth across the line, like a serpentine' },
+            { value: 'loops', label: 'Coil', hint: 'Loops rolling along the line, like a phone cord' },
+            { value: 'scallop', label: 'Scallop', hint: 'Round bumps, like a stamp or cloud edge' },
+          ]}
+          onChange={(v) => setC<'line'>((x) => (x.squiggle = v === 'none' ? null : { ...SQUIGGLE_DEFAULT, ...x.squiggle, kind: v }))}
+        />
+      </div>
+      {sq && (
+        <>
+          <Slider label="Amplitude" value={sq.amplitude} min={0} max={400} step={0.5} suffix="px" onChange={(v) => setSq((q) => (q.amplitude = v), 'sqa')} />
+          <Slider label="Spacing" value={sq.spacing} min={1} max={400} step={0.5} suffix="px" onChange={(v) => setSq((q) => (q.spacing = v), 'sqs')} />
+          {sq.kind !== 'scallop' && sq.kind !== 'loops' && <Slider label="Smooth" value={sq.smooth} min={0} max={1} step={0.01} reset={0} onChange={(v) => setSq((q) => (q.smooth = v), 'sqm')} />}
+          {sq.kind === 'zigzag' && <Slider label="Round turns" value={sq.round ?? 0} min={0} max={120} step={0.5} suffix="px" reset={0} onChange={(v) => setSq((q) => (q.round = v), 'sqr')} />}
+          {sq.kind === 'loops' && <Slider label="Roll" value={sq.loops} min={0} max={3} step={0.01} onChange={(v) => setSq((q) => (q.loops = v), 'sql')} />}
+          <Toggle label="Whole ridges per segment" hint="Fit the ridges evenly between pen points, so corners and joins land on a tip." checked={sq.perSegment} onChange={(v) => setSq((q) => (q.perSegment = v))} />
+          {sq.kind !== 'loops' && sq.kind !== 'scallop' && <Toggle label="Flat ends" hint="Finish with a leg straight across the line instead of at a tip." checked={sq.flatEnds} onChange={(v) => setSq((q) => (q.flatEnds = v))} />}
+          <Toggle label="Flip side" checked={sq.flip} onChange={(v) => setSq((q) => (q.flip = v))} />
+        </>
+      )}
+      <Toggle label="Dashes" hint="Break the line into dashes; a 0 dash with round ends draws dots." checked={!!da} onChange={(v) => setC<'line'>((x) => (x.dash = v ? { ...DASH_DEFAULT } : null))} />
+      {da && (
+        <>
+          <Slider label="Dash" value={da.dash} min={0} max={300} step={0.5} suffix="px" onChange={(v) => setDa((q) => (q.dash = v), 'dd')} />
+          <Slider label="Gap" value={da.gap} min={0} max={300} step={0.5} suffix="px" onChange={(v) => setDa((q) => (q.gap = v), 'dg')} />
+          <Slider label="Offset" value={da.offset} min={-300} max={300} step={0.5} suffix="px" reset={0} onChange={(v) => setDa((q) => (q.offset = v), 'do')} />
+        </>
+      )}
+    </>
+  );
+}
+
 function GroupEditor({ g }: { g: Group }) {
   const set = (fn: (x: Group) => void, key = '') => updateNode(g.id, (n) => isGroup(n) && fn(n), key);
   return (
@@ -470,6 +520,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
             />
           </div>
           <Slider label="Size" value={c.size} min={10} max={3000} step={1} onChange={(v) => setC<'line'>((x) => (x.size = v), 'ls')} />
+          <LineAlong c={c} setC={setC} />
           <button className="btn" onClick={() => void editPoints(layer.id)}>
             <Icon name="points" /> Edit points
           </button>

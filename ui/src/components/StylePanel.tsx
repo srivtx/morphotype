@@ -11,7 +11,7 @@ import { edit, setSettings, useStore } from '../state/store';
 import { findNode } from '../state/tree';
 import { ColorField } from './ColorPicker';
 import { Icon } from './icons';
-import { IconButton, Section, Slider, Toggle } from './ui';
+import { IconButton, Section, Select, Slider, Toggle } from './ui';
 
 // One shared sample outline for every preview card.
 let sample: Promise<{ d: string; bbox: [number, number, number, number] | null }> | null = null;
@@ -178,6 +178,11 @@ export function StylePanel() {
           .map((p) =>
             p.type === 'color' ? (
               <ColorField key={p.key} label={p.label} value={String(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+            ) : p.options ? (
+              <div className="field" key={p.key}>
+                <span>{p.label}</span>
+                <Select value={Math.round(Number(st.params[p.key] ?? p.default))} options={p.options.map((label, value) => ({ value, label }))} onChange={(v) => setParam(p.key, v)} />
+              </div>
             ) : p.min === 0 && p.max === 1 && p.step === 1 ? (
               <Toggle key={p.key} label={p.label} checked={Number(st.params[p.key] ?? p.default) > 0.5} onChange={(v) => setParam(p.key, v ? 1 : 0)} />
             ) : (

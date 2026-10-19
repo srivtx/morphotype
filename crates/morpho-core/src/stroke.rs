@@ -194,12 +194,21 @@ pub fn polylines_capped(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64, cap: L
             for i in i0..i1 {
                 let p = g.sample_pos(i, j);
                 let raw = if l2 > 1e-12 { (p - a).dot(ab) / l2 } else { 0.0 };
+                let k = j * g.w + i;
                 if (cut_a && raw < 0.0) || (cut_b && raw > 1.0) {
+                    // Past a flat end: exact distance to the end of a rectangle, so the
+                    // cut edge stays straight (skipping these cells left it ragged).
+                    let len = l2.sqrt().max(1e-12);
+                    let past = if raw < 0.0 { -raw * len } else { (raw - 1.0) * len };
+                    let side = ((p - a).cross(ab) / len).abs() - r;
+                    let d = if side > 0.0 && past > 0.0 { (side * side + past * past).sqrt() } else { side.max(past) };
+                    if (d as f32) < v[k] {
+                        v[k] = d as f32;
+                    }
                     continue;
                 }
                 let u = raw.clamp(0.0, 1.0);
                 let q = p - (a + ab * u);
-                let k = j * g.w + i;
                 let lim = v[k] as f64 + r;
                 let d2 = q.dot(q);
                 if lim > 0.0 && d2 < lim * lim {

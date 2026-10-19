@@ -11,7 +11,7 @@ const solid = (c: string) => background(fill('solid', c));
 const ink = (c: string): Style => style('flat', { fill: c });
 
 /** Maps reference pixels onto the artboard: (x, y) → ((x − ox)·k, (y − oy)·k). */
-function frame(ox: number, oy: number, k: number) {
+export function frame(ox: number, oy: number, k: number) {
   const P = (x: number, y: number) => ({ x: (x - ox) * k, y: (y - oy) * k });
   /** A pen path (closed fills, `width` strokes it as a line), from reference path data. */
   const pen = (d: string, name: string, st: Style, width?: number, cap: LineCap = 'round', extra: Partial<ShapeLayer> = {}): ShapeLayer => {
@@ -39,7 +39,7 @@ function frame(ox: number, oy: number, k: number) {
 }
 
 /** A tile that clips what's drawn in it (a clipping group: the tile is its bottom layer). */
-const clipped = (name: string, art: Node[], tile: ShapeLayer): Node => group([tile, ...art], { name, clip: true });
+export const clipped = (name: string, art: Node[], tile: ShapeLayer): Node => group([tile, ...art], { name, clip: true });
 
 const glowStyle = (p: Record<string, number | string>) => style('glow', { edge: '#000000', mid: '#000000', core: '#000000', inside: 0, outside: 0, grain: 0.06, ...p });
 

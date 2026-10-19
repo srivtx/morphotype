@@ -1074,10 +1074,14 @@ export async function openProject(files?: { name: string; bytes: Uint8Array }[])
 
 // ---------- exports ----------
 
+/** Geometry quality for exports (the engine's preview default is 120). */
+const EXPORT_QUALITY = 360;
+
 async function freshRender() {
   if (!renderer) throw new Error('The GPU preview isn’t available.');
-  // Make sure the renderer has the latest geometry.
-  const { doc } = buildScene(store.get().project);
+  // Make sure the renderer has the latest geometry, built at export quality:
+  // preview outlines are coarse enough to show as steps on big shapes and lines.
+  const { doc } = buildScene(store.get().project, EXPORT_QUALITY);
   await engine.build(doc);
   await new Promise((r) => requestAnimationFrame(() => r(null)));
   return renderer;

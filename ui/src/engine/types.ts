@@ -111,9 +111,38 @@ export type Content =
   /** Freehand brush stroke; points are [x, y, pressure] in layer pixels. */
   | { type: 'stroke'; points: [number, number, number][]; width: number; taper: number; smooth: number }
   /** Pen line: path data in em units × size; open subpaths are stroked `width` px wide. */
-  | { type: 'line'; d: string; size: number; width: number; cap: LineCap };
+  | { type: 'line'; d: string; size: number; width: number; cap: LineCap; squiggle?: Squiggle | null; dash?: Dash | null };
 
 export type LineCap = 'round' | 'butt' | 'square';
+
+export type SquiggleKind = 'zigzag' | 'meander' | 'loops' | 'scallop';
+
+/** A zigzag, wave, meander, coil or scallop along a pen line (px). */
+export interface Squiggle {
+  kind: SquiggleKind;
+  /** Line to tip. */
+  amplitude: number;
+  /** Tip to tip along the line. */
+  spacing: number;
+  /** 0 sharp, 1 fully rounded. */
+  smooth: number;
+  /** Zigzag: radius of each turn in px; the tips stay at the amplitude. */
+  round?: number;
+  /** Coils: how far each turn rolls back (above 1 it loops). */
+  loops: number;
+  /** Whole ridges on every segment between pen points. */
+  perSegment: boolean;
+  /** End with a leg straight across the line. */
+  flatEnds: boolean;
+  flip: boolean;
+}
+
+/** Dashes along a pen line (px); a 0 dash with round ends draws dots. */
+export interface Dash {
+  dash: number;
+  gap: number;
+  offset: number;
+}
 
 /** What the engine needs to know about a layer. */
 export interface EngineLayer {

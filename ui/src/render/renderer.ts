@@ -541,11 +541,11 @@ export class Renderer {
   }
 
   /** Draw background then objects into the bound framebuffer. `rect` maps the artboard to clip space. */
-  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean, fb: { fbo: WebGLFramebuffer | null; w: number; h: number; pxPerArt: number; guides: boolean }) {
+  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean, fb: { fbo: WebGLFramebuffer | null; w: number; h: number; pxPerArt: number; guides: boolean }, fieldK = k) {
     const gl = this.gl;
     const objs = fb.guides ? this.objs : this.objs.filter((o) => !o.item.guide);
     for (const o of objs) {
-      this.buildField(o, k);
+      this.buildField(o, fieldK);
       if (o.field) this.buildHeight(o, o.field.w / o.region!.w);
     }
     return () => {
@@ -634,7 +634,9 @@ export class Renderer {
     const { w: AW, h: AH } = this.art;
     const rectOf = (r: Region): [number, number, number, number] => [(r.x / AW) * 2 - 1, 1 - ((r.y + r.h) / AH) * 2, ((r.x + r.w) / AW) * 2 - 1, 1 - (r.y / AH) * 2];
     try {
-      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false });
+      // Fields at up to 2 texels per artboard px: at 1:1 thin bars and hairlines
+      // pick up half-pixel steps from the distance transform.
+      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false }, Math.max(k, Math.min(2 * k, 2)));
       gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
       gl.viewport(0, 0, W, Hh);
       gl.clearColor(0, 0, 0, 0);

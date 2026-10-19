@@ -60,6 +60,19 @@ fn turn_angle(a: Pt, b: Pt, c: Pt) -> f64 {
 
 /// Fit one closed polyline.
 pub fn fit_closed(c: &[Pt], tol: f64, corner_deg: f64) -> CurveContour {
+    // Long straight runs carry few points, and a cubic could bulge between them
+    // unseen by the error check: give every edge samples at most ~4 tol apart.
+    let step = (tol * 4.0).max(1e-6);
+    let mut dense: Vec<Pt> = Vec::with_capacity(c.len());
+    for i in 0..c.len() {
+        let (a, b) = (c[i], c[(i + 1) % c.len()]);
+        dense.push(a);
+        let k = (a.dist(b) / step).floor() as usize;
+        for j in 1..k.min(4096) {
+            dense.push(a.lerp(b, j as f64 / k as f64));
+        }
+    }
+    let c = &dense[..];
     let n = c.len();
     let key = rdp_indices(c, tol * 0.5);
     let m = key.len();
@@ -176,7 +189,9 @@ fn generate(p: &[Pt], u: &[f64], t1: Pt, t2: Pt) -> [Pt; 4] {
         (0.0, 0.0)
     };
     let eps = 1e-6 * seg_len;
-    if al < eps || ar < eps || al > seg_len * 4.0 || ar > seg_len * 4.0 {
+    // Handles longer than the chord loop or overshoot (typically at sharp
+    // inner corners); fall back so the caller splits instead.
+    if al < eps || ar < eps || al > seg_len * 1.5 || ar > seg_len * 1.5 || al + ar > seg_len * 2.0 {
         al = seg_len / 3.0;
         ar = seg_len / 3.0;
     }
