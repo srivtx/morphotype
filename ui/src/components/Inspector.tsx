@@ -183,6 +183,7 @@ function Appearance({ nodes }: { nodes: Node[] }) {
         <DepthEditor ids={ids} value={st.depth ?? null} />
       </div>
       <div className="blend-row">
+        <Slider label="Soften" value={st.soften ?? 0} min={0} max={120} step={0.5} suffix="px" reset={0} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.soften = v || undefined; }), `soft:${ids.join()}`)} />
         <Slider label="Opacity" value={st.opacity ?? 1} min={0} max={1} step={0.01} reset={1} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.opacity = v; }), `op:${ids.join()}`)} />
         <div className="field">
           <span>Blend</span>
@@ -390,6 +391,14 @@ function GroupEditor({ g }: { g: Group }) {
             })
           }
         />
+        {!g.merge && (
+          <Toggle
+            label="Clip to the bottom layer"
+            hint="Use the bottom layer as a frame: everything above it, glows and soft edges included, only shows inside its shape."
+            checked={!!g.clip}
+            onChange={(v) => set((x) => (x.clip = v || undefined))}
+          />
+        )}
         <p className="hint">{g.merge ? 'Children are fused. Use Cut on a child to punch holes.' : `${g.children.length} layers keep their own styles. Double-click on the canvas to select inside.`}</p>
         <div className="button-row">
           <button className="btn" onClick={() => run('ungroup')}>

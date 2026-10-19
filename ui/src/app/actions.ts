@@ -1221,10 +1221,19 @@ export async function buildSvg(transparent = store.get().settings.exportTranspar
     const obj = objects.find((o) => o.id === path.id);
     const st = obj?.style;
     if (!st || !path.d || obj.guide) continue;
-    const mix = (st.opacity ?? 1) < 1 || (st.blend && st.blend !== 'normal');
-    if (mix) body.push(`<g${(st.opacity ?? 1) < 1 ? ` opacity="${st.opacity}"` : ''}${st.blend && st.blend !== 'normal' ? ` style="mix-blend-mode:${st.blend}"` : ''}>`);
+    const soft = (st.soften ?? 0) > 0;
+    if (soft) defs.push(`<filter id="soft${defs.length}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${((st.soften ?? 0) * 0.6).toFixed(2)}"/></filter>`);
+    const softId = soft ? `soft${defs.length - 1}` : '';
+    const mix = (st.opacity ?? 1) < 1 || (st.blend && st.blend !== 'normal') || soft;
+    const clipD = obj.clip ? out.paths.find((x) => x.id === obj.clip)?.d : null;
+    if (clipD) {
+      defs.push(`<clipPath id="frame${defs.length}"><path d="${clipD}"/></clipPath>`);
+      body.push(`<g clip-path="url(#frame${defs.length - 1})">`);
+    }
+    if (mix) body.push(`<g${(st.opacity ?? 1) < 1 ? ` opacity="${st.opacity}"` : ''}${st.blend && st.blend !== 'normal' ? ` style="mix-blend-mode:${st.blend}"` : ''}${soft ? ` filter="url(#${softId})"` : ''}>`);
     emitObject(path, st);
     if (mix) body.push('</g>');
+    if (clipD) body.push('</g>');
   }
   function emitObject(path: { id: string; d: string }, st: Style) {
     const dp = st.depth;

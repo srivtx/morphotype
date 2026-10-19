@@ -63,6 +63,8 @@ uniform float u_time;
 uniform float u_bevelTex;
 uniform vec4 u_bbox;
 uniform vec3 u_ambient;
+/** Soft edges in artboard px (0 = crisp). */
+uniform float u_soften;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -105,7 +107,13 @@ vec2 boxUv(vec2 uv) { return (uv - u_bbox.xy) / max(u_bbox.zw - u_bbox.xy, vec2(
 vec2 offsetUv(vec2 artOffset) { return artOffset * u_k / u_texSize; }
 float sdfPx(vec2 uv) { return texture(u_sdf, uv).r; }
 float sdfArt(vec2 uv) { return texture(u_sdf, uv).r / u_k; }
-float cover(float dTex) { return clamp(0.5 - dTex / max(fwidth(dTex), 1e-3), 0.0, 1.0); }
+float cover(float dTex) {
+  if (u_soften > 0.0) {
+    float w = u_soften * u_k + fwidth(dTex);
+    return 1.0 - smoothstep(-w, w, dTex);
+  }
+  return clamp(0.5 - dTex / max(fwidth(dTex), 1e-3), 0.0, 1.0);
+}
 float H(vec2 uv) { return texture(u_height, uv).r; }
 vec3 normalAt(vec2 uv, float depth) {
   vec2 e = 1.5 / u_texSize;
@@ -912,6 +920,17 @@ const lens: EffectDef = {
   glsl: /* glsl */ `
 uniform vec3 u_tint;
 uniform float u_refraction, u_dispersion, u_magnify, u_focusX, u_focusY, u_iridescence, u_rim, u_tintAmount, u_thickness, u_rainbow, u_rainbowWidth, u_lightAngle, u_highlight, u_film, u_rainbowShift, u_edgeBend;
+/**
+ * Light fanned out by a prism and overlapping with itself, as rendered glass
+ * shows it: hue wraps red → yellow → green → (dim blue) → magenta → red, so
+ * bands blend through magenta and stay mostly warm.
+ */
+vec3 prismBand(float u) {
+  float h = fract(u);
+  vec3 c = clamp(abs(fract(h + vec3(0.0, 2.0, 1.0) / 3.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+  float blue = smoothstep(0.42, 0.55, h) * (1.0 - smoothstep(0.7, 0.8, h));
+  return c * (1.0 - 0.7 * blue);
+}
 /** Pure spectral colour, 0 = deep red … 1 = violet, fading out at both ends. */
 vec3 spectral(float t) {
   vec3 c = clamp(abs(fract(t * 0.8 + vec3(0.0, 2.0, 1.0) / 3.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
@@ -1002,7 +1021,7 @@ vec4 effect(vec2 uv) {
     // Slopes facing the light show the light itself, not what's behind.
     // A big studio light: slopes up to sideways-on to it still catch it.
     float litFace = smoothstep(-0.35, 0.2, toward) * onSlope * min(u_rainbow, 1.0);
-    vec3 band = spectral(u);
+    vec3 band = prismBand(u);
     c = mix(c, band * max(u_rainbow, 1.0), litFace * max(max(band.r, band.g), band.b));
     c += spectral(back) * 0.12 * smoothstep(0.0, 0.2, -toward) * u_rainbow * onSlope;
   }
@@ -1196,7 +1215,152 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush];
+
+const glow: EffectDef = {
+  id: 'glow',
+  name: 'Glow gradient',
+  description: 'Colour by distance from the edge, inside and out: glowing UI shapes, auras and light fades.',
+  params: [
+    col('edge', 'Edge colour', '#ffc21a'),
+    col('mid', 'Middle colour', '#6b1f08'),
+    col('core', 'Core colour', '#000000'),
+    num('inside', 'Inside glow', 0, 800, 1, 140),
+    num('curve', 'Falloff', 0.2, 4, 0.01, 1),
+    col('out1', 'Outer colour', '#2f7bff'),
+    col('out2', 'Outer fade', '#5b2bd6'),
+    num('outside', 'Outer glow', 0, 800, 1, 0),
+    num('outAmount', 'Outer strength', 0, 1.5, 0.01, 1),
+    num('outMix', 'Outer colour shift', 0.05, 1, 0.01, 0.6),
+    num('grain', 'Grain', 0, 1, 0.01, 0.1),
+  ],
+  // The inside gradient follows a smoothed depth, so corners don't crease.
+  height: (p) => ({ profile: 1, bevel: Math.max(1, n(p, 'inside')), softness: n(p, 'inside') * 0.35 }),
+  reach: (p) => n(p, 'outside') * 1.2,
+  glsl: /* glsl */ `
+uniform vec3 u_edge, u_mid, u_core, u_out1, u_out2;
+uniform float u_inside, u_curve, u_outside, u_outAmount, u_outMix, u_grain;
+vec3 grad3(vec3 a, vec3 b, vec3 c, float t) { return t < 0.5 ? mix(a, b, t * 2.0) : mix(b, c, t * 2.0 - 1.0); }
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float d = dt / u_k;
+  float cov = cover(dt);
+  vec4 o = vec4(0.0);
+  // Outside: a glow that fades from the outer colour through the fade colour to nothing.
+  if (u_outside > 0.0 && u_outAmount > 0.0) {
+    float t = clamp(max(d, 0.0) / u_outside, 0.0, 1.0);
+    float g = pow(1.0 - smoothstep(0.0, 1.0, t), 1.6) * u_outAmount;
+    vec3 c = mix(u_out1, u_out2, smoothstep(0.0, u_outMix, t));
+    o = vec4(c * g, g) * (1.0 - cov);
+  }
+  if (cov > 0.0) {
+    // Inside: edge colour at the outline, through the middle colour to the core.
+    float t = u_inside > 0.0 ? pow(clamp(H(uv), 0.0, 1.0), u_curve) : 1.0;
+    o = vec4(grad3(u_edge, u_mid, u_core, t) * cov, cov) + o;
+  }
+  o.rgb += (hash12(floor(artPx(uv) * u_k)) - 0.5) * u_grain * 0.12 * o.a;
+  return clamp(o, 0.0, 1.0);
+}`,
+};
+
+const grainy: EffectDef = {
+  id: 'grainy',
+  name: 'Grain gradient',
+  description: 'A lit, rounded form coloured by a three-colour gradient and dissolved into film grain.',
+  params: [
+    col('lit', 'Light colour', '#ff8de6'),
+    col('body', 'Body colour', '#ff5a4f'),
+    col('dark', 'Shadow colour', '#26a84a'),
+    num('lightAngle', 'Light angle', -180, 180, 1, -40),
+    num('spread', 'Spread', 0.2, 3, 0.01, 1),
+    num('grain', 'Grain', 0, 1, 0.01, 0.55),
+    num('grainSize', 'Grain size', 0.5, 6, 0.1, 1.2),
+    num('edgeGrain', 'Grainy edge', 0, 1, 0.01, 0.5),
+    num('bevel', 'Roundness', 4, 600, 1, 400, true),
+    num('softness', 'Softness', 0, 120, 1, 30, true),
+  ],
+  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  reach: (p) => 4 + n(p, 'edgeGrain') * 12,
+  glsl: /* glsl */ `
+uniform vec3 u_lit, u_body, u_dark;
+uniform float u_lightAngle, u_spread, u_grain, u_grainSize, u_edgeGrain;
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float d = dt / u_k;
+  // Grain is a per-pixel dither of the gradient position (and of the edge):
+  // the colours stay pure but blend through a speckle, like risograph or film.
+  vec2 gp = floor(artPx(uv) * u_k / max(u_grainSize, 0.5));
+  float nz = hash12(gp) - 0.5;
+  float edgeW = 1.0 + u_edgeGrain * 10.0;
+  float cov = clamp(0.5 - (d + nz * edgeW * 1.6 * u_edgeGrain) / edgeW, 0.0, 1.0);
+  cov = max(cover(dt) * (1.0 - u_edgeGrain), cov);
+  if (cov <= 0.0) return vec4(0.0);
+  vec3 n = normalAt(uv, 1.0);
+  float la = radians(u_lightAngle);
+  vec3 L = normalize(vec3(cos(la) * 0.8, sin(la) * 0.8, 0.6));
+  // Sideways light only, so the middle of the form shows the body colour.
+  float t = clamp(dot(n.xy, normalize(L.xy)) * 0.5 * u_spread + 0.5 + nz * u_grain, 0.0, 1.0);
+  // 0 = shadow side, 0.5 = body, 1 = lit side.
+  vec3 c = t < 0.5 ? mix(u_dark, u_body, smoothstep(0.0, 0.5, t)) : mix(u_body, u_lit, smoothstep(0.5, 1.0, t));
+  // Round form: the rim turning away from the light falls off a little.
+  float rim = 1.0 - n.z;
+  c *= 1.0 - 0.35 * rim * rim * (1.0 - max(dot(normalize(n.xy + 1e-5), normalize(L.xy)), 0.0));
+  return vec4(clamp(c, 0.0, 1.0) * cov, cov);
+}`,
+};
+
+const mosaic: EffectDef = {
+  id: 'mosaic',
+  name: 'Mosaic',
+  description: 'Fills the shape with blocks and bricks in random palette colours, like toy bricks or pixel quilts.',
+  params: [
+    num('cell', 'Block size', 2, 200, 0.5, 24),
+    num('bricks', 'Bricks', 0, 1, 0.01, 0.6),
+    num('gap', 'Gap', 0, 0.45, 0.01, 0),
+    num('round', 'Rounded', 0, 0.5, 0.01, 0),
+    col('c1', 'Colour 1', '#e8281e'),
+    col('c2', 'Colour 2', '#ffd400'),
+    col('c3', 'Colour 3', '#1b6fe0'),
+    col('c4', 'Colour 4', '#11a85a'),
+    col('c5', 'Colour 5', '#ffffff'),
+    col('c6', 'Colour 6', '#4bb4ff'),
+    num('seed', 'Shuffle', 0, 100, 1, 7),
+  ],
+  reach: () => 2,
+  glsl: /* glsl */ `
+uniform vec3 u_c1, u_c2, u_c3, u_c4, u_c5, u_c6;
+uniform float u_cell, u_bricks, u_gap, u_round, u_seed;
+vec3 pal(float h) {
+  float i = floor(h * 6.0);
+  return i < 1.0 ? u_c1 : i < 2.0 ? u_c2 : i < 3.0 ? u_c3 : i < 4.0 ? u_c4 : i < 5.0 ? u_c5 : u_c6;
+}
+vec4 effect(vec2 uv) {
+  float dt = sdfPx(uv);
+  float cov = cover(dt);
+  if (cov <= 0.0) return vec4(0.0);
+  // Cells counted from the object's top-left corner so blocks line up with it.
+  vec2 p = (artPx(uv) - (u_region.xy + u_bbox.xy * u_region.zw)) / u_cell;
+  vec2 c = floor(p);
+  // Every 2x2 block is four singles, two bricks across, two bricks down, or one big block.
+  vec2 blk = floor(c / 2.0);
+  float r = hash12(blk + u_seed * 17.0);
+  vec2 lo = c, size = vec2(1.0);
+  if (r < u_bricks * 0.4) { lo = vec2(blk.x * 2.0, c.y); size = vec2(2.0, 1.0); }
+  else if (r < u_bricks * 0.8) { lo = vec2(c.x, blk.y * 2.0); size = vec2(1.0, 2.0); }
+  else if (r < u_bricks) { lo = blk * 2.0; size = vec2(2.0); }
+  vec3 col = pal(hash12(lo * 1.37 + size * 7.1 + u_seed));
+  // Gaps and rounded corners inside each block.
+  vec2 q = (p - lo) / size - 0.5;
+  vec2 half_ = 0.5 - u_gap / size * 0.5;
+  float rr = u_round * min(half_.x * size.x, half_.y * size.y) / max(size.x, size.y);
+  vec2 e = abs(q) - half_ + rr;
+  float bd = (length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - rr) * u_cell * min(size.x, size.y) * u_k;
+  float inBlock = (u_gap > 0.0 || u_round > 0.0) ? clamp(0.5 - bd / max(fwidth(bd), 1e-3), 0.0, 1.0) : 1.0;
+  float a = cov * inBlock;
+  return vec4(col * a, a);
+}`,
+};
+
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;
@@ -1275,7 +1439,7 @@ export const PRESETS: Preset[] = [
   { name: 'Clear lens', effect: 'lens', params: {}, bg: '#eef0f0', tags: 'glass refraction bubble water drop' },
   { name: 'Prism lens', effect: 'lens', params: { dispersion: 1.2, iridescence: 1.1, refraction: 0.9, magnify: 0.1 }, bg: '#000000', tags: 'glass crystal rainbow iridescent cube' },
   { name: 'Magnifier drop', effect: 'lens', params: { refraction: 1.3, dispersion: 2, magnify: 0.3, edgeBend: 0.7, iridescence: 0, highlight: 0, film: 0.85, rim: 0.4, blur: 1, bevel: 130, softness: 50, tintAmount: 0 }, bg: '#eef0f0', tags: 'glass lens drop water magnify chromatic aberration' },
-  { name: 'Crystal block', effect: 'lens', params: { chamfer: 1, bevel: 50, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.35, rainbow: 1.6, rainbowWidth: 1.1, rainbowShift: 0.15, thickness: 0.5, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }, bg: '#000000', tags: 'glass crystal cube prism rainbow facets chamfer' },
+  { name: 'Crystal block', effect: 'lens', params: { chamfer: 1, bevel: 50, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.35, rainbow: 1.6, rainbowWidth: 0.7, rainbowShift: 0.3, thickness: 1, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }, bg: '#000000', tags: 'glass crystal cube prism rainbow facets chamfer' },
   { name: 'Thermal', effect: 'thermal', params: {}, bg: '#e8133c', tags: 'heat camera infrared map' },
   { name: 'Hot core', effect: 'thermal', params: { invert: 1, glowAmount: 0.6 }, bg: '#0b1a8f', tags: 'heat thermal' },
   { name: 'Prism light', effect: 'prism', params: {}, bg: '#000000', tags: 'rainbow streaks light rays spectrum' },

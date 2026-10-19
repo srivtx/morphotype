@@ -171,7 +171,8 @@ export async function projectScene(p: Project, px: number) {
   const out = await engine.buildExact(doc);
   const items: SceneItem[] = objects.flatMap((o) => {
     const r = out.renders.find((x) => x.id === o.id);
-    return r && !o.guide ? [sceneItem(o.id, r, o.style)] : [];
+    const clip = o.clip ? out.renders.find((x) => x.id === o.clip)?.d : null;
+    return r && !o.guide ? [sceneItem(o.id, r, o.style, false, clip)] : [];
   });
   return { items, background: p.background, w: p.canvas.width, h: p.canvas.height, px };
 }

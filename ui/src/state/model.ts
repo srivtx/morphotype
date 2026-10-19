@@ -46,6 +46,8 @@ export interface Style {
   /** How it mixes with what's below (multiply for overprinted inks). */
   blend?: BlendMode;
   depth?: Depth | null;
+  /** Soft edges, in artboard px: a blur of the outline (cheap, from the distance field). */
+  soften?: number;
 }
 
 export function stroke(width = 6, color = '#0a0a0a', align: StrokeAlign = 'outside'): Stroke {
@@ -76,6 +78,8 @@ export interface Group {
   merge: boolean;
   /** Expanded in the layers panel. */
   open?: boolean;
+  /** Clip everything above the bottom layer to its shape, like a frame. */
+  clip?: boolean;
   style: Style;
   modifiers: ModEntry[];
   children: Node[];

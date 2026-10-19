@@ -11,7 +11,8 @@ ${COMMON_GLSL}
 in vec2 v_uv;
 out vec4 o;
 ${body}
-uniform float u_strokeW, u_strokeAlign, u_strokeOpacity, u_opacity;
+uniform float u_strokeW, u_strokeAlign, u_strokeOpacity, u_opacity, u_hasClip;
+uniform sampler2D u_clipMask;
 uniform vec3 u_strokeColor;
 uniform float u_sideDepth, u_sideAngle, u_sideShade;
 uniform vec3 u_sideColor;
@@ -44,6 +45,7 @@ void main() {
     o = over(vec4(u_strokeColor * a, a), o);
   }
   if (u_sideDepth > 0.0) o = over(o, depthSide(v_uv));
+  if (u_hasClip > 0.5) o *= texture(u_clipMask, v_uv).a;
   o *= u_opacity;
 }`;
 
@@ -68,19 +70,24 @@ export interface SceneItem {
   opacity?: number;
   blend?: BlendMode;
   depth?: Depth | null;
+  soften?: number;
+  /** Outline (artboard coordinates) this object is clipped to. */
+  clipD?: string | null;
   /** Reference layers draw on the canvas but not in exports or previews. */
   guide?: boolean;
 }
 
 /** The scene item for one built object and its style. */
-export function sceneItem(id: string, out: { d: string; bbox: Box | null }, st: Style, guide?: boolean): SceneItem {
-  return { id, d: out.d, bbox: out.bbox, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, guide };
+export function sceneItem(id: string, out: { d: string; bbox: Box | null }, st: Style, guide?: boolean, clipD?: string | null): SceneItem {
+  return { id, d: out.d, bbox: out.bbox, clipD, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, soften: st.soften, guide };
 }
 
 interface Field {
   w: number;
   h: number;
   mask: WebGLTexture;
+  /** Coverage of the clipping outline, when the object is clipped. */
+  clip: WebGLTexture | null;
   sdf: Target;
   heightA: Target;
   heightB: Target;
@@ -97,6 +104,7 @@ interface Region {
 interface Obj {
   item: SceneItem;
   path: Path2D | null;
+  clipPath: Path2D | null;
   field: Field | null;
   /** Field density the field was built at, and for which region. */
   fieldKey: string;
@@ -204,11 +212,15 @@ export class Renderer {
           prev.path = item.d ? new Path2D(item.d) : null;
           prev.fieldKey = '';
         }
+        if ((prev.item.clipD ?? null) !== (item.clipD ?? null)) {
+          prev.clipPath = item.clipD ? new Path2D(item.clipD) : null;
+          prev.fieldKey = '';
+        }
         if (prev.item.effect !== item.effect) prev.heightKey = '';
         prev.item = item;
         next.push(prev);
       } else {
-        next.push({ item, path: item.d ? new Path2D(item.d) : null, field: null, fieldKey: '', heightKey: '', region: null });
+        next.push({ item, path: item.d ? new Path2D(item.d) : null, clipPath: item.clipD ? new Path2D(item.clipD) : null, field: null, fieldKey: '', heightKey: '', region: null });
       }
     }
     for (const o of old.values()) this.freeField(o);
@@ -316,6 +328,7 @@ export class Renderer {
     if (!f) return;
     const gl = this.gl;
     gl.deleteTexture(f.mask);
+    if (f.clip) gl.deleteTexture(f.clip);
     for (const t of [f.sdf, f.heightA, f.heightB]) freeTarget(gl, t);
     o.field = null;
     o.fieldKey = '';
@@ -354,7 +367,7 @@ export class Renderer {
     const st = o.item.stroke;
     const stroke = st && st.width > 0 ? st.width * (st.align === 'outside' ? 1 : st.align === 'center' ? 0.5 : 0) : 0;
     const dp = o.item.depth && o.item.depth.amount > 0 ? o.item.depth.amount : 0;
-    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + dp + 3;
+    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + dp + (o.item.soften ?? 0) * 1.5 + 3;
     const x0 = Math.max(0, Math.floor(b[0] + W / 2 - m));
     const y0 = Math.max(0, Math.floor(b[1] + H / 2 - m));
     const x1 = Math.min(W, Math.ceil(b[2] + W / 2 + m));
@@ -381,7 +394,7 @@ export class Renderer {
     if (!o.field || o.field.w !== w || o.field.h !== h) {
       this.freeField(o);
       const F = formats(gl);
-      o.field = { w, h, mask: texture(gl, w, h, F.rgba8), sdf: target(gl, w, h, F.r16f), heightA: target(gl, w, h, F.r16f), heightB: target(gl, w, h, F.r16f) };
+      o.field = { w, h, mask: texture(gl, w, h, F.rgba8), clip: null, sdf: target(gl, w, h, F.r16f), heightA: target(gl, w, h, F.r16f), heightB: target(gl, w, h, F.r16f) };
     }
     const f = o.field;
     const c = this.maskCanvas;
@@ -402,6 +415,19 @@ export class Renderer {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    // The clipping outline, rasterised into the same frame.
+    if (o.clipPath) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      ctx.setTransform(sx, 0, 0, sy, (this.art.w / 2 - region.x) * sx, (this.art.h / 2 - region.y) * sy);
+      ctx.fill(o.clipPath, 'nonzero');
+      if (!f.clip) f.clip = texture(gl, w, h, formats(gl).rgba8);
+      gl.bindTexture(gl.TEXTURE_2D, f.clip);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    } else if (f.clip) {
+      gl.deleteTexture(f.clip);
+      f.clip = null;
+    }
 
     const seeds = this.ensureSeeds(w, h);
     this.pass(this.progs.seed, seeds.a, w, h, { u_mask: f.mask });
@@ -477,6 +503,7 @@ export class Renderer {
     u.u_strokeOpacity = st?.opacity ?? 1;
     u.u_strokeColor = hexToRgb(st?.color ?? '#000000');
     u.u_opacity = Math.max(0, Math.min(1, o.item.opacity ?? 1));
+    u.u_soften = Math.max(0, o.item.soften ?? 0);
     const dp = o.item.depth;
     u.u_sideDepth = dp && dp.amount > 0 ? dp.amount : 0;
     u.u_sideAngle = ((dp?.angle ?? 135) * Math.PI) / 180;
@@ -543,6 +570,7 @@ export class Renderer {
           u_mask: o.field.mask,
           u_sdf: o.field.sdf.tex,
           u_height: o.field.heightA.tex,
+          u_clipMask: o.field.clip ?? o.field.mask,
           ...(o.item.effect.photo ? { u_photo: photo } : {}),
           ...(o.item.effect.backdrop ? { u_backdrop: bdu ? this.bd!.sharp : null, u_backdropBlur: bdu ? this.bdBlur : null } : {}),
         });
@@ -550,6 +578,7 @@ export class Renderer {
         setUniforms(gl, p, {
           ...this.effectUniforms(o),
           u_rect: rectOf(o.region),
+          u_hasClip: o.field.clip ? 1 : 0,
           ...(o.item.effect.photo ? { u_hasPhoto: photo ? 1 : 0, u_imgAspect: meta ? meta.w / meta.h : 1 } : {}),
           ...(o.item.effect.backdrop ? (bdu ?? { u_hasBackdrop: 0 }) : {}),
         });

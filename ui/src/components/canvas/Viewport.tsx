@@ -32,7 +32,7 @@ export function syncScene(r: Renderer) {
   const items: SceneItem[] = [];
   for (const o of objects) {
     const out = renders.get(o.id);
-    if (out) items.push(sceneItem(o.id, out, o.style, o.guide));
+    if (out) items.push(sceneItem(o.id, out, o.style, o.guide, o.clip ? renders.get(o.clip)?.d : null));
   }
   r.setScene(items);
   r.setBackground(s.project.background);

@@ -119,6 +119,8 @@ export interface SceneObject {
   style: Style;
   /** A reference layer: drawn on the canvas, never exported. */
   guide?: boolean;
+  /** Render whose outline masks this object (a clipping group's bottom layer). */
+  clip?: string;
 }
 
 /** Strip UI-only fields so style edits don't trigger geometry rebuilds. */
@@ -183,9 +185,15 @@ export function buildScene(p: Project, quality?: number, typing?: string | null)
         }
         base = off ? [] : [r];
       } else if (isGroup(n)) {
+        const first = objects.length;
         const sub = rec(n.children, off);
         made.push(...sub);
         base = sub;
+        // A clipping group: its bottom layer's outline masks everything above it.
+        const frame = n.clip ? n.children[0] : undefined;
+        if (frame && frame.op === 'add' && (!isGroup(frame) || frame.merge)) {
+          for (let i = first; i < objects.length; i++) if (objects[i].id !== frame.id && !objects[i].clip) objects[i].clip = frame.id;
+        }
       } else {
         if (off) {
           base = [];

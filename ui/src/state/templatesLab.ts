@@ -75,13 +75,16 @@ export const LAB_TEMPLATES: Template[] = [
         'Crystal word',
         [
           textLayer('mono', 'inter-black', { y: -6 * k, name: 'Word', style: ink('#f4f4f4'), modifiers: mods({ kind: 'weight', amount: -0.012 }) }, { size: 192 * k, tracking: -0.02 }),
-          symbolLayer('roundRect', 175 * k, {
-            x: 3 * k,
-            y: 8 * k,
-            rotation: 30,
-            name: 'Glass block',
-            style: style('lens', { chamfer: 1, bevel: 35 * k, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.35, rainbow: 1.6, rainbowWidth: 1.1, rainbowShift: 0.15, thickness: 0.5, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }),
-          }, { radius: 0.05, aspect: 1 }),
+          // Two stacked glass layers measured on the picture: the block's
+          // hexagonal outline (a cube seen corner-on, in perspective) with
+          // chamfered, rainbow-lit facets, and the clear front window on top.
+          group(
+            [
+              pen(fromRef('M290 348L353 205L465 252L527 318L455 452L315 398Z', 404, 316, k), 'Block', style('lens', { chamfer: 1, bevel: 48 * k, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.3, rainbow: 1.6, rainbowWidth: 0.7, rainbowShift: 0.3, thickness: 1, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }), undefined, 'round', { modifiers: mods({ kind: 'round', radius: 0.03 }) }),
+              pen(fromRef('M382 250L480 295L432 408L330 370Z', 404, 316, k), 'Front window', style('lens', { chamfer: 1, bevel: 7 * k, softness: 2, refraction: 0.8, dispersion: 2, magnify: 0.2, rainbow: 0, thickness: 0, highlight: 0.9, rim: 1.4, iridescence: 0, tintAmount: 0 }), undefined, 'round', { modifiers: mods({ kind: 'round', radius: 0.03 }) }),
+            ],
+            { name: 'Glass cube' },
+          ),
           symbolLayer('squircle', 69 * k, { x: -322 * k, y: -245 * k, name: 'App tile', style: { ...style('flat', { fill: '#0a0a0a' }), stroke: { width: 2, color: '#3a3a3a', align: 'inside', opacity: 1 } } }, { exponent: 5, aspect: 1 }),
           textLayer('mono', 'inter-black', { x: -322 * k, y: -245 * k, name: 'App tile label', style: ink('#f4f4f4') }, { size: 15 * k, tracking: -0.01 }),
           textLayer('iOS', 'inter', { x: 335 * k, y: -243 * k, name: 'Platform', style: ink('#f4f4f4'), modifiers: mods({ kind: 'weight', amount: 0.01 }) }, { size: 14 * k, tracking: 0 }),
