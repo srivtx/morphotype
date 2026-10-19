@@ -1377,17 +1377,26 @@ const keycap: EffectDef = {
     num('lightAngle', 'Light angle', -180, 180, 1, -135),
     num('light', 'Light', 0, 2, 0.01, 1),
     col('sky', 'Sky reflection', '#9ec4ea'),
-    col('bounce', 'Floor reflection', '#ffffff'),
+    col('bounce', 'Reflection below', '#ffffff'),
+    col('above', 'Reflection above', '#ffffff'),
+    num('aboveMirror', 'Mirror above', 0, 1, 0.01, 0),
     num('gloss', 'Gloss', 0, 1, 0.01, 0.55),
+    num('mirror', 'Mirror below', 0, 1, 0.01, 0),
+    num('occlusion', 'Shadow from above', 0, 1.5, 0.01, 0),
+    col('shadowTint', 'Shadow tint', '#56677c'),
     num('rimLight', 'Rim light', 0, 2, 0.01, 0.8),
+    num('sheen', 'Wall sheen', 0, 1, 0.01, 0.3),
+    num('evenTop', 'Even top', 0, 1, 0.01, 0),
+    num('skyFill', 'Sky fill', 0, 1, 0.01, 0.35),
+    num('shadowWalls', 'Shadow on walls only', 0, 1, 1, 0),
     num('translucent', 'Translucent', 0, 1, 0.01, 0),
     num('shadow', 'Shadow', 0, 1, 0.01, 0.4),
     num('rise', 'Height', 4, 200, 1, 40, true),
   ],
   reach: (p) => (n(p, 'shadow') > 0 ? 60 : 4) + n(p, 'translucent') * 30,
   glsl: /* glsl */ `
-uniform vec3 u_color, u_sky, u_bounce;
-uniform float u_wall, u_tilt, u_tiltX, u_topRound, u_dish, u_lightAngle, u_light, u_gloss, u_translucent, u_shadow, u_rise, u_rimLight;
+uniform vec3 u_color, u_sky, u_bounce, u_above, u_shadowTint;
+uniform float u_wall, u_tilt, u_tiltX, u_topRound, u_dish, u_lightAngle, u_light, u_gloss, u_translucent, u_shadow, u_rise, u_rimLight, u_mirror, u_occlusion, u_aboveMirror, u_sheen, u_shadowWalls, u_evenTop, u_skyFill;
 vec2 kBox() { return (u_bbox.zw - u_bbox.xy) * u_region.zw; }
 /** Signed distance (art px) to the top face: a rounded box inset by the wall, shifted by the tilt. */
 float kTop(vec2 uv) {
@@ -1408,9 +1417,10 @@ float kH(vec2 uv) {
   if (dt <= 0.0) {
     // A smooth bowl (superellipse radius, so no creases toward the corners).
     vec2 pa = (boxUv(uv) - 0.5) * kBox() - vec2(u_tiltX, -u_tilt) * u_wall * 0.8;
-    vec2 q = abs(pa) / hs;
-    float rr = pow(pow(q.x, 4.0) + pow(q.y, 4.0), 0.25);
-    return H - u_dish * H * 0.9 * (1.0 - clamp(rr * rr, 0.0, 1.0));
+    // Separable bowl: smooth everywhere, so no streaks along the diagonals.
+    vec2 q = clamp(abs(pa) / hs, 0.0, 1.0);
+    float bowl = (1.0 - q.x * q.x) * (1.0 - q.y * q.y);
+    return H - u_dish * H * 0.9 * bowl;
   }
   // Walls: a rounded shoulder from the base to the rim.
   float t = dOut / max(dOut + dt, 1e-3);
@@ -1431,14 +1441,15 @@ vec4 effect(vec2 uv) {
   vec3 L = normalize(vec3(cos(la) * 0.85, sin(la) * 0.85, 0.5));
   // Soft key light plus a bright ambient (studio).
   float diff = max(dot(n, L), 0.0);
-  vec3 base = u_color * (0.58 + 0.5 * diff * u_light);
+  vec3 base = u_color * (0.42 + 0.72 * diff * u_light);
   // Fill light bounced up from below (the floor or the next key) onto the walls
   // facing down (field y points down the screen). The dish stays in its own shade.
   float onWall = smoothstep(0.0, 3.0, kTop(uv));
   base += (u_color * u_bounce * 0.9 + u_bounce * 0.25) * max(n.y, 0.0) * onWall;
   // Environment: sky above (screen up), floor bounce below (screen down).
   vec3 R = reflect(vec3(0.0, 0.0, -1.0), n);
-  vec3 env = mix(u_sky, u_bounce, smoothstep(-0.6, 0.6, R.y));
+  // The dish sees the sky; only the walls see the floor.
+  vec3 env = mix(u_sky, u_bounce, smoothstep(-0.6, 0.6, R.y) * onWall);
   // Plastic: a little reflection face-on, more at grazing angles.
   float fres = 0.04 + 0.5 * pow(1.0 - max(n.z, 0.0), 3.0);
   vec3 c = mix(base, env * (0.5 + 0.5 * u_color), clamp(fres * (0.5 + u_gloss), 0.0, 1.0));
@@ -1448,13 +1459,54 @@ vec4 effect(vec2 uv) {
   // A second, harder light from the side opposite the key light: bright rims on the walls.
   vec3 L2 = normalize(vec3(-cos(la) * 0.95, -sin(la) * 0.3, 0.25));
   c += vec3(pow(max(dot(R, L2), 0.0), 3.0)) * u_rimLight * 0.5 * smoothstep(0.05, 0.3, 1.0 - n.z) * onWall;
+  // Thin coloured plastic glows evenly on top (light scattered inside it).
+  c = mix(c, u_color * (1.0 + 0.08 * diff), u_evenTop * (1.0 - onWall));
+  // Walls turned toward the light catch it fully: a broad sheen.
+  float litWall = max(dot(normalize(n.xy + 1e-5), normalize(L.xy)), 0.0) * onWall * smoothstep(0.05, 0.25, 1.0 - n.z);
+  c = mix(c, mix(u_color * 1.12, vec3(1.0), u_sheen), clamp(litWall * 1.9, 0.0, 1.0));
+  // Walls turned away from the light still get the sky.
+  float darkWall = max(-dot(normalize(n.xy + 1e-5), normalize(L.xy)), 0.0) * onWall;
+  c = mix(c, u_sky * mix(u_color, vec3(1.0), 0.5), darkWall * u_skyFill);
+  // Glossy walls facing down mirror what's below them (the floor or the next key).
+  float front = max(n.y, 0.0) * onWall;
+  c = mix(c, u_bounce * (0.75 + 0.25 * spec), clamp(pow(front, 1.5) * 2.6, 0.0, 1.0) * u_mirror);
+  // Shadow cast by whatever is above (the key above): with the light from one
+  // side it falls diagonally across the top corner on the other side.
+  if (u_occlusion > 0.0) {
+    vec2 bu = boxUv(uv);
+    float side = L.x > 0.0 ? bu.x : 1.0 - bu.x;
+    float yTop = bu.y;
+    float reach = yTop + side * 0.95;
+    float shade = 1.0 - smoothstep(u_occlusion * 0.55 - 0.08, u_occlusion * 0.55 + 0.08, reach);
+    if (u_shadowWalls > 0.5) shade *= onWall;
+    c *= mix(vec3(1.0), u_shadowTint / max(max(u_color.r, max(u_color.g, u_color.b)), 0.3), shade * 0.85);
+  }
+  // (After the shadow.) Walls facing up mirror what's above them (the key above).
+  float back = max(-n.y, 0.0) * onWall;
+  c = mix(c, u_above * (0.85 + 0.2 * spec), clamp(back * 2.4, 0.0, 1.0) * u_aboveMirror);
+  // A thin highlight where the dish meets the shoulder.
+  float td = kTop(uv);
+  float rimLine = (1.0 - smoothstep(0.0, 2.2, abs(td + 1.0)));
   // Translucent plastic: what's under the key, refracted by the surface and tinted.
   if (u_translucent > 0.0) {
     // Tinted plastic passes the brightness of what's under it, in its own colour.
-    vec3 under = behind(uv + offsetUv(-n.xy * 26.0)).rgb;
+    // The flat window passes what's under it cleanly; the curved walls bend it.
+    float wallBend = smoothstep(-2.0, 4.0, kTop(uv));
+    vec3 under = behind(uv + offsetUv(-n.xy * 26.0 * wallBend)).rgb;
     float lum = dot(under, vec3(0.3, 0.55, 0.15));
     float thin = 1.0 - n.z;
-    vec3 trans = u_color * (0.3 + 0.95 * lum) * (0.85 + 0.7 * thin) + max(under - 0.5, 0.0) * 0.2;
+    // Part scattered light in the plastic's colour, part a true colour filter
+    // (multiplied), so a red part under orange plastic still reads red.
+    vec3 scatter = u_color * (0.75 + 0.5 * lum);
+    // Warm parts under the plastic show through in their own colour; cool ones
+    // (the sky) only lend their brightness.
+    float warm = clamp((under.r - under.b) * 2.0, 0.0, 1.0);
+    vec3 trans = mix(scatter, under * 1.1, warm * 0.9) * (0.82 + 0.3 * thin);
+    // The top window glows lighter, with a bright inner rim where light gathers.
+    float inWin = 1.0 - smoothstep(-2.0, 0.0, td);
+    trans *= 1.0 - 0.12 * inWin;
+    trans += mix(u_color, vec3(1.0, 0.85, 0.5), 0.35) * rimLine * 0.45;
+    trans = mix(trans, u_bounce * u_color * 1.3, clamp(front * 2.4, 0.0, 1.0) * u_mirror * 0.6);
     c = mix(c, trans + vec3(spec) * u_gloss * 0.6, u_translucent * (1.0 - fres * 0.5));
   }
   return over(vec4(clamp(c, 0.0, 1.0) * cov, cov), sh);

@@ -292,20 +292,28 @@ export const STUDIO_TEMPLATES: Template[] = [
     category: 'Social',
     make: () => {
       const { box, text, pen, k } = frame(522, 602, 1080 / 1044);
+      // Each key reflects its neighbours (the key above in its top wall, the one
+      // below in its bottom wall) and sits in the shadow of the key above.
       const cap = (y0: number, color: string, bounce: string, name: string, extra: Record<string, number | string> = {}) =>
-        box(400, y0, 633, y0 + 240, 34, name, style('keycap', { color, bounce, sky: '#8fb6dc', wall: 38 * k, tilt: 0.45, tiltX: -0.35, topRound: 46 * k, dish: 0.8, rise: 50, lightAngle: -130, light: 1, gloss: 0.6, rimLight: 1, shadow: 0.35, ...extra }));
-      const hand = { ...ink('#fdf8ec'), stroke: { width: 3.6 * k, color: '#141414', align: 'outside' as const, opacity: 1 } };
+        box(400, y0, 633, y0 + 240, 34, name, style('keycap', { color, bounce, sky: '#9cc3e8', wall: 27 * k, tilt: 0.4, tiltX: 0.15, topRound: 52 * k, dish: 0.8, rise: 50, lightAngle: -45, light: 1.15, gloss: 0.6, rimLight: 0.5, sheen: 1, mirror: 0.85, shadow: 0.35, ...extra }));
+      const hand = { ...ink('#fdf8ec'), stroke: { width: 3 * k, color: '#141414', align: 'outside' as const, opacity: 1 } };
       return project(
         'Keycap tower',
         [
-          cap(95, '#eef0f3', '#ff8a2a', 'go key'),
-          text('go', 'archivo', 503, 210, 56, ink('#111111'), 'go'),
-          group([box(500, 365, 535, 560, 6, 'Stem', ink('#b82400')), box(470, 445, 565, 470, 6, 'Stem cross', ink('#b82400'))], { name: 'Stem (seen through the key)' }),
-          cap(345, '#ff7f12', '#ffb36b', 'create key', { translucent: 0.85, gloss: 0.8 }),
+          cap(95, '#c7d0dc', '#e8661a', 'go key'),
+          text('go', 'inter', 502, 211, 49, ink('#111111'), 'go', { modifiers: mods({ kind: 'weight', amount: 0.045 }) }, { tracking: -0.03 }),
+          group(
+            [
+              pen('M496 362L540 362L534 418L530 466L534 516L540 558L496 558L502 516L506 466L502 418Z', 'Stem', ink('#8e1000')),
+              pen('M514 372L522 372L519 466L522 548L514 548L517 466Z', 'Stem light', { ...ink('#ff6a2a'), soften: 2 }),
+            ],
+            { name: 'Stem (seen through the key)' },
+          ),
+          cap(345, '#f56a08', '#f4f4f6', 'create key', { sheen: 0, translucent: 0.9, gloss: 0.8, mirror: 0.5, above: '#e9eef4', aboveMirror: 0.3, occlusion: 0.6, shadowTint: '#b23d00' }),
           text('create!', 'inter', 533, 470, 40, ink('#ffffff'), 'create', { modifiers: mods({ kind: 'weight', amount: 0.012 }) }),
-          cap(595, '#eef0f3', '#8ee03a', 'pollen key'),
-          text('pollen.', 'archivo', 502, 718, 44, ink('#111111'), 'pollen', {}, { tracking: -0.03 }),
-          cap(845, '#a8e83a', '#7fd0ff', 'peace key'),
+          cap(595, '#c7d0dc', '#5ec41f', 'pollen key', { above: '#ef7a22', aboveMirror: 0.8, occlusion: 1.25 }),
+          text('pollen.', 'inter', 503, 710, 42.5, ink('#111111'), 'pollen', { modifiers: mods({ kind: 'weight', amount: 0.03 }) }, { tracking: -0.04 }),
+          cap(845, '#b6e83a', '#3f8a1a', 'peace key', { evenTop: 0.85, sheen: 0, mirror: 0.55, above: '#2f8a14', aboveMirror: 0.6, occlusion: 1.6, shadowWalls: 1, shadowTint: '#0f6e06' }),
           // Measured on the picture: the palm and V fingers are one outlined shape;
           // the folded fingers and the thumb sit on top, each with its own outline.
           group(
@@ -335,18 +343,23 @@ export const STUDIO_TEMPLATES: Template[] = [
     hint: 'A cream macro pad with nine keycaps, a pixel screen and a dial',
     category: 'Social',
     make: () => {
-      const { P, box, text, k } = frame(481, 602, 1080 / 962);
+      const { P, box, text, pen, k } = frame(481, 602, 1080 / 962);
       const outline = { width: 2.5, color: '#2a1d16', align: 'outside' as const, opacity: 1 };
       const key = (i: number, j: number, color: string, side: string, name: string, extra: Record<string, number> = {}) => {
         const x0 = 229 + i * 174;
         const y0 = 425 + j * 173;
-        return { ...box(x0, y0, x0 + 165, y0 + 165, 22, name, { ...style('keycap', { color, bounce: side, sky: '#fff6e8', wall: 24 * k, tilt: 0.5, tiltX: 0, topRound: 26 * k, dish: 0.6, rise: 34, lightAngle: -120, gloss: 0.5, rimLight: 0.6, shadow: 0.25, ...extra }), stroke: outline }) };
+        // Soft pastel keys seen a little from the front: thin side walls, a
+        // deeper front wall, a shallow top that glows evenly, the next key's
+        // colour faintly in the front wall.
+        return { ...box(x0, y0, x0 + 165, y0 + 165, 22, name, { ...style('keycap', { color, bounce: side, sky: '#fffaf0', above: '#ffffff', wall: 12 * k, tilt: 1, tiltX: 0, topRound: 30 * k, dish: 0.6, rise: 26, lightAngle: -90, light: 0.95, gloss: 0.4, rimLight: 0.25, sheen: 0.3, evenTop: 0.45, skyFill: 0, mirror: 0.35, shadow: 0.3, ...extra }), stroke: outline }) };
       };
       const label = (t: string, i: number, j: number) => [
         text('P', 'inter', 285 + i * 174, 484 + j * 173, 16, ink('#1a1a1a'), 'P'),
         text(t, 'inter', 309 + i * 174, 513 + j * 173, 52, ink('#1a1a1a'), t),
       ];
-      const ctr = (i: number, j: number) => P(311 + i * 174, 503 + j * 173);
+      const ctr = (i: number, j: number) => P(311 + i * 174, 498 + j * 173);
+      /** Small print on a key's front wall. */
+      const caption = (t: string, i: number, j: number, c: string) => text(t, 'inter', 311 + i * 174, 580 + j * 173, 9, ink(c), 'Caption', {}, { tracking: 0.2 });
       return project(
         'Macro keypad',
         [
@@ -363,19 +376,38 @@ export const STUDIO_TEMPLATES: Template[] = [
           symbolLayer('roundRect', 70 * k, { ...P(745, 268), rotation: 30, name: 'Logo', style: { ...ink('#f2ead9'), stroke: { width: 3, color: '#111111', align: 'center', opacity: 1 } } }, { radius: 0.3, aspect: 0.55 }),
           symbolLayer('roundRect', 70 * k, { ...P(762, 278), rotation: 30, name: 'Logo', style: { ...ink('#f2ead9'), stroke: { width: 3, color: '#111111', align: 'center', opacity: 1 } } }, { radius: 0.3, aspect: 0.55 }),
           key(0, 0, '#f6f6f8', '#cfd2dc', 'US key'),
-          group([0, 1, 2, 3, 4].map((r) => box(276, 487 + r * 7, 342, 490 + r * 7, 0, 'Stripe', ink('#e0202e'))).concat([box(276, 487, 302, 504, 0, 'Canton', ink('#1f3fa8'))]), { name: 'US flag' }),
+          group([box(276, 474, 346, 512, 0, 'Field', ink('#ffffff')), pen([0, 1, 2, 3, 4, 5, 6].map((r) => `M276 ${(474 + r * 5.85).toFixed(2)}H346V${(476.9 + r * 5.85).toFixed(2)}H276Z`).join(''), 'Stripes', ink('#e0202e')), box(276, 474, 305, 494.5, 0, 'Canton', ink('#1f3fb8'))], { name: 'US flag' }),
+          caption('EN-US', 0, 0, '#3b62c4'),
           key(1, 0, '#f6dcd6', '#e3b7ae', 'Key 2'),
           ...label('2', 1, 0),
           key(2, 0, '#e8c2ef', '#c99bd2', 'Key 3'),
           ...label('3', 2, 0),
           key(0, 1, '#2066ea', '#0d3fb5', 'Smile key'),
-          symbolLayer('circle', 44 * k, { ...ctr(0, 1), name: 'Smile', style: style('inflate', { body: '#ffd23a', shade: '#e09a00', bevel: 18, gloss: 0.5, shadow: 0 }) }),
+          group(
+            [
+              symbolLayer('circle', 46 * k, { ...ctr(0, 1), name: 'Face', style: style('inflate', { body: '#ffd23a', shade: '#e8a000', bevel: 16, gloss: 0.4, shadow: 0 }) }),
+              pen('M298 666Q303 659 308 666', 'Eye', ink('#3a2200'), 2.6),
+              pen('M314 666Q319 659 324 666', 'Eye', ink('#3a2200'), 2.6),
+              pen('M297 672L325 672C325 690 297 690 297 672Z', 'Mouth', { ...ink('#ffffff'), stroke: { width: 2.2, color: '#3a2200', align: 'outside', opacity: 1 } }),
+            ],
+            { name: 'Grin' },
+          ),
           key(1, 1, '#ffe414', '#e8b800', 'Bug key'),
-          symbolLayer('circle', 40 * k, { ...ctr(1, 1), name: 'Ladybug', style: ink('#f0463c') }),
+          group(
+            [
+              symbolLayer('circle', 16 * k, { ...P(485, 653), name: 'Head', style: ink('#2a1a1a') }),
+              symbolLayer('circle', 36 * k, { ...P(485, 674), name: 'Shell', style: style('inflate', { body: '#f0463c', shade: '#b8221a', bevel: 12, gloss: 0.5, shadow: 0 }) }),
+              box(484, 657, 486, 692, 0, 'Split', ink('#2a1a1a')),
+              ...([[475, 668], [495, 668], [476, 682], [494, 682]] as [number, number][]).map(([x, y]) => symbolLayer('circle', 6 * k, { ...P(x, y), name: 'Spot', style: ink('#2a1a1a') })),
+            ],
+            { name: 'Ladybug' },
+          ),
           key(2, 1, '#f6f6f8', '#cfd2dc', 'Japanese key'),
           symbolLayer('circle', 46 * k, { ...ctr(2, 1), name: 'Sun', style: ink('#ff0a0a') }),
+          caption('JP', 2, 1, '#e0202e'),
           key(0, 2, '#21b33c', '#0f7d23', 'Brazil key'),
-          symbolLayer('roundRect', 52 * k, { ...ctr(0, 2), rotation: 45, sy: 0.55, name: 'Diamond', style: ink('#ffe414') }, { radius: 0.05, aspect: 1 }),
+          pen('M276 844L311 824L346 844L311 864Z', 'Diamond', ink('#ffe414')),
+          caption('PT/BR', 0, 2, '#ffe414'),
           symbolLayer('circle', 20 * k, { ...ctr(0, 2), name: 'Globe', style: ink('#26a7e8') }),
           key(1, 2, '#f6cfb2', '#e3a985', 'Key 8'),
           ...label('8', 1, 2),

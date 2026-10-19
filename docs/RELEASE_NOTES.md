@@ -1,17 +1,25 @@
-## Morphotype 0.7
+## Morphotype 0.7.1
 
 Glass that behaves like glass, glowing and grainy gradients, 3D keycaps, toy-brick mosaics and clipping groups, with fourteen templates measured from real designs.
 
 ### Install on a Mac
 
-1. Download `Morphotype_0.7.0_universal.dmg` below (it runs on Apple silicon and Intel).
+1. Download `Morphotype_0.7.1_universal.dmg` below (it runs on Apple silicon and Intel).
 2. Open it and drag **Morphotype** into **Applications**.
 3. The app isn't notarised yet, so macOS blocks it the first time. Either go to **System Settings → Privacy & Security** and click **Open Anyway** next to Morphotype, or run this once in Terminal (it also fixes a "damaged" message):
    `xattr -dr com.apple.quarantine /Applications/Morphotype.app && open /Applications/Morphotype.app`
 
 `Morphotype-web.zip` is the same app as a static website: unzip it and serve the folder from any web host.
 
-### What's new
+### What's new in 0.7.1
+
+**Keycaps, analysed region by region against the reference**
+- Keys now affect each other: each key mirrors the key above in its top wall and the key below in its front wall, and sits in the diagonal shadow the key above casts.
+- New Keycap controls: Reflection above / below, Mirror above / below, Shadow from above (with tint, or walls only), Wall sheen for lit walls, Sky fill for shaded walls, and Even top for thin coloured plastic that glows evenly.
+- The dish is a smooth bowl with no creases. Translucent plastic now works like a colour filter, so a red part under orange plastic still reads red.
+- Keycap tower and Macro keypad retuned. Measured against the picture, the keycap colours are about twice as close as in 0.7.0.
+
+### Also in 0.7
 
 **Glass, done properly**
 - **Lens glass** now bends light the way glass does (Snell's law through a smooth dome). Each wavelength bends a little differently, so edges fringe smoothly into colour. A **Focus** point handles off-centre lenses; **Thickness** gives you a solid block; **Edge bend** reflects the inside at a grazing rim; **Edge film** adds a hairline of thin-film colour; and **Flat facets** gives chamfered crystal edges.
