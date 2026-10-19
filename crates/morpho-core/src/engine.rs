@@ -26,6 +26,9 @@ fn yes() -> bool {
 fn default_brush() -> f64 {
     8.0
 }
+fn default_line() -> f64 {
+    12.0
+}
 fn default_size() -> f64 {
     200.0
 }
@@ -93,6 +96,17 @@ pub enum Content {
         #[serde(default = "default_size")]
         size: f64,
     },
+    /// Pen line: path data in em units (`size` px per unit), open subpaths
+    /// stroked `width` px wide with `cap` ends; closed ones stroke as loops.
+    Line {
+        d: String,
+        #[serde(default = "default_size")]
+        size: f64,
+        #[serde(default = "default_line")]
+        width: f64,
+        #[serde(default)]
+        cap: crate::stroke::LineCap,
+    },
     /// Freehand brush stroke: points `[x, y, pressure]` in layer pixels.
     Stroke {
         points: Vec<[f64; 3]>,
@@ -150,7 +164,7 @@ impl Layer {
     }
     fn em(&self) -> f64 {
         match &self.content {
-            Content::Text { size, .. } | Content::Symbol { size, .. } | Content::Path { size, .. } => size.abs().max(1.0),
+            Content::Text { size, .. } | Content::Symbol { size, .. } | Content::Path { size, .. } | Content::Line { size, .. } => size.abs().max(1.0),
             Content::Morph { .. } => 200.0,
             // Modifiers on a stroke scale with the drawing's size.
             Content::Stroke { points, width, .. } => {
@@ -675,6 +689,20 @@ impl Engine {
                 normalize_winding(&mut poly);
                 (Geo { poly, curves: None }, em)
             }
+            Content::Line { d, size, width, cap } => {
+                let subs = svg::parse_subpaths(d)?;
+                let m = Affine::scale(*size, *size);
+                let tol = (width.abs() * 0.02).clamp(0.02, 1.0);
+                let lines: Vec<(Vec<Pt>, bool)> = subs
+                    .into_iter()
+                    .map(|(mut c, closed)| {
+                        c.transform(&m);
+                        (c.flatten(tol), closed)
+                    })
+                    .collect();
+                let cell = (em + width.abs()) / quality.clamp(24.0, 1024.0) * 0.5;
+                (Geo::poly_only(crate::stroke::polylines_capped(&lines, *width, cell, *cap)), em)
+            }
             Content::Stroke { points, width, taper, smooth } => {
                 let cell = em / quality.clamp(24.0, 1024.0) * 0.5;
                 (Geo::poly_only(crate::stroke::outline(points, *width, *taper, *smooth, cell)), em)
@@ -976,7 +1004,8 @@ impl Engine {
         if shape.is_empty() {
             return Err("Nothing to trace. Try a different threshold or invert.".into());
         }
-        let b = shape.bbox();
+        let shape_box = shape.bbox();
+        let b = if opts.frame { Rect { x0: 0.0, y0: 0.0, x1: w as f64, y1: h as f64 } } else { shape_box };
         let s = 1.0 / b.width().max(b.height()).max(1e-9);
         let c = b.center();
         let norm = shape.transformed(&Affine::scale(s, s).then(Affine::translate(-c.x, -c.y)));
@@ -985,7 +1014,7 @@ impl Engine {
         Ok(TraceOut {
             d: svg::curves_d(&curves, 4),
             contours: norm.contours.len(),
-            aspect: b.width() / b.height().max(1e-9),
+            aspect: shape_box.width() / shape_box.height().max(1e-9),
         })
     }
 
@@ -1600,6 +1629,23 @@ mod tests {
         let face = rustybuzz::ttf_parser::Face::parse(&ttf, 0).unwrap();
         assert!(face.glyph_index('☃').is_some());
         assert!(face.glyph_index('A').is_some());
+    }
+
+    #[test]
+    fn pen_lines_stroke_open_paths() {
+        let mut e = engine();
+        // An open curve, 20 px wide with flat ends, in a 200 px unit box.
+        let d = doc(r#"{"layers":[{"id":"l","content":{"type":"line","d":"M-0.5 0C-0.2 -0.4 0.2 -0.4 0.5 0","size":200,"width":20,"cap":"butt"}}]}"#);
+        let b = e.build(&d);
+        let bb = b.renders[0].bbox.unwrap();
+        // Flat ends sit across the end tangents (which lean at 53°), so they
+        // reach past ±100 by about r·sin 53° = 8, less than round caps would.
+        assert!((bb[2] - bb[0] - 216.0).abs() < 4.0, "{bb:?}");
+        assert!(b.layers[0].error.is_none());
+        // A closed square path strokes as a ring with a hole.
+        let d = doc(r#"{"layers":[{"id":"l","content":{"type":"line","d":"M-0.5 -0.5L0.5 -0.5L0.5 0.5L-0.5 0.5Z","size":100,"width":10}}]}"#);
+        let (r, _) = e.build_scene(&d);
+        assert_eq!(r[0].1.poly.contours.len(), 2);
     }
 
     #[test]

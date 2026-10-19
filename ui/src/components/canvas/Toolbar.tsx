@@ -30,7 +30,8 @@ export function Toolbar({ zoom, onFit, onZoom }: { zoom: number; onFit: () => vo
       <span className="dock-sep" />
       <div className="dock-group">
         <IconButton icon="text" title="Text: click the canvas to type" kbd="T" active={tool === 'text' || editing?.kind === 'text'} onClick={() => store.set({ tool: tool === 'text' ? 'select' : 'text', editing: null })} />
-        <IconButton icon="brush" title="Draw: pen, marker, pencil or highlighter" kbd="B" active={tool === 'draw'} onClick={() => store.set({ tool: tool === 'draw' ? 'select' : 'draw', editing: null })} />
+        <IconButton icon="pen" title="Pen: points and curves for logos and line icons" kbd="P" active={tool === 'pen'} onClick={() => store.set({ tool: tool === 'pen' ? 'select' : 'pen', editing: null })} />
+        <IconButton icon="brush" title="Draw: marker, pencil or highlighter" kbd="B" active={tool === 'draw'} onClick={() => store.set({ tool: tool === 'draw' ? 'select' : 'draw', editing: null })} />
         <button ref={shapesBtn} className={`icon-btn ${shapes ? 'on' : ''}`} aria-label="Shapes" data-tip="Shapes" onClick={() => setShapes(!shapes)}>
           <Icon name="shapes" />
           <Icon name="chevronDown" size={10} className="caret" />

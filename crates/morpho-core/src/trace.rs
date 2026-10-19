@@ -23,11 +23,14 @@ pub struct TraceOpts {
     pub pixel: bool,
     /// Longest side is downsampled to at most this many pixels.
     pub max_size: usize,
+    /// Normalise to the whole image instead of the traced shape, so several
+    /// traces of one picture (one per colour) line up.
+    pub frame: bool,
 }
 
 impl Default for TraceOpts {
     fn default() -> Self {
-        TraceOpts { threshold: None, invert: false, smooth: 1.0, despeckle: 16.0, pixel: false, max_size: 1400 }
+        TraceOpts { threshold: None, invert: false, smooth: 1.0, despeckle: 16.0, pixel: false, max_size: 1400, frame: false }
     }
 }
 

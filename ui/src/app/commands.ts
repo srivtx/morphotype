@@ -122,6 +122,7 @@ export function commands(): Command[] {
     // Add
     { id: 'tool-text', title: 'Text tool (click the canvas to type)', group: 'Tools', icon: 'text', keys: ['t'], keywords: 'type write words', run: () => store.set({ tool: 'text', editing: null }) },
     { id: 'construction', title: 'Draw construction (guides and anchor points)', group: 'Shape', icon: 'points', keywords: 'blueprint presentation logo grid guides anchors spec sheet', when: hasSel, run: () => void constructionSheet() },
+    { id: 'tool-pen', title: 'Pen tool (points and curves, for logos and line icons)', group: 'Tools', icon: 'points', keys: ['p'], keywords: 'bezier vector path line curve draw logo icon', run: () => store.set({ tool: 'pen', editing: null }) },
     { id: 'tool-draw', title: 'Draw tool (pen, marker, pencil, highlighter)', group: 'Tools', icon: 'brush', keys: ['b'], keywords: 'brush pencil freehand scribble sketch marker paint', run: () => store.set({ tool: 'draw', editing: null }) },
     { id: 'brush-smaller', title: 'Smaller brush', group: 'Tools', icon: 'brush', keys: ['['], run: () => setSettings({ brushWidth: Math.max(1, Math.round(store.get().settings.brushWidth / 1.25)) }) },
     { id: 'brush-bigger', title: 'Bigger brush', group: 'Tools', icon: 'brush', keys: [']'], run: () => setSettings({ brushWidth: Math.min(200, Math.round(store.get().settings.brushWidth * 1.25 + 0.5)) }) },
@@ -153,7 +154,7 @@ export function commands(): Command[] {
     { id: 'hide', title: 'Hide / show', group: 'Arrange', icon: 'eye', keys: ['shift+mod+h'], when: hasSel, run: () => toggleVisible() },
     { id: 'outline', title: 'Convert to outline', group: 'Shape', icon: 'outline', keys: ['alt+mod+o'], keywords: 'bake path flatten', when: () => !!primaryShape(), run: () => void convertToOutline(primaryShape()!.id) },
     { id: 'break', title: 'Break apart into letters / pieces', group: 'Shape', icon: 'scissors', keys: ['shift+mod+b'], keywords: 'split separate release compound', when: () => !!primaryShape(), run: () => void breakApart(primaryShape()!.id) },
-    { id: 'points', title: 'Edit points', group: 'Shape', icon: 'points', keys: ['p'], keywords: 'nodes bezier pen vector', when: () => !!primaryShape() && design(), run: () => void editPoints(primaryShape()!.id) },
+    { id: 'points', title: 'Edit points', group: 'Shape', icon: 'points', keys: ['shift+p'], keywords: 'nodes bezier pen vector', when: () => !!primaryShape() && design(), run: () => void editPoints(primaryShape()!.id) },
     { id: 'enter', title: 'Edit text, enter group or edit points', group: 'Edit', keys: ['enter'], hidden: true, when: () => (store.get().selection.length > 0 || store.get().tool === 'text') && design(), run: () => enter() },
     {
       id: 'add-warp',

@@ -30,8 +30,9 @@ const GUIDE: { title: string; steps: string[] }[] = [
     steps: [
       'Quick looks in the Design tab apply a whole modifier stack in one click: Bitmap, Dot matrix, Soft pixel, Arch, Melting…',
       'Warp (W) bends the selection with presets like Arch, Flag and Bulge. Drag its 16 points on the canvas for a hand-made envelope.',
-      'Edit points (P or double-click) turns text or a shape into an outline you can edit point by point. Double-click a line to add a point, double-click a point to make it smooth or sharp, ⌫ deletes.',
-      'Add an image (⇧⌘I) as a Photo inside any shape, Trace it into vectors, or turn it into Pixel art with a few inks.',
+      'The pen (P) draws like in Illustrator or Figma: click for corners, drag for curves, click the first point to close a filled shape, or press Enter to keep it as a line with round, flat or square ends. ⇧ keeps 45° steps and ⌫ takes back a point.',
+      'Edit points (⇧P or double-click) turns text or a shape into an outline you can edit point by point. Double-click a line to add a point, double-click a point to make it smooth or sharp, ⌫ deletes.',
+      'Add an image (⇧⌘I) as a Photo inside any shape, Trace it into vectors (set Colours above 1 to get one editable layer per colour of a flat logo), turn it into Pixel art, or place it as a Reference: faded and locked under your work, never exported, ready to trace with the pen.',
       'Slice cuts rays and wedges, Repeat copies around a circle or in a trail, Echo lines draws contour rings, Fuse melts letters together.',
       'Foam eats bubbles through a shape, Isometric lays it on a face of a 3D cube, and Pixels can be crosses, pluses or diamonds as well as blocks and dots.',
     ],

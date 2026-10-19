@@ -234,20 +234,32 @@ fn arc_to_cubics(p0: Pt, rx: f64, ry: f64, phi_deg: f64, large: bool, sweep: boo
 
 /// Parse SVG path data into closed curve contours (open subpaths are closed).
 pub fn parse_path(d: &str) -> Result<CurveShape, String> {
+    Ok(parse_subpaths(d)?
+        .into_iter()
+        .map(|(mut c, _)| {
+            let end = c.end();
+            if end.dist(c.start) > 1e-9 {
+                c.segs.push(Seg::Line(c.start));
+            }
+            c
+        })
+        .collect())
+}
+
+/// Parse SVG path data into subpaths as drawn, each with whether it was
+/// closed with Z (open ones are lines, for stroking).
+pub fn parse_subpaths(d: &str) -> Result<Vec<(CurveContour, bool)>, String> {
     let mut lx = Lexer { b: d.as_bytes(), i: 0 };
-    let mut out: CurveShape = Vec::new();
+    let mut out: Vec<(CurveContour, bool)> = Vec::new();
     let mut cur: Option<CurveContour> = None;
     let mut pos = Pt::default();
     let mut start = Pt::default();
     let mut last_ctrl: Option<(u8, Pt)> = None;
     let mut cmd = 0u8;
-    let close = |cur: &mut Option<CurveContour>, out: &mut CurveShape, pos: Pt| {
-        if let Some(mut c) = cur.take() {
+    let close = |cur: &mut Option<CurveContour>, out: &mut Vec<(CurveContour, bool)>, closed: bool| {
+        if let Some(c) = cur.take() {
             if !c.segs.is_empty() {
-                if pos.dist(c.start) > 1e-9 {
-                    c.segs.push(Seg::Line(c.start));
-                }
-                out.push(c);
+                out.push((c, closed));
             }
         }
     };
@@ -264,7 +276,7 @@ pub fn parse_path(d: &str) -> Result<CurveShape, String> {
         let base = if rel { pos } else { Pt::default() };
         match cmd.to_ascii_uppercase() {
             b'M' => {
-                close(&mut cur, &mut out, pos);
+                close(&mut cur, &mut out, false);
                 pos = base + lx.point()?;
                 start = pos;
                 cur = Some(CurveContour { start: pos, segs: Vec::new() });
@@ -334,7 +346,7 @@ pub fn parse_path(d: &str) -> Result<CurveShape, String> {
                 last_ctrl = None;
             }
             b'Z' => {
-                close(&mut cur, &mut out, pos);
+                close(&mut cur, &mut out, true);
                 pos = start;
                 last_ctrl = None;
                 cmd = 0;
@@ -343,7 +355,7 @@ pub fn parse_path(d: &str) -> Result<CurveShape, String> {
             other => return Err(format!("Unsupported path command '{}'.", other as char)),
         }
     }
-    close(&mut cur, &mut out, pos);
+    close(&mut cur, &mut out, false);
     Ok(out)
 }
 

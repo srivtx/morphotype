@@ -14,7 +14,8 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 
 **Design mode**
 - **Type on the canvas.** Press T and click anywhere to type, or double-click any text to edit it in place, with a real caret and selection and a small bar for font, size, colour and alignment.
-- **Draw.** Press B for pen, marker, pencil or highlighter strokes, with pen pressure and tapered ends. Drawings stay editable vector layers.
+- **Pen tool.** Press P and draw like in Illustrator or Figma: click for corners, drag for curves, close on the first point for a filled shape, or finish open for a line with round, flat or square ends. Every point stays editable.
+- **Draw.** Press B for marker, pencil or highlighter strokes, with pen pressure and tapered ends. Drawings stay editable vector layers.
 - **Photos.** Drop in a picture and place it inside any shape or text (zoom, pan, duotone, grain), trace it into an outline, or turn it into pixel art with a few inks and optional dithering.
 - **Direct editing.** Click to select, drag to move, and use the handles to resize, stretch or rotate (⇧ keeps proportions, as in Figma). Smart guides snap to the artboard and other layers, hold ⌥ to measure distances, and drags show live readouts. Also marquee selection, multi-select, align and distribute, flip, lock, hide, groups and right-click menus.
 - **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed (with rubber-stamp grain), Letterpress, Halftone (with 3D light and misregistration), Risograph, Dither, Photo, Thermal, Prism light, Colour dots, Plush and Flat/gradient with print texture and hard shadows. **Frosted glass** and **Lens glass** see what's behind them: they blur, bend, magnify and split it into colour. There are over 70 presets with GPU-rendered previews, and the Design tab recolours any material from a single colour. Every layer can also have a stroke (outside, centre or inside), solid 3D **depth**, opacity and a Multiply or Screen blend.
@@ -24,7 +25,7 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 - **Shapes.** Circles to squircles, stars, sparkles, bursts, wavy and scalloped badges, globes, asterisks, lenses, clouds, folders, quarter and half circles, mascot bodies, eyes and smiles, all parametric.
 - **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, patterns (grid paper, dot grid, lines, stripes, checks, doodles), and an app-icon tile with gloss, shadow and a holographic rim, set up for macOS (rounded tile in the artwork) or iOS and Android (full square, with a preview of the system mask), plus an app-icon grid as an overlay or as layers. The background is the bottom row in Layers and a chip in the dock. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons, business cards, ID badges and more.
 - **Fonts.** TTF, OTF, TTC and WOFF, shaped with a HarfBuzz port, with variable axes. Text can morph into another font glyph by glyph.
-- **Image tracing.** PNG, JPG, WebP or SVG become smooth vector outlines, or keep hard pixel edges.
+- **Image tracing.** PNG, JPG, WebP or SVG become smooth vector outlines, or keep hard pixel edges. Colour tracing turns a flat logo into one editable vector layer per colour, and a picture can sit under your work as a locked reference to trace with the pen (never exported).
 
 **Type mode**
 - Start a font by naming it and picking a typeface to reshape, or start blank and draw every glyph over a guide.

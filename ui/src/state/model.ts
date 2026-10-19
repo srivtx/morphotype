@@ -1,4 +1,4 @@
-import type { Content, EngineLayer, GlyphPart, ModEntry, Modifier, ModifierKind, Op, SymbolKind, SymbolSpec, TextMorph } from '../engine/types';
+import type { Content, EngineLayer, GlyphPart, LineCap, ModEntry, Modifier, ModifierKind, Op, SymbolKind, SymbolSpec, TextMorph } from '../engine/types';
 import { defaultParams, effectById, type ParamValues } from '../render/effects';
 
 export interface ProjectFont {
@@ -57,6 +57,8 @@ export interface ShapeLayer extends EngineLayer {
   name?: string;
   locked?: boolean;
   style: Style;
+  /** A reference to trace over: shown while designing, left out of every export. */
+  guide?: boolean;
 }
 
 /**
@@ -710,6 +712,11 @@ export function strokeLayer(points: [number, number][], width = 8, extra: Partia
   return layer({ type: 'stroke', points: points.map(([x, y]) => [x, y, 0] as [number, number, number]), width, taper: opts.taper ?? 0, smooth: opts.smooth ?? 0.5 }, { name: 'Drawing', ...extra });
 }
 
+/** A pen line: `d` in em units of `size` px, stroked `width` px wide. */
+export function lineLayer(d: string, size: number, width = 12, extra: Partial<ShapeLayer> = {}, cap: LineCap = 'round'): ShapeLayer {
+  return layer({ type: 'line', d, size, width, cap }, { name: 'Line', style: style('flat', { fill: '#0a0a0a' }), ...extra });
+}
+
 export function morphLayer(a: string, b: string): ShapeLayer {
   return layer({ type: 'morph', a, b, t: 0.5 });
 }
@@ -733,6 +740,8 @@ export function nodeLabel(n: Node): string {
       return 'Morph';
     case 'stroke':
       return 'Drawing';
+    case 'line':
+      return 'Line';
   }
 }
 

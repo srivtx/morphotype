@@ -34,6 +34,9 @@ export interface Settings {
   brush: string;
   brushWidth: number;
   brushColor: string;
+  /** Pen: line width for open paths, and the ink for lines and shapes. */
+  penWidth: number;
+  penColor: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -61,6 +64,8 @@ export const DEFAULT_SETTINGS: Settings = {
   brush: 'marker',
   brushWidth: 18,
   brushColor: '#ff6fb5',
+  penWidth: 14,
+  penColor: '#0a0a0a',
   typeTour: false,
 };
 

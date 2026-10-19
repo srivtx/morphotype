@@ -10,12 +10,13 @@ import { Home } from '../components/Home';
 import { TypeMode } from '../components/type/TypeMode';
 import { Tooltips } from '../components/ui';
 import { BrushBar } from '../components/canvas/BrushBar';
+import { PenOverlay } from '../components/canvas/PenTool';
 import { Viewport } from '../components/canvas/Viewport';
 import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
 import { buildScene } from '../state/tree';
 import { setSettings, store, toast, useStore } from '../state/store';
-import { addShape, importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
+import { addShape, getRenderer, importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
 import { Popover } from '../components/ui';
 import { ShapePicker } from '../components/pickers';
 import { emptyProject, symbolLayer } from '../state/model';
@@ -225,6 +226,7 @@ function DesignMode() {
           </div>
         )}
         {tool === 'draw' && <BrushBar />}
+        {tool === 'pen' && <PenOverlay renderer={getRenderer()} />}
         {editing && editing.kind !== 'text' && (
           <div className="edit-pill" role="status">
             <Icon name={editing.kind === 'warp' ? 'warp' : 'points'} size={14} />

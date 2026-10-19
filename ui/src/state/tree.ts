@@ -117,6 +117,8 @@ export function topmost(nodes: Node[], ids: string[]): string[] {
 export interface SceneObject {
   id: string;
   style: Style;
+  /** A reference layer: drawn on the canvas, never exported. */
+  guide?: boolean;
 }
 
 /** Strip UI-only fields so style edits don't trigger geometry rebuilds. */
@@ -191,7 +193,7 @@ export function buildScene(p: Project, quality?: number, typing?: string | null)
         }
         const r: RenderSpec = { id: n.id, members: [n.id] };
         made.push(r);
-        objects.push({ id: n.id, style: n.style });
+        objects.push({ id: n.id, style: n.style, guide: n.guide || undefined });
         base = [r];
       }
     }

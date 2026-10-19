@@ -315,7 +315,11 @@ export function Slider({ label, value, min, max, step, onChange, reset, suffix }
           setText(null);
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Enter') {
+            // Commit without letting Enter activate anything else.
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          }
           if (e.key === 'Escape') {
             setText(null);
             (e.target as HTMLInputElement).blur();
@@ -406,7 +410,11 @@ export function NumberBox({ label, value, onChange, step = 1, suffix, title, min
           setText(null);
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Enter') {
+            // Commit without letting Enter activate anything else.
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          }
           if (e.key === 'Escape') {
             setText(null);
             (e.target as HTMLInputElement).blur();
@@ -570,12 +578,17 @@ export function Dialog({
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // The latest onClose, so the effect below runs once per dialog: re-running
+  // it on every render would bounce focus out and back in (and a key press in
+  // flight could then land on whichever button got focus).
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !document.querySelector('.popover')) {
         e.stopPropagation();
-        onClose();
+        closeRef.current();
       }
       // Keep Tab inside the dialog.
       if (e.key === 'Tab' && ref.current) {
@@ -592,15 +605,19 @@ export function Dialog({
       }
     };
     window.addEventListener('keydown', onKey);
-    if (!ref.current?.contains(document.activeElement)) ref.current?.querySelector<HTMLElement>('[autofocus], input, button.primary, button')?.focus();
+    if (!ref.current?.contains(document.activeElement)) {
+      const root = ref.current;
+      // Prefer an explicit autofocus, then a field, then the main button; never the close button.
+      (root?.querySelector<HTMLElement>('[autofocus]') ?? root?.querySelector<HTMLElement>('input:not([type=range])') ?? root?.querySelector<HTMLElement>('button.primary') ?? root)?.focus();
+    }
     return () => {
       window.removeEventListener('keydown', onKey);
       prev?.focus?.();
     };
-  }, [onClose]);
+  }, []);
   return createPortal(
     <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} className={`dialog ${size} ${className}`} role="dialog" aria-modal aria-label={title}>
+      <div ref={ref} className={`dialog ${size} ${className}`} role="dialog" aria-modal aria-label={title} tabIndex={-1}>
         <header className="dialog-head">
           <div>
             <h2>{title}</h2>

@@ -10,7 +10,7 @@ type Part = 'node' | 'hin' | 'hout';
 
 /** Point editor for an outline layer on the design canvas. */
 export function PointEditor({ layer, toScreen, renderer }: { layer: ShapeLayer; toScreen: (p: Pt) => Pt; zoom: number; renderer: Renderer }) {
-  const c = layer.content.type === 'path' ? layer.content : null;
+  const c = layer.content.type === 'path' || layer.content.type === 'line' ? layer.content : null;
   const t: Xform = { x: layer.x, y: layer.y, rotation: layer.rotation, scale: layer.scale, sx: layer.sx ?? 1, sy: layer.sy ?? 1 };
   const ref = useRef<SVGGElement>(null);
   if (!c) return null;
@@ -19,13 +19,14 @@ export function PointEditor({ layer, toScreen, renderer }: { layer: ShapeLayer; 
       <PathPointEditor
         d={c.d}
         scale={c.size}
+        lines={c.type === 'line'}
         pxPerUnit={renderer.view.zoom * layer.scale}
         toScreen={(p) => toScreen(apply(t, p))}
         toLocal={(e) => {
           const rect = (ref.current?.ownerSVGElement ?? document.body).getBoundingClientRect();
           return invert(t, renderer.toArt(e.clientX - rect.left, e.clientY - rect.top));
         }}
-        onChange={(d, key) => updateLayer(layer.id, (l) => l.content.type === 'path' && (l.content.d = d), key)}
+        onChange={(d, key) => updateLayer(layer.id, (l) => (l.content.type === 'path' || l.content.type === 'line') && (l.content.d = d), key)}
         onExit={() => store.set({ editing: null })}
         viewKey={`${renderer.view.zoom},${renderer.view.panX},${renderer.view.panY},${t.x},${t.y},${t.rotation},${t.scale},${t.sx},${t.sy}`}
       />
@@ -40,6 +41,7 @@ export function PointEditor({ layer, toScreen, renderer }: { layer: ShapeLayer; 
 export function PathPointEditor({
   d: source,
   scale: size,
+  lines = false,
   pxPerUnit,
   toScreen: S,
   toLocal,
@@ -49,6 +51,8 @@ export function PathPointEditor({
 }: {
   d: string;
   scale: number;
+  /** Open subpaths stay open (pen lines); otherwise every contour is a closed outline. */
+  lines?: boolean;
   pxPerUnit: number;
   toScreen: (p: Pt) => Pt;
   toLocal: (e: { clientX: number; clientY: number }) => Pt;
@@ -56,7 +60,8 @@ export function PathPointEditor({
   onExit: () => void;
   viewKey: string;
 }) {
-  const [contours, setContours] = useState<Contour[]>(() => scaled(parsePath(source), size));
+  const parse = (d: string) => scaled(parsePath(d), size).map((c) => (lines ? c : { ...c, open: false }));
+  const [contours, setContours] = useState<Contour[]>(() => parse(source));
   const [sel, setSel] = useState<Set<Key>>(new Set());
   const dragging = useRef<null | { part: Part; key: Key; start: Pt; base: Contour[]; moved: boolean }>(null);
   const svgRef = useRef<SVGGElement>(null);
@@ -66,7 +71,7 @@ export function PathPointEditor({
   useEffect(() => {
     if (dragging.current || source === lastWritten.current) return;
     lastWritten.current = source;
-    setContours(scaled(parsePath(source), size));
+    setContours(parse(source));
   }, [source, size]);
 
   const write = (cs: Contour[], key: string) => {
@@ -194,7 +199,7 @@ export function PathPointEditor({
     const p = toLocal(e);
     const cc = contours[ci];
     let best = { k: 0, t: 0, d: Infinity };
-    for (let k = 0; k < cc.nodes.length; k++) {
+    for (let k = 0; k < (cc.open ? cc.nodes.length - 1 : cc.nodes.length); k++) {
       const r = nearestOnSegment(cc, k, p);
       if (r.d < best.d) best = { k, t: r.t, d: r.d };
     }
@@ -213,13 +218,14 @@ export function PathPointEditor({
         cc.nodes.forEach((a, k) => {
           const pa = S(a);
           if (k === 0) d += `M${pa.x} ${pa.y}`;
+          if (cc.open && k === n - 1) return;
           const b = cc.nodes[(k + 1) % n];
           const c1 = S(a.hout ?? a);
           const c2 = S(b.hin ?? b);
           const pb = S(b);
           d += `C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${pb.x} ${pb.y}`;
         });
-        return d + 'Z';
+        return cc.open ? d : d + 'Z';
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [contours, viewKey],
@@ -277,7 +283,7 @@ export function PathPointEditor({
 
 function scaled(cs: Contour[], k: number): Contour[] {
   const s = (p: Pt) => ({ x: p.x * k, y: p.y * k });
-  return cs.map((c) => ({ nodes: c.nodes.map((n) => ({ ...s(n), hin: n.hin && s(n.hin), hout: n.hout && s(n.hout) })) }));
+  return cs.map((c) => ({ open: c.open, nodes: c.nodes.map((n) => ({ ...s(n), hin: n.hin && s(n.hin), hout: n.hout && s(n.hout) })) }));
 }
 
 function isSmooth(n: Pt, h: Pt, o: Pt) {

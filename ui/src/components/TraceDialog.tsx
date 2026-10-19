@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import { addNode, addShape, placePhoto, setBackground } from '../app/actions';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { addNode, addShape, placePhoto, placeReference, setBackground } from '../app/actions';
 import { engine } from '../engine/client';
 import type { TraceOptions, TraceOut } from '../engine/types';
 import { parsePath, serializePath } from '../state/geometry';
 import { group, pathLayer, style } from '../state/model';
-import { colorPath, drawPixelArt, PALETTES, pixelArt, type PixelArtOptions } from '../state/pixelArt';
+import { colorPath, drawPixelArt, drawQuantized, PALETTES, pixelArt, quantize, stackedMasks, type PixelArtOptions } from '../state/pixelArt';
 import { edit, store, toast } from '../state/store';
 import { Dialog, Segmented, Select, Slider, Toggle } from './ui';
 
@@ -40,9 +40,18 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
   const [result, setResult] = useState<TraceOut | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<'photo' | 'outline' | 'pixel'>(target === 'layer' ? 'photo' : 'outline');
+  const [mode, setMode] = useState<'photo' | 'outline' | 'pixel' | 'reference'>(target === 'layer' ? 'photo' : 'outline');
   const srcRef = useRef<HTMLCanvasElement>(null);
   const close = () => store.set({ dialog: null });
+  // Colour tracing: more than one ink makes one vector layer per colour.
+  const [inks, setInks] = useState(1);
+  const [inkBg, setInkBg] = useState(true);
+  const quant = useMemo(() => (mode === 'outline' && inks > 1 ? quantize(image, inks) : null), [image, inks, mode]);
+  const quantBg = quant ? quant.counts.indexOf(Math.max(...quant.counts)) : null;
+  const quantRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (quant && quantRef.current) drawQuantized(quantRef.current, quant, inkBg ? quantBg : null);
+  });
 
   useEffect(() => {
     const c = srcRef.current;
@@ -53,8 +62,8 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
   }, [image]);
 
   useEffect(() => {
-    // Only trace when the Trace view is showing.
-    if (mode !== 'outline') return;
+    // Only trace when the one-ink Trace view is showing.
+    if (mode !== 'outline' || inks > 1) return setBusy(false);
     let live = true;
     setBusy(true);
     const t = setTimeout(() => {
@@ -73,8 +82,9 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
     return () => {
       live = false;
       clearTimeout(t);
+      setBusy(false);
     };
-  }, [image, opts, mode]);
+  }, [image, opts, mode, inks]);
 
   const set = (patch: Partial<TraceOptions>) => setOpts((o) => ({ ...o, ...patch }));
   const [pix, setPix] = useState<PixelArtOptions>({
@@ -117,10 +127,42 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
     toast(`${layers.length} ink layers, ${art.cols}×${art.rows} pixels. Recolour or restyle each one.`);
     close();
   };
+  /** Trace each ink of the quantized picture into a stacked colour layer. */
+  const acceptColours = async () => {
+    if (!quant) return;
+    setBusy(true);
+    try {
+      const skip = inkBg ? quantBg : null;
+      const p = store.get().project;
+      const size = Math.min(p.canvas.width, p.canvas.height) * 0.86;
+      const layers = [];
+      for (const [ci, mask] of stackedMasks(quant, skip)) {
+        // A colour that's only specks (anti-aliased edges) traces to nothing: skip it.
+        const r = await engine.trace(mask, quant.w, quant.h, { ...opts, threshold: 0.5, invert: false, frame: true, maxSize: 1400 }).catch(() => null);
+        if (!r) continue;
+        const c = quant.palette[ci];
+        layers.push(pathLayer(r.d, size, `Colour ${c}`, { style: style('flat', { fill: c }) }));
+      }
+      if (!layers.length) return toast('Nothing to trace in those colours.', 'error');
+      if (skip !== null) setBackground((b) => (b.fill = { kind: 'solid', colors: [quant.palette[skip]], angle: 180 }));
+      addNode(group(layers, { name: `${name} vector`, open: false }));
+      toast(`${layers.length} colour layers, each a smooth editable outline`);
+      close();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const accept = () => {
     if (mode === 'pixel') return acceptPixels();
+    if (mode === 'outline' && inks > 1 && target === 'layer') return void acceptColours();
     if (mode === 'photo') {
       placePhoto(image, name);
+      return close();
+    }
+    if (mode === 'reference') {
+      placeReference(image, name);
       return close();
     }
     if (!result) return;
@@ -146,7 +188,7 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
   return (
     <Dialog
       title={target === 'glyph' ? 'Trace image' : 'Add image'}
-      subtitle={target === 'glyph' ? `Becomes the outline of “${store.get().glyph}”.` : mode === 'photo' ? 'Use the picture as it is, inside any shape.' : mode === 'pixel' ? 'Turns the picture into pixel art with a few inks, one layer per colour.' : 'Turns dark areas of the picture into a smooth vector outline.'}
+      subtitle={target === 'glyph' ? `Becomes the outline of “${store.get().glyph}”.` : mode === 'photo' ? 'Use the picture as it is, inside any shape.' : mode === 'reference' ? 'A faded, locked picture under your artwork to trace with the pen. It never exports.' : mode === 'pixel' ? 'Turns the picture into pixel art with a few inks, one layer per colour.' : 'Turns dark areas of the picture into a smooth vector outline.'}
       onClose={close}
       size="lg"
       footer={
@@ -154,8 +196,8 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
           <button className="btn" onClick={close}>
             Cancel
           </button>
-          <button className="btn primary" disabled={mode === 'outline' && !result} onClick={accept}>
-            {target === 'glyph' ? 'Use as glyph' : mode === 'photo' ? 'Place photo' : mode === 'pixel' ? 'Add pixel art' : 'Add as layer'}
+          <button className="btn primary" disabled={mode === 'outline' && (inks > 1 ? !quant || busy : !result)} onClick={accept}>
+            {target === 'glyph' ? 'Use as glyph' : mode === 'photo' ? 'Place photo' : mode === 'reference' ? 'Trace over it' : mode === 'pixel' ? 'Add pixel art' : 'Add as layer'}
           </button>
         </>
       }
@@ -166,12 +208,17 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
             <canvas ref={srcRef} />
             <figcaption>Original</figcaption>
           </figure>
-          {mode === 'photo' ? null : mode === 'pixel' && art ? (
+          {mode === 'photo' || mode === 'reference' ? null : mode === 'pixel' && art ? (
             <figure>
               <canvas ref={pixRef} className="pixel-preview" />
               <figcaption>
                 {art.cols}×{art.rows} · {art.palette.filter((_, i) => art.counts[i] > 0).length} inks
               </figcaption>
+            </figure>
+          ) : quant ? (
+            <figure>
+              <canvas ref={quantRef} className="pixel-preview smooth" />
+              <figcaption>{error ?? (busy ? 'Tracing each colour…' : `${quant.palette.filter((_, i) => quant.counts[i] > 0 && !(inkBg && i === quantBg)).length} colour layers`)}</figcaption>
             </figure>
           ) : (
             <figure>
@@ -190,11 +237,16 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
                 { value: 'photo', label: 'Photo' },
                 { value: 'outline', label: 'Trace' },
                 { value: 'pixel', label: 'Pixel art' },
+                { value: 'reference', label: 'Reference' },
               ]}
               onChange={setMode}
             />
           )}
-          {mode === 'photo' ? (
+          {mode === 'reference' ? (
+            <div className="trace-controls">
+              <p className="hint">Recreate a logo or icon exactly: the picture sits under everything at 40% opacity, locked, and the pen tool turns on. Click and drag along its edges; close shapes on their first point. Delete the reference when you're done, or keep it: it never shows in PNG, SVG or project previews.</p>
+            </div>
+          ) : mode === 'photo' ? (
             <div className="trace-controls">
               <p className="hint">Places the picture as a rectangle with the Photo material. Swap the shape for any other (a circle, a star, your text) and the photo stays inside; Style has zoom, pan, duotone and grain.</p>
             </div>
@@ -242,9 +294,19 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
             </div>
           ) : (
             <div className="trace-controls">
-              <Toggle label="Automatic threshold" checked={opts.threshold === null} onChange={(v) => set({ threshold: v ? null : 0.5 })} />
-              {opts.threshold !== null && <Slider label="Threshold" value={opts.threshold} min={0.01} max={0.99} step={0.01} onChange={(v) => set({ threshold: v })} />}
-              <Toggle label="Invert (trace light areas)" checked={opts.invert} onChange={(v) => set({ invert: v })} />
+              {target === 'layer' && <Slider label="Colours" value={inks} min={1} max={8} step={1} onChange={(v) => setInks(Math.round(v))} />}
+              {inks > 1 ? (
+                <>
+                  <Toggle label="Use the most common colour as the background" checked={inkBg} onChange={setInkBg} />
+                  <p className="hint">Each colour becomes its own smooth vector layer, stacked largest first so no gaps show between them. Best for flat logos, icons and stickers.</p>
+                </>
+              ) : (
+                <>
+                  <Toggle label="Automatic threshold" checked={opts.threshold === null} onChange={(v) => set({ threshold: v ? null : 0.5 })} />
+                  {opts.threshold !== null && <Slider label="Threshold" value={opts.threshold} min={0.01} max={0.99} step={0.01} onChange={(v) => set({ threshold: v })} />}
+                  <Toggle label="Invert (trace light areas)" checked={opts.invert} onChange={(v) => set({ invert: v })} />
+                </>
+              )}
               <Toggle label="Keep hard pixel edges" checked={opts.pixel} onChange={(v) => set({ pixel: v })} />
               {!opts.pixel && <Slider label="Smoothing" value={opts.smooth} min={0} max={12} step={0.1} onChange={(v) => set({ smooth: v })} />}
               <Slider label="Ignore specks" value={opts.despeckle} min={0} max={2000} step={1} suffix="px²" onChange={(v) => set({ despeckle: v })} />

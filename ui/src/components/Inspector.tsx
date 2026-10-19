@@ -52,7 +52,7 @@ export function Inspector() {
 
 function SelectionHeader({ nodes }: { nodes: Node[] }) {
   const n = nodes.at(-1)!;
-  const kind = nodes.length > 1 ? `${nodes.length} layers` : isGroup(n) ? (n.merge ? 'Merged shape' : 'Group') : { text: 'Text', symbol: 'Shape', path: 'Outline', morph: 'Morph', stroke: 'Drawing' }[n.content.type];
+  const kind = nodes.length > 1 ? `${nodes.length} layers` : isGroup(n) ? (n.merge ? 'Merged shape' : 'Group') : { text: 'Text', symbol: 'Shape', path: 'Outline', morph: 'Morph', stroke: 'Drawing', line: 'Line' }[n.content.type];
   return (
     <div className="sel-header">
       <span className="sel-kind">{kind}</span>
@@ -178,8 +178,10 @@ function Appearance({ nodes }: { nodes: Node[] }) {
           <button key={c} className="quick-color" style={{ background: c }} aria-label={`Recolour ${c}`} data-tip={colors.length > 1 ? 'Recolour the whole material from this colour' : c} onClick={() => recolorAll(c)} />
         ))}
       </div>
-      <StrokeEditor ids={ids} value={st.stroke ?? null} />
-      <DepthEditor ids={ids} value={st.depth ?? null} />
+      <div className={`appearance-adds ${st.stroke || st.depth ? 'stacked' : ''}`}>
+        <StrokeEditor ids={ids} value={st.stroke ?? null} />
+        <DepthEditor ids={ids} value={st.depth ?? null} />
+      </div>
       <div className="blend-row">
         <Slider label="Opacity" value={st.opacity ?? 1} min={0} max={1} step={0.01} reset={1} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.opacity = v; }), `op:${ids.join()}`)} />
         <div className="field">
@@ -407,9 +409,10 @@ function LayerEditor({ layer }: { layer: ShapeLayer }) {
     <>
       {error && <div className="layer-error">{error}</div>}
       <ContentEditor layer={layer} set={set} />
-      <Section title="Layer" id="blend" defaultOpen={layer.op !== 'add'}>
+      <Section title="Layer" id="blend" defaultOpen={layer.op !== 'add' || !!layer.guide}>
         <BlendRow node={layer} />
         <p className="hint">Cut and Mask apply to the layer directly beneath this one in the same group.</p>
+        <Toggle label="Reference only" checked={!!layer.guide} onChange={(v) => set((l) => (l.guide = v || undefined))} hint="Shown while you design, left out of PNG, SVG and project previews: for pictures you trace over" />
       </Section>
       <QuickLooks layer={layer} />
       <Modifiers mods={layer.modifiers} owner={layer.id} layer={layer} onChange={(fn, key) => set((l) => fn(l.modifiers), key)} />
@@ -437,7 +440,31 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
               <Icon name="scissors" /> Break apart
             </button>
           </div>
-          <p className="hint">Double-click the shape (or press P) to edit its points. Break apart splits traced text into one layer per letter.</p>
+          <p className="hint">Double-click the shape (or press ⇧P) to edit its points. Break apart splits traced text into one layer per letter.</p>
+        </Section>
+      );
+    case 'line':
+      return (
+        <Section title="Line" id="line">
+          <Slider label="Width" value={c.width} min={0.5} max={300} step={0.5} suffix="px" onChange={(v) => setC<'line'>((x) => (x.width = v), 'lw')} />
+          <div className="field">
+            <span>Ends</span>
+            <Segmented
+              size="sm"
+              value={c.cap}
+              options={[
+                { value: 'round', label: 'Round', title: 'Round ends, like a marker' },
+                { value: 'butt', label: 'Flat', title: 'Cut square at the last point' },
+                { value: 'square', label: 'Square', title: 'Square, half the width past the last point' },
+              ]}
+              onChange={(v) => setC<'line'>((x) => (x.cap = v))}
+            />
+          </div>
+          <Slider label="Size" value={c.size} min={10} max={3000} step={1} onChange={(v) => setC<'line'>((x) => (x.size = v), 'ls')} />
+          <button className="btn" onClick={() => void editPoints(layer.id)}>
+            <Icon name="points" /> Edit points
+          </button>
+          <p className="hint">Drawn with the pen (P). Edit points to reshape it; Bake turns it into a filled outline.</p>
         </Section>
       );
     case 'morph':

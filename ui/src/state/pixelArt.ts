@@ -202,3 +202,86 @@ export function drawPixelArt(c: HTMLCanvasElement, art: PixelArt, shape: 'square
       } else g.fillRect(i * px, j * px, px, px);
     }
 }
+
+/** A picture reduced to a few inks, pixel by pixel (for tracing in colour). */
+export interface Quantized {
+  w: number;
+  h: number;
+  palette: string[];
+  /** Palette index per pixel. */
+  index: Uint8Array;
+  counts: number[];
+}
+
+/** Reduce a picture to `k` inks (k-means), at most `max` px on the long side. */
+export function quantize(img: ImageData, k: number, max = 1000): Quantized {
+  const f = Math.min(1, max / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * f));
+  const h = Math.max(1, Math.round(img.height * f));
+  const cols = Math.min(120, w);
+  const rows = Math.max(1, Math.round((cols * h) / w));
+  const pal = kmeans(sample(img, cols, rows), Math.max(2, Math.min(8, k)));
+  const index = new Uint8Array(w * h);
+  const counts = pal.map(() => 0);
+  const d = img.data;
+  for (let y = 0; y < h; y++) {
+    const sy = Math.min(img.height - 1, Math.floor(y / f));
+    for (let x = 0; x < w; x++) {
+      const i = (sy * img.width + Math.min(img.width - 1, Math.floor(x / f))) * 4;
+      const a = d[i + 3] / 255;
+      const p: RGB = [d[i] * a + 255 * (1 - a), d[i + 1] * a + 255 * (1 - a), d[i + 2] * a + 255 * (1 - a)];
+      let bi = 0;
+      let bd = Infinity;
+      for (let c = 0; c < pal.length; c++) {
+        const dd = dist(p, pal[c]);
+        if (dd < bd) (bd = dd), (bi = c);
+      }
+      index[y * w + x] = bi;
+      counts[bi]++;
+    }
+  }
+  return { w, h, palette: pal.map(hex), index, counts };
+}
+
+/**
+ * Masks for tracing a quantized picture as stacked colour layers: the
+ * biggest colour first, and each layer's mask also covers every colour
+ * stacked above it, so no seams show between neighbours. `skip` (the
+ * background) is never inked. Returns [palette index, RGBA mask] pairs.
+ */
+export function stackedMasks(q: Quantized, skip: number | null): [number, Uint8Array][] {
+  // Colours under 0.2% of the picture are anti-aliasing, not inks.
+  const min = q.index.length * 0.002;
+  const order = q.palette.map((_, i) => i).filter((i) => q.counts[i] > min && i !== skip).sort((a, b) => q.counts[b] - q.counts[a]);
+  const rank = new Int16Array(q.palette.length).fill(-1);
+  order.forEach((i, r) => (rank[i] = r));
+  return order.map((ci, r) => {
+    const m = new Uint8Array(q.w * q.h * 4);
+    for (let p = 0; p < q.index.length; p++) {
+      const ink = rank[q.index[p]] >= r;
+      const v = ink ? 0 : 255;
+      m[p * 4] = m[p * 4 + 1] = m[p * 4 + 2] = v;
+      m[p * 4 + 3] = 255;
+    }
+    return [ci, m];
+  });
+}
+
+/** Draw a quantized picture (preview). */
+export function drawQuantized(c: HTMLCanvasElement, q: Quantized, skip: number | null) {
+  c.width = q.w;
+  c.height = q.h;
+  const ctx = c.getContext('2d');
+  if (!ctx) return;
+  const img = ctx.createImageData(q.w, q.h);
+  const rgb = q.palette.map(parse);
+  for (let p = 0; p < q.index.length; p++) {
+    const k = q.index[p];
+    const [r, g, b] = rgb[k];
+    img.data[p * 4] = r;
+    img.data[p * 4 + 1] = g;
+    img.data[p * 4 + 2] = b;
+    img.data[p * 4 + 3] = k === skip ? 40 : 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}

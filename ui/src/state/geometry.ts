@@ -122,6 +122,8 @@ export interface Node {
 
 export interface Contour {
   nodes: Node[];
+  /** An open line (no closing segment), drawn by the pen and stroked. */
+  open?: boolean;
 }
 
 /** Parse absolute/relative M L H V C S Q T Z path data into contours of cubic nodes. */
@@ -140,7 +142,7 @@ export function parsePath(d: string): Contour[] {
   const num = () => Number(toks[i++]);
   const isNum = () => i < toks.length && !/^[a-zA-Z]$/.test(toks[i]);
   const close = () => {
-    if (cur && cur.nodes.length > 1) {
+    if (cur && cur.nodes.length > 1 && C_isZ) {
       const a = cur.nodes[0];
       const b = cur.nodes[cur.nodes.length - 1];
       // Drop a duplicated closing point, keeping its incoming handle.
@@ -150,14 +152,17 @@ export function parsePath(d: string): Contour[] {
       }
     }
   };
+  let C_isZ = false;
   while (i < toks.length) {
     if (!isNum()) cmd = toks[i++];
+    C_isZ = cmd.toUpperCase() === 'Z';
     const rel = cmd === cmd.toLowerCase();
     const C = cmd.toUpperCase();
     const ox = rel ? x : 0;
     const oy = rel ? y : 0;
     if (C === 'Z') {
       close();
+      if (cur) cur.open = false;
       cur = null;
       x = sx;
       y = sy;
@@ -165,7 +170,7 @@ export function parsePath(d: string): Contour[] {
       continue;
     }
     if (!cur && C !== 'M') {
-      cur = { nodes: [{ x, y }] };
+      cur = { nodes: [{ x, y }], open: true };
       out.push(cur);
     }
     switch (C) {
@@ -175,7 +180,7 @@ export function parsePath(d: string): Contour[] {
         y = num() + oy;
         sx = x;
         sy = y;
-        cur = { nodes: [{ x, y }] };
+        cur = { nodes: [{ x, y }], open: true };
         out.push(cur);
         cmd = rel ? 'l' : 'L';
         lastC = lastQ = null;
@@ -233,6 +238,7 @@ export function parsePath(d: string): Contour[] {
         while (isNum()) i++;
     }
   }
+  C_isZ = false;
   close();
   return out.filter((c) => c.nodes.length >= 2);
 }
@@ -248,7 +254,7 @@ export function serializePath(cs: Contour[]): string {
     const n = c.nodes.length;
     if (n < 2) continue;
     d += `M${f(c.nodes[0].x)} ${f(c.nodes[0].y)}`;
-    for (let k = 1; k <= n; k++) {
+    for (let k = 1; k <= (c.open ? n - 1 : n); k++) {
       const a = c.nodes[k - 1];
       const b = c.nodes[k % n];
       if (a.hout || b.hin) {
@@ -259,7 +265,7 @@ export function serializePath(cs: Contour[]): string {
         d += `L${f(b.x)} ${f(b.y)}`;
       }
     }
-    d += 'Z';
+    if (!c.open) d += 'Z';
   }
   return d;
 }

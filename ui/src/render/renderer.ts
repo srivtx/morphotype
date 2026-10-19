@@ -68,11 +68,13 @@ export interface SceneItem {
   opacity?: number;
   blend?: BlendMode;
   depth?: Depth | null;
+  /** Reference layers draw on the canvas but not in exports or previews. */
+  guide?: boolean;
 }
 
 /** The scene item for one built object and its style. */
-export function sceneItem(id: string, out: { d: string; bbox: Box | null }, st: Style): SceneItem {
-  return { id, d: out.d, bbox: out.bbox, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth };
+export function sceneItem(id: string, out: { d: string; bbox: Box | null }, st: Style, guide?: boolean): SceneItem {
+  return { id, d: out.d, bbox: out.bbox, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, guide };
 }
 
 interface Field {
@@ -512,9 +514,10 @@ export class Renderer {
   }
 
   /** Draw background then objects into the bound framebuffer. `rect` maps the artboard to clip space. */
-  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean, fb: { fbo: WebGLFramebuffer | null; w: number; h: number; pxPerArt: number }) {
+  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean, fb: { fbo: WebGLFramebuffer | null; w: number; h: number; pxPerArt: number; guides: boolean }) {
     const gl = this.gl;
-    for (const o of this.objs) {
+    const objs = fb.guides ? this.objs : this.objs.filter((o) => !o.item.guide);
+    for (const o of objs) {
       this.buildField(o, k);
       if (o.field) this.buildHeight(o, o.field.w / o.region!.w);
     }
@@ -528,7 +531,7 @@ export class Renderer {
         setUniforms(gl, p, { ...backgroundUniforms(bg), u_rect: rectOf({ x: 0, y: 0, w: this.art.w, h: this.art.h }), u_art: [this.art.w, this.art.h], u_checker: checker, u_k: k });
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
-      for (const o of this.objs) {
+      for (const o of objs) {
         if (!o.field || !o.region) continue;
         // Glass and lenses see what's drawn so far.
         const bdu = o.item.effect.backdrop ? this.captureBackdrop(rectOf(o.region), fb, Number(o.item.params.blur ?? 0) * fb.pxPerArt) : null;
@@ -580,7 +583,7 @@ export class Renderer {
       const [x1, y0] = toClip(ar.x + (r.x + r.w) * z, ar.y + r.y * z);
       return [x0, y1, x1, y0];
     };
-    const paint = this.composite(k, rectOf, false, this.checker, { fbo: null, w: cw, h: ch, pxPerArt: z * dpr });
+    const paint = this.composite(k, rectOf, false, this.checker, { fbo: null, w: cw, h: ch, pxPerArt: z * dpr, guides: true });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, cw, ch);
     gl.clearColor(0.043, 0.043, 0.051, 1);
@@ -602,7 +605,7 @@ export class Renderer {
     const { w: AW, h: AH } = this.art;
     const rectOf = (r: Region): [number, number, number, number] => [(r.x / AW) * 2 - 1, 1 - ((r.y + r.h) / AH) * 2, ((r.x + r.w) / AW) * 2 - 1, 1 - (r.y / AH) * 2];
     try {
-      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k });
+      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false });
       gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
       gl.viewport(0, 0, W, Hh);
       gl.clearColor(0, 0, 0, 0);

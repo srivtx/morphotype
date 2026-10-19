@@ -5,6 +5,7 @@
 
 use crate::field::{extract, Grid};
 use crate::geom::{pt, Pt, Rect, Shape};
+use serde::{Deserialize, Serialize};
 
 /// Chaikin corner cutting: rounds the jitter of hand-drawn input.
 fn chaikin(p: &[(Pt, f64)], rounds: usize) -> Vec<(Pt, f64)> {
@@ -123,11 +124,50 @@ pub fn outline(points: &[[f64; 3]], width: f64, taper: f64, smooth: f64, cell_hi
     extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 0.5)
 }
 
+/// How an open line ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LineCap {
+    #[default]
+    Round,
+    /// Cut square at the end point.
+    Butt,
+    /// Square, reaching half the width past the end point.
+    Square,
+}
+
 /// Outline of constant-width lines with round caps and joins (`closed` lines
 /// loop back to their start). Overlaps merge cleanly, so globes, asterisks
 /// and line icons built from many strokes come out as one solid.
 pub fn polylines(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64) -> Shape {
+    polylines_capped(lines, width, cell, LineCap::Round)
+}
+
+/// [`polylines`] with a choice of caps for open lines (joins stay round).
+pub fn polylines_capped(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64, cap: LineCap) -> Shape {
     let r = (width.abs() * 0.5).max(1e-4);
+    // Square caps are butt caps on lines lengthened by half the width.
+    let extended: Vec<(Vec<Pt>, bool)>;
+    let lines = if cap == LineCap::Square {
+        extended = lines
+            .iter()
+            .map(|(l, closed)| {
+                let mut l = l.clone();
+                if !closed && l.len() >= 2 {
+                    let n = l.len();
+                    let d0 = (l[0] - l[1]).normalized();
+                    let d1 = (l[n - 1] - l[n - 2]).normalized();
+                    l[0] = l[0] + d0 * r;
+                    l[n - 1] = l[n - 1] + d1 * r;
+                }
+                (l, *closed)
+            })
+            .collect();
+        &extended[..]
+    } else {
+        lines
+    };
+    let butt = cap != LineCap::Round;
     let mut bbox = Rect::EMPTY;
     for (l, _) in lines {
         for p in l {
@@ -141,7 +181,8 @@ pub fn polylines(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64) -> Shape {
     let pad = r + 3.0 * cell;
     let g = Grid::covering(bbox, pad, cell);
     let mut v = vec![(pad * 2.0) as f32; g.len()];
-    let mut seg = |a: Pt, b: Pt| {
+    // `cut_a` / `cut_b`: nothing past that end of the segment (butt caps).
+    let mut seg = |a: Pt, b: Pt, cut_a: bool, cut_b: bool| {
         let reach = r + 2.0 * g.cell;
         let i0 = (((a.x.min(b.x) - reach - g.origin.x) / g.cell).floor().max(0.0)) as usize;
         let j0 = (((a.y.min(b.y) - reach - g.origin.y) / g.cell).floor().max(0.0)) as usize;
@@ -152,7 +193,11 @@ pub fn polylines(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64) -> Shape {
         for j in j0..j1 {
             for i in i0..i1 {
                 let p = g.sample_pos(i, j);
-                let u = if l2 > 1e-12 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                let raw = if l2 > 1e-12 { (p - a).dot(ab) / l2 } else { 0.0 };
+                if (cut_a && raw < 0.0) || (cut_b && raw > 1.0) {
+                    continue;
+                }
+                let u = raw.clamp(0.0, 1.0);
                 let q = p - (a + ab * u);
                 let k = j * g.w + i;
                 let lim = v[k] as f64 + r;
@@ -166,13 +211,14 @@ pub fn polylines(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64) -> Shape {
     for (l, closed) in lines {
         match l.len() {
             0 => {}
-            1 => seg(l[0], l[0]),
+            1 => seg(l[0], l[0], false, false),
             n => {
-                for w in l.windows(2) {
-                    seg(w[0], w[1]);
+                for (k, w) in l.windows(2).enumerate() {
+                    let open = butt && !closed;
+                    seg(w[0], w[1], open && k == 0, open && k == n - 2);
                 }
                 if *closed {
-                    seg(l[n - 1], l[0]);
+                    seg(l[n - 1], l[0], false, false);
                 }
             }
         }
@@ -216,6 +262,17 @@ mod tests {
         let caps = std::f64::consts::PI * 25.0;
         let expect = 2.0 * (100.0 * 10.0 + caps) - 100.0;
         assert!((s.area() - expect).abs() / expect < 0.03, "{} vs {expect}", s.area());
+    }
+
+    #[test]
+    fn caps_change_the_line_length() {
+        let line = [(vec![pt(0.0, 0.0), pt(100.0, 0.0)], false)];
+        let w = |cap| polylines_capped(&line, 20.0, 0.25, cap).bbox().width();
+        assert!((w(LineCap::Butt) - 100.0).abs() < 1.0, "{}", w(LineCap::Butt));
+        assert!((w(LineCap::Square) - 120.0).abs() < 1.0);
+        assert!((w(LineCap::Round) - 120.0).abs() < 1.0);
+        let a = |cap| polylines_capped(&line, 20.0, 0.25, cap).area();
+        assert!(a(LineCap::Round) < a(LineCap::Square) && a(LineCap::Butt) < a(LineCap::Round));
     }
 
     #[test]

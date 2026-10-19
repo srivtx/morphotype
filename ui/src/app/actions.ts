@@ -7,10 +7,10 @@ import { addImage, encodeImage, imageAsset, packImages, unpackImages } from '../
 import { luminance } from '../render/palette';
 import { defaultParams, effectById, type Preset } from '../render/effects';
 import type { Renderer } from '../render/renderer';
-import { parsePath, serializePath } from '../state/geometry';
+import { parsePath, serializePath, type Node as GNode } from '../state/geometry';
 import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
-import { group, isGroup, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
+import { group, isGroup, lineLayer, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
 import { iconGridLayers } from '../state/icon';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
 import { allLayers, ancestors, buildScene, childrenOf, find, findNode, layersOf, removeNodes, topmost, walk } from '../state/tree';
@@ -267,6 +267,26 @@ export function finishDrawing(pts: [number, number, number][]) {
     style: b.style(s.settings.brushColor),
   };
   // Drawings stack in order and stay selected so the next stroke can be compared.
+  addNode(l, { parent: null });
+}
+
+/**
+ * Turn a pen path (artboard coordinates) into a layer: a filled outline when
+ * it was closed, otherwise a line. Path data is stored in em units around the
+ * path's centre so modifiers scale with its size.
+ */
+export function finishPen(nodes: GNode[], closed: boolean) {
+  if (nodes.length < 2) return;
+  const s = store.get();
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const n of nodes) for (const p of [n, n.hin, n.hout]) if (p) (x0 = Math.min(x0, p.x)), (y0 = Math.min(y0, p.y)), (x1 = Math.max(x1, p.x)), (y1 = Math.max(y1, p.y));
+  const cx = Math.round((x0 + x1) / 2);
+  const cy = Math.round((y0 + y1) / 2);
+  const size = Math.max(1, Math.round(Math.max(x1 - x0, y1 - y0)));
+  const k = (p: { x: number; y: number }) => ({ x: (p.x - cx) / size, y: (p.y - cy) / size });
+  const d = serializePath([{ open: !closed, nodes: nodes.map((n) => ({ ...k(n), hin: n.hin && k(n.hin), hout: n.hout && k(n.hout) })) }]);
+  const ink = s.settings.penColor;
+  const l = closed ? pathLayer(d, size, 'Shape', { x: cx, y: cy, style: style('flat', { fill: ink }) }) : lineLayer(d, size, s.settings.penWidth, { x: cx, y: cy, style: style('flat', { fill: ink }) });
   addNode(l, { parent: null });
 }
 
@@ -799,7 +819,8 @@ export async function breakApart(id: string) {
 export async function editPoints(id: string) {
   const l = findNode(store.get().project.layers, id);
   if (!l || isGroup(l)) return;
-  const needs = !(l.content.type === 'path' && l.modifiers.length === 0);
+  // Pen lines edit as they are; anything else becomes an outline first.
+  const needs = !((l.content.type === 'path' || l.content.type === 'line') && l.modifiers.length === 0);
   if (needs) {
     const ok = await convertToOutline(id);
     if (!ok) return;
@@ -886,6 +907,31 @@ export function placePhoto(image: ImageData, name: string) {
   const l = symbolLayer('roundRect', side, { name, style: style('photo', { image: id }) }, { radius: 0, aspect });
   addNode(l);
   toast('Photo placed. Change its shape, or give any other layer the Photo material.');
+}
+
+/**
+ * Put a picture under everything as a faded, locked reference to trace over
+ * with the pen. It is drawn while designing but never exported.
+ */
+export function placeReference(image: ImageData, name: string) {
+  const c = document.createElement('canvas');
+  c.width = image.width;
+  c.height = image.height;
+  c.getContext('2d')?.putImageData(image, 0, 0);
+  const enc = encodeImage(c, true);
+  const id = addImage(enc.data, enc.w, enc.h, name);
+  const p = store.get().project;
+  const aspect = enc.w / enc.h;
+  // Fit the artboard (a rectangle's size is its longer side).
+  const { width: W, height: H } = p.canvas;
+  const side = aspect >= 1 ? Math.min(W, H * aspect) : Math.min(H, W / aspect);
+  const l = symbolLayer('roundRect', side, { name: `Reference · ${name}`, locked: true, style: { ...style('photo', { image: id }), opacity: 0.4 } }, { radius: 0, aspect });
+  l.guide = true;
+  edit((d) => {
+    d.layers.unshift(l);
+  });
+  store.set({ tool: 'pen', selection: [] });
+  toast('Reference placed under your artwork. It won’t export. Trace it with the pen (P).', 'info', { label: 'Undo', run: undo });
 }
 
 /** Ask for a picture file and store it; returns its asset id. */
@@ -1147,8 +1193,9 @@ export async function buildSvg(transparent = store.get().settings.exportTranspar
     body.push(`<rect x="${-r}" y="${-r}" width="${2 * r}" height="${2 * r}" rx="${rx}" fill="${t.fill.colors[0] ?? '#fff'}"/>`);
   }
   for (const path of out.paths) {
-    const st = objects.find((o) => o.id === path.id)?.style;
-    if (!st || !path.d) continue;
+    const obj = objects.find((o) => o.id === path.id);
+    const st = obj?.style;
+    if (!st || !path.d || obj.guide) continue;
     const mix = (st.opacity ?? 1) < 1 || (st.blend && st.blend !== 'normal');
     if (mix) body.push(`<g${(st.opacity ?? 1) < 1 ? ` opacity="${st.opacity}"` : ''}${st.blend && st.blend !== 'normal' ? ` style="mix-blend-mode:${st.blend}"` : ''}>`);
     emitObject(path, st);

@@ -109,7 +109,11 @@ export type Content =
   | { type: 'path'; d: string; size: number; name?: string }
   | { type: 'morph'; a: string; b: string; t: number }
   /** Freehand brush stroke; points are [x, y, pressure] in layer pixels. */
-  | { type: 'stroke'; points: [number, number, number][]; width: number; taper: number; smooth: number };
+  | { type: 'stroke'; points: [number, number, number][]; width: number; taper: number; smooth: number }
+  /** Pen line: path data in em units × size; open subpaths are stroked `width` px wide. */
+  | { type: 'line'; d: string; size: number; width: number; cap: LineCap };
+
+export type LineCap = 'round' | 'butt' | 'square';
 
 /** What the engine needs to know about a layer. */
 export interface EngineLayer {
@@ -275,6 +279,8 @@ export interface TraceOptions {
   despeckle: number;
   pixel: boolean;
   maxSize?: number;
+  /** Normalise to the whole image (so traces of one picture line up). */
+  frame?: boolean;
 }
 
 export interface TraceOut {

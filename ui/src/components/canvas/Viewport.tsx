@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { penDown, penDrag, penHover, penUp } from './PenTool';
 import { duplicateSelected, editPoints, editText, endTextEdit, finishDrawing, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
 import type { Box } from '../../engine/types';
 import { Renderer, sceneItem, type SceneItem } from '../../render/renderer';
@@ -18,7 +19,8 @@ type Drag =
   | { kind: 'move'; start: Pt; moved: boolean; layers: Map<string, Pt>; box: Box | null; ids: string[] }
   | { kind: 'scale'; handle: Handle; start: Pt; layers: Map<string, Xform>; box: Box; single: { id: string; local: Box } | null }
   | { kind: 'rotate'; center: Pt; startAngle: number; layers: Map<string, Xform> }
-  | { kind: 'draw' };
+  | { kind: 'draw' }
+  | { kind: 'pen' };
 
 const xf = (l: ShapeLayer): Xform => ({ x: l.x, y: l.y, rotation: l.rotation, scale: l.scale, sx: l.sx ?? 1, sy: l.sy ?? 1 });
 
@@ -30,7 +32,7 @@ export function syncScene(r: Renderer) {
   const items: SceneItem[] = [];
   for (const o of objects) {
     const out = renders.get(o.id);
-    if (out) items.push(sceneItem(o.id, out, o.style));
+    if (out) items.push(sceneItem(o.id, out, o.style, o.guide));
   }
   r.setScene(items);
   r.setBackground(s.project.background);
@@ -324,6 +326,12 @@ export function Viewport() {
     }
     const a = r.toArt(p.x, p.y);
     let s = store.get();
+    if (s.tool === 'pen') {
+      e.preventDefault();
+      if (s.editing) store.set({ editing: null });
+      if (!penDown(a, r.view.zoom, e.shiftKey)) drag.current = { kind: 'pen' };
+      return;
+    }
     if (s.tool === 'draw') {
       e.preventDefault();
       if (s.editing?.kind === 'text') endTextEdit();
@@ -387,7 +395,7 @@ export function Viewport() {
       return;
     }
     if (hit.content.type === 'text') editText(hit.id, a);
-    else if (hit.content.type === 'path') void editPoints(hit.id);
+    else if (hit.content.type === 'path' || hit.content.type === 'line') void editPoints(hit.id);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -396,6 +404,8 @@ export function Viewport() {
     const d = drag.current;
     const p = local(e);
     const a = r.toArt(p.x, p.y);
+    if (d?.kind === 'pen') return void penDrag(a, r.view.zoom);
+    if (!d && store.get().tool === 'pen') return void penHover(a, e.shiftKey);
     if (d?.kind === 'draw') {
       // Coalesced events keep fast strokes smooth; points closer than ~1.5 screen px are skipped.
       const pts = strokePts.current;
@@ -594,6 +604,7 @@ export function Viewport() {
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
+    if (d?.kind === 'pen') return void penUp();
     if (d?.kind === 'draw') {
       const pts = strokePts.current;
       strokePts.current = [];
@@ -661,7 +672,7 @@ export function Viewport() {
       className={`viewport ${panning ? 'panning' : ''}`}
       ref={wrapRef}
       tabIndex={-1}
-      style={{ cursor: panning ? (cursor === 'grabbing' ? 'grabbing' : 'grab') : tool === 'text' ? 'text' : tool === 'draw' ? 'crosshair' : cursor }}
+      style={{ cursor: panning ? (cursor === 'grabbing' ? 'grabbing' : 'grab') : tool === 'text' ? 'text' : tool === 'draw' || tool === 'pen' ? 'crosshair' : cursor }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

@@ -292,6 +292,11 @@ export function LayersPanel() {
               {n.op === 'subtract' && <span className="badge cut">Cut</span>}
               {n.op === 'intersect' && <span className="badge mask">Mask</span>}
               {isGroup(n) && n.merge && <span className="badge merge">Merged</span>}
+              {!isGroup(n) && n.guide && (
+                <span className="badge mask" data-tip="Reference: shown while you design, never exported">
+                  Ref
+                </span>
+              )}
               <span className={`row-tools ${n.locked || !n.visible ? 'sticky' : ''}`}>
                 <button
                   className={`icon-btn tiny ${n.locked ? 'on' : ''}`}

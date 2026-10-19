@@ -592,6 +592,14 @@ pub struct CurveContour {
 pub type CurveShape = Vec<CurveContour>;
 
 impl CurveContour {
+    /// Where the contour ends (its start if it has no segments).
+    pub fn end(&self) -> Pt {
+        match self.segs.last() {
+            Some(Seg::Line(p) | Seg::Quad(_, p) | Seg::Cubic(_, _, p)) => *p,
+            None => self.start,
+        }
+    }
+
     pub fn transform(&mut self, m: &Affine) {
         self.start = m.apply(self.start);
         for s in &mut self.segs {

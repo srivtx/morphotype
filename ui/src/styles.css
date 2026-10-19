@@ -3801,3 +3801,62 @@ button.home-new:hover,
   stroke-width: 1;
   pointer-events: none;
 }
+
+/* ---------- pen ---------- */
+.pen-preview {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.pen-stroke {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.35;
+}
+.pen-path,
+.pen-band {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.pen-band {
+  stroke-dasharray: 4 4;
+  opacity: 0.8;
+}
+.pen-node {
+  fill: #fff;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.pen-node.close {
+  fill: var(--accent);
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(1.5);
+}
+.pen-handles line {
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+.pen-handles circle {
+  fill: var(--accent);
+}
+.pen-hint {
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.appearance-adds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.appearance-adds.stacked {
+  flex-direction: column;
+  gap: 8px;
+}
+.pixel-preview.smooth {
+  image-rendering: auto;
+}

@@ -3,7 +3,9 @@
 // cross-stitch pixels, line shapes (globe, asterisk, wavy badge) and the
 // app-icon grid. Every one is a normal, editable document.
 import { applyIconTarget, iconGridLayers } from './icon';
-import { background, depth, fill, group, mods, pathLayer, pattern, strokeLayer, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer, type Style } from './model';
+import { parsePath, serializePath } from './geometry';
+import type { LineCap } from '../engine/types';
+import { background, depth, fill, group, lineLayer, mods, pathLayer, pattern, strokeLayer, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer, type Style } from './model';
 import type { Template } from './templates';
 
 const project = (name: string, layers: Node[], bg: Background, canvas = { width: 1200, height: 1200 }): Project => ({ version: 2, name, canvas, layers, background: bg, fonts: [] });
@@ -14,6 +16,24 @@ const stroked = (st: Style, width: number, color = '#0a0a0a'): Style => ({ ...st
 
 /** Line art drawn with constant-width round strokes (for line icons). */
 const line = (pts: [number, number][], width: number, color: string, name: string, x = 0, y = 0) => strokeLayer(pts, width, { x, y, name, style: ink(color) }, { taper: 0, smooth: 0 });
+/**
+ * A pen path from path data in artboard px (origin at the centre), stored the
+ * way the pen stores it: em units around its own centre. Closed paths fill;
+ * with `width` the path is a stroked line.
+ */
+function pen(dPx: string, name: string, st: Style, width?: number, cap: LineCap = 'round', extra: Partial<ShapeLayer> = {}): ShapeLayer {
+  const cs = parsePath(dPx);
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const c of cs) for (const n of c.nodes) for (const p of [n, n.hin, n.hout]) if (p) (x0 = Math.min(x0, p.x)), (y0 = Math.min(y0, p.y)), (x1 = Math.max(x1, p.x)), (y1 = Math.max(y1, p.y));
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  const size = Math.max(1, Math.max(x1 - x0, y1 - y0));
+  const k = (p: { x: number; y: number }) => ({ x: (p.x - cx) / size, y: (p.y - cy) / size });
+  const d = serializePath(cs.map((c) => ({ open: width !== undefined ? c.open : false, nodes: c.nodes.map((n) => ({ ...k(n), hin: n.hin && k(n.hin), hout: n.hout && k(n.hout) })) })));
+  const at = { x: cx, y: cy, style: st, name, ...extra };
+  return width !== undefined ? lineLayer(d, size, width, at, cap) : pathLayer(d, size, name, at);
+}
+
 /** Groups have no position of their own: move their layers instead. */
 const shifted = (nodes: ShapeLayer[], dx: number, dy: number): ShapeLayer[] => {
   for (const n of nodes) (n.x += dx), (n.y += dy);
@@ -38,19 +58,29 @@ export const LAB_TEMPLATES: Template[] = [
   },
   {
     name: 'Crystal word',
-    hint: 'A prism-glass cube over bold white type on black',
+    hint: 'A glass cube with three refracting faces over bold white type',
     category: 'Logo',
-    make: () =>
-      project(
+    make: () => {
+      const a = 250;
+      const turn = -14;
+      const r = (turn * Math.PI) / 180;
+      const at = (dx: number, dy: number) => ({ x: -30 + dx * Math.cos(r) - dy * Math.sin(r), y: -10 + dx * Math.sin(r) + dy * Math.cos(r) });
+      const face = (f: 'top' | 'left' | 'right', dx: number, dy: number, glass: Record<string, number>) =>
+        symbolLayer('roundRect', a, { ...at(dx, dy), rotation: turn, name: `${f[0].toUpperCase()}${f.slice(1)} face`, style: style('lens', glass), modifiers: mods({ kind: 'isometric', face: f }) }, { radius: 0.06, aspect: 1 });
+      return project(
         'Crystal word',
         [
           textLayer('mono', 'inter-black', { name: 'Word', style: ink('#f4f4f4') }, { size: 300, tracking: -0.04 }),
-          symbolLayer('polygon', 360, { x: -40, y: -10, rotation: 14, name: 'Crystal', style: style('lens', { refraction: 1.1, dispersion: 1.3, iridescence: 1.2, magnify: 0.12, rim: 1, bevel: 40, softness: 4 }) }, { sides: 6, rounding: 0.05 }),
-          symbolLayer('polygon', 180, { x: -40, y: -10, rotation: 14, name: 'Facet', style: style('lens', { refraction: 0.8, dispersion: 1.2, iridescence: 0.9, magnify: -0.2, rim: 0.7, bevel: 24, softness: 2 }) }, { sides: 6, rounding: 0.05 }),
+          face('left', -0.433 * a, 0.25 * a, { refraction: 0.8, dispersion: 1.2, iridescence: 1.2, magnify: -0.45, rim: 1.2, bevel: 34, softness: 3, tintAmount: 0.08 }),
+          face('right', 0.433 * a, 0.25 * a, { refraction: 0.9, dispersion: 1.3, iridescence: 1, magnify: -0.6, rim: 1.2, bevel: 34, softness: 3, tintAmount: 0.04 }),
+          face('top', 0, -0.5 * a, { refraction: 1.1, dispersion: 1.5, iridescence: 1.5, magnify: -0.3, rim: 1.3, bevel: 40, softness: 3, tintAmount: 0.12 }),
+          textLayer('mono', 'inter-black', { x: -470, y: -300, name: 'App tile label', style: ink('#f4f4f4') }, { size: 34, tracking: -0.02 }),
+          symbolLayer('squircle', 100, { x: -470, y: -300, name: 'App tile', style: { ...style('flat', { fill: '#0a0a0a' }), stroke: { width: 2, color: '#3a3a3a', align: 'inside', opacity: 1 } } }, { exponent: 5, aspect: 1 }),
         ],
         solid('#000000'),
         { width: 1200, height: 900 },
-      ),
+      );
+    },
   },
   {
     name: 'Frosted 404',
@@ -266,24 +296,24 @@ export const LAB_TEMPLATES: Template[] = [
   },
   {
     name: 'Wavy badge icon',
-    hint: 'A cream wavy-edged badge with a blue line icon',
+    hint: 'A cream wavy-edged badge with a blue line icon, drawn with the pen',
     category: 'Icon',
     make: () => {
       const B = '#1f4ed8';
+      const line = ink(B);
+      const w = 26;
       return project(
         'Wavy badge icon',
         [
-          symbolLayer('wavy', 860, { name: 'Badge', style: ink('#f4f1ea') }, { waves: 18, depth: 0.1, scallop: 0.15 }),
+          symbolLayer('wavy', 840, { name: 'Badge', style: ink('#f4f1ea') }, { waves: 20, depth: 0.1, scallop: 0.1 }),
           group(
-            shifted(
-              [
-                line([[-60, 150], [-150, 60], [70, -190], [160, -100], [-60, 150]], 30, B, 'Pencil'),
-                line([[10, -130], [100, -40]], 30, B, 'Cap'),
-                line([[-210, 230], [-120, 180], [-40, 230], [40, 180], [120, 230], [200, 180]], 30, B, 'Squiggle'),
-              ],
-              0,
-              -30,
-            ),
+            [
+              pen('M-71 -93L154 -191L68 39Z', 'Pennant', line, w),
+              pen('M-50 -70C-44 -46 -28 -44 -24 -62C-18 -42 -2 -40 4 -58C6 -44 16 -36 28 -42', 'Wind', line, w),
+              pen('M68 39L104 78L162 78C176 78 182 92 176 104L158 140L46 140C24 140 8 124 -6 108L-40 72', 'Boot', line, w),
+              pen('M-195 119L-87 19', 'Lace', line, w),
+              pen('M-150 92C-190 120 -196 160 -164 172C-140 180 -120 160 -128 140', 'Hook', line, w),
+            ],
             { name: 'Line icon' },
           ),
         ],
@@ -297,16 +327,18 @@ export const LAB_TEMPLATES: Template[] = [
     hint: 'An isometric cube mascot with ears, outlined in black',
     category: 'Logo',
     make: () => {
-      const face = (f: 'top' | 'left' | 'right', x: number, y: number) => symbolLayer('roundRect', 340, { x, y, name: `${f[0].toUpperCase()}${f.slice(1)} face`, modifiers: mods({ kind: 'isometric', face: f }) }, { radius: 0.16, aspect: 1 });
-      const white = stroked(ink('#ffffff'), 16);
+      const white = stroked(ink('#ffffff'), 20);
+      const black = ink('#0a0a0a');
+      const round = (r: number) => mods({ kind: 'round', radius: r });
       return project(
         'Iso bunny',
         [
-          symbolLayer('pill', 380, { x: -150, y: -350, rotation: 64, name: 'Ear', style: white, modifiers: mods({ kind: 'isometric', face: 'left' }) }, { aspect: 2.8 }),
-          symbolLayer('pill', 380, { x: 110, y: -330, rotation: 90, name: 'Ear', style: white, modifiers: mods({ kind: 'isometric', face: 'right' }) }, { aspect: 2.8 }),
-          group([face('top', 0, -170), face('left', -147, 85), face('right', 147, 85)], { name: 'Head', merge: true, style: white, modifiers: mods({ kind: 'round', radius: 0.02 }) }),
-          symbolLayer('smile', 150, { x: -40, y: 110, name: 'Smile', style: ink('#0a0a0a'), modifiers: mods({ kind: 'isometric', face: 'left' }) }, { curve: -0.5, weight: 0.18 }),
-          symbolLayer('plus', 90, { x: -210, y: 90, name: 'Wink', style: ink('#0a0a0a'), modifiers: mods({ kind: 'isometric', face: 'left' }) }, { thickness: 0.2 }),
+          pen('M-235 -316L-74 -271L16 -74L-145 -96Z', 'Back ear', white, undefined, 'round', { modifiers: round(0.07) }),
+          pen('M-2 -78L236 43L236 205L16 326L-217 205L-217 43Z', 'Head', white, undefined, 'round', { modifiers: round(0.075) }),
+          pen('M79 -289L222 -172L227 43L83 -65Z', 'Front ear', white, undefined, 'round', { modifiers: round(0.08) }),
+          symbolLayer('plus', 78, { x: -141, y: 213, rotation: 12, name: 'Wink', style: black }, { thickness: 0.2 }),
+          pen('M-86 233C-58 186 6 182 40 232', 'Smile', black, 14),
+          pen('M-217 98C-196 110 -186 128 -186 156', 'Cheek', black, 14),
         ],
         solid('#111111'),
         { width: 1080, height: 1080 },
@@ -315,20 +347,21 @@ export const LAB_TEMPLATES: Template[] = [
   },
   {
     name: 'Flame icon',
-    hint: 'A flame mascot on the app-icon grid, ready to present',
+    hint: 'A flame mascot on the app-icon grid, drawn with the pen',
     category: 'Icon',
     make: () => {
       const grid = iconGridLayers(1080, '#7a7a7a', 3.5);
-      const flame = 'M-0.4 0.1C-0.42 -0.1 -0.38 -0.22 -0.32 -0.3L-0.21 -0.19C-0.18 -0.34 -0.12 -0.44 -0.05 -0.5L0.04 -0.31C0.08 -0.38 0.12 -0.42 0.17 -0.44C0.34 -0.3 0.44 -0.1 0.42 0.08C0.4 0.3 0.2 0.44 0 0.44C-0.24 0.44 -0.4 0.32 -0.4 0.1Z';
+      const flame =
+        'M-317 120C-330 0 -320 -120 -290 -185C-282 -200 -268 -198 -258 -188C-225 -158 -195 -130 -169 -125C-150 -200 -110 -290 -80 -318C-70 -327 -55 -325 -50 -312C-25 -260 40 -215 81 -199C90 -250 105 -295 122 -311C132 -320 146 -318 152 -306C250 -200 330 -80 318 40C305 200 160 330 -15 331C-200 332 -310 250 -317 120Z';
       return project(
         'Flame icon',
         [
           group(grid, { name: 'Icon grid', locked: true, open: false }),
           group(
             [
-              pathLayer(flame, 620, 'Flame', { x: 10, y: 0, style: ink('#ffffff'), modifiers: mods({ kind: 'round', radius: 0.02 }) }),
-              symbolLayer('circle', 170, { x: -10, y: 60, sx: 0.6, rotation: -6, op: 'subtract', name: 'Eye' }),
-              symbolLayer('circle', 150, { x: 140, y: 40, sx: 0.58, rotation: -4, op: 'subtract', name: 'Eye' }),
+              pen(flame, 'Flame', ink('#ffffff')),
+              pen('M0 -41C39 -41 70 17 70 88C70 159 39 217 0 217C-34 217 -58 185 -66 150C-50 140 -48 125 -62 112C-76 98 -72 80 -58 70C-70 40 -45 -41 0 -41Z', 'Eye', ink('#000000'), undefined, 'round', { op: 'subtract' }),
+              pen('M199 -74C229 -74 254 -21 254 44C254 109 229 162 199 162C172 162 152 135 147 104C160 96 160 82 149 72C138 62 140 46 151 38C143 6 165 -74 199 -74Z', 'Eye', ink('#000000'), undefined, 'round', { op: 'subtract' }),
             ],
             { name: 'Mascot', merge: true, style: ink('#ffffff') },
           ),
@@ -340,21 +373,38 @@ export const LAB_TEMPLATES: Template[] = [
   },
   {
     name: 'Weather icon',
-    hint: 'A sunny app icon: a smiling sun peeking over a cloud',
+    hint: 'A smiling sun behind a cloud and a cartoon OK hand, on an app tile',
     category: 'Icon',
     make: () => {
-      const bg = solid('#000000', { tile: tile(fill('solid', '#0a5cff')) });
+      const blue = '#0a5cff';
+      const bg = solid('#000000', { tile: tile({ ...fill('linear', '#1f6bff', '#0a4fe6'), angle: 180 }) });
       applyIconTarget(bg, 'macos');
       const s = 1080 * (824 / 1024);
+      const glove = { ...ink('#ffffff'), stroke: { width: 9, color: blue, align: 'outside' as const, opacity: 1 } };
       return project(
         'Weather icon',
         [
           group(
             [
-              symbolLayer('circle', 300, { x: -150, y: 100, name: 'Sun', style: ink('#ffc21a') }),
-              symbolLayer('pill', 70, { x: -190, y: 60, name: 'Eye', style: ink('#0a0a0a') }, { aspect: 0.42 }),
-              symbolLayer('pill', 70, { x: -120, y: 60, name: 'Eye', style: ink('#0a0a0a') }, { aspect: 0.42 }),
-              symbolLayer('cloud', 640, { x: -60, y: 300, name: 'Cloud', style: ink('#ffffff') }, { puffs: 3, seed: 2 }),
+              symbolLayer('circle', 382, { x: -176, y: 163, name: 'Sun', style: ink('#ffc21a') }),
+              symbolLayer('pill', 88, { x: -210, y: 112, name: 'Eye', style: ink('#0a0a0a') }, { aspect: 0.34 }),
+              symbolLayer('pill', 88, { x: -112, y: 112, name: 'Eye', style: ink('#0a0a0a') }, { aspect: 0.34 }),
+              pen('M131 360C142 230 160 100 165 -14', 'Arm', ink('#0a0a0a'), 52, 'butt'),
+              symbolLayer('circle', 196, { x: 222, y: -96, name: 'Palm', style: ink('#ffffff') }),
+              pen('M110 -112L182 -100', 'Index', glove, 52),
+              pen('M176 -170L158 -350', 'Middle finger', glove, 58),
+              pen('M238 -160L276 -326', 'Ring finger', glove, 58),
+              pen('M292 -128L360 -246', 'Little finger', glove, 52),
+              symbolLayer('ring', 150, { x: 64, y: -132, name: 'Thumb and index', style: glove }, { thickness: 0.24 }),
+              group(
+                [
+                  symbolLayer('circle', 296, { x: -326, y: 269, name: 'Puff' }),
+                  symbolLayer('circle', 262, { x: -112, y: 301, name: 'Puff' }),
+                  symbolLayer('circle', 212, { x: 131, y: 365, name: 'Puff' }),
+                  symbolLayer('roundRect', 640, { x: -132, y: 420, name: 'Base' }, { radius: 0, aspect: 6 }),
+                ],
+                { name: 'Cloud', merge: true, style: ink('#ffffff') },
+              ),
               symbolLayer('squircle', s, { op: 'intersect', name: 'Tile mask' }, { exponent: 5, aspect: 1 }),
             ],
             { name: 'Icon art' },

@@ -196,14 +196,14 @@ try {
   await openTemplate('Glow glass');
   await page.mouse.click(vb.x + vb.width / 2, vb.y + vb.height / 2 - 40);
   await page.keyboard.press(`Shift+${mod}+b`);
-  await settle(900);
+  await until((st) => st.project.layers[0]?.type === 'group');
   s = await state();
   const g = s.project.layers[0];
   check(g.type === 'group' && g.children.length === 3, `break apart "lab" gives 3 letters (${g.children?.length})`);
   await page.keyboard.press('Escape');
   await openTemplate('Neon script');
   await page.locator('.row', { hasText: 'Night' }).click();
-  await page.keyboard.press('p');
+  await page.keyboard.press('Shift+p');
   await settle(900);
   check((await page.locator('.pe-node').count()) > 20, 'edit points shows the outline nodes');
   s = await state();
@@ -352,6 +352,77 @@ try {
   await settle(800);
   await page.screenshot({ path: path.join(out, 'new-01-draw-photo-construction.png') });
 
+  // ---- pen, colour tracing and references ----
+  await page.evaluate(() => window.morphotype.store.set({ selection: [] }));
+  await page.keyboard.press('p');
+  {
+    const cx = vb.x + vb.width / 2;
+    const cy = vb.y + vb.height / 2;
+    await page.mouse.click(cx - 180, cy - 60);
+    await page.mouse.move(cx, cy - 160);
+    await page.mouse.down();
+    await page.mouse.move(cx + 110, cy - 160, { steps: 4 });
+    await page.mouse.up();
+    await page.mouse.click(cx + 180, cy - 40);
+    await page.keyboard.press('Enter');
+    await page.mouse.click(cx - 120, cy + 80);
+    await page.mouse.click(cx + 120, cy + 80);
+    await page.mouse.click(cx, cy + 220);
+    await page.mouse.click(cx - 120, cy + 80);
+  }
+  check(await until((st) => { const ls = layersOf(st); return ls.some((l) => l.content?.type === 'line' && !/Z/.test(l.content.d)) && ls.some((l) => l.name === 'Shape' && l.content?.type === 'path'); }), 'the pen draws open lines and closed shapes');
+  await settle();
+  s = await state();
+  check(!(s.build?.layers ?? []).some((l) => l.error), 'pen layers build without errors');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 400;
+    c.height = 400;
+    const x = c.getContext('2d');
+    x.fillStyle = '#ffffff';
+    x.fillRect(0, 0, 400, 400);
+    x.fillStyle = '#0a5cff';
+    x.fillRect(40, 40, 320, 320);
+    x.fillStyle = '#ffc21a';
+    x.beginPath();
+    x.arc(200, 200, 90, 0, Math.PI * 2);
+    x.fill();
+    window.morphotype.store.set({ dialog: { kind: 'trace', image: x.getImageData(0, 0, 400, 400), name: 'Flat logo', target: 'layer' } });
+  });
+  await page.getByRole('radio', { name: 'Trace' }).click();
+  const inks = page.locator('.trace-controls .slider').first().locator('input').last();
+  await inks.fill('3');
+  await inks.press('Enter');
+  await settle(800);
+  await page.getByRole('button', { name: 'Add as layer' }).click();
+  check(await until((st) => st.project.layers.some((n) => n.type === 'group' && n.name === 'Flat logo vector' && n.children.length === 2)), 'colour trace makes one vector layer per ink');
+  await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 200;
+    c.height = 100;
+    const x = c.getContext('2d');
+    x.fillStyle = '#ff0000';
+    x.fillRect(0, 0, 200, 100);
+    window.morphotype.store.set({ dialog: { kind: 'trace', image: x.getImageData(0, 0, 200, 100), name: 'Ref', target: 'layer' } });
+  });
+  await page.getByRole('radio', { name: 'Reference' }).click();
+  await page.getByRole('button', { name: 'Trace over it' }).click();
+  s = await state();
+  check(s.project.layers[0]?.guide === true && s.project.layers[0].locked && s.tool === 'pen', 'a reference goes under everything, locked, with the pen on');
+  await page.keyboard.press('Escape');
+  const images = (b) => (b.toString().match(/<image /g) ?? []).length;
+  const withRef = images(await download(async () => {}, () => page.keyboard.press(`Shift+${mod}+e`)));
+  await page.evaluate(() => {
+    const st = window.morphotype.store;
+    const p = structuredClone(st.get().project);
+    p.layers[0].guide = false;
+    st.set({ project: p });
+  });
+  await settle();
+  const withoutFlag = images(await download(async () => {}, () => page.keyboard.press(`Shift+${mod}+e`)));
+  check(withoutFlag === withRef + 1, `references are left out of exports (${withRef} vs ${withoutFlag})`);
+
   // ---- depth, glass and the icon grid ----
   await openTemplate('Frosted 404');
   await page.locator('.row', { hasText: 'Caption' }).click();
@@ -435,7 +506,7 @@ try {
   s = await state();
   check(layersOf(s).some((l) => l.content?.font?.startsWith('custom-')), 'a text layer is set in the new font');
 } catch (e) {
-  errors.push(`crashed: ${e.message.split('\n')[0]}`);
+  errors.push(`crashed: ${e.message.split('\n').slice(0, 12).join(' / ')}`);
   const pages = browser.contexts().flatMap((c) => c.pages());
   if (pages[0]) await pages[0].screenshot({ path: path.join(out, 'failure.png') }).catch(() => {});
 } finally {
