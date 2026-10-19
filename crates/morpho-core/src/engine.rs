@@ -257,6 +257,34 @@ pub struct RenderOut {
     pub d: String,
     pub bbox: Option<[f64; 4]>,
     pub points: usize,
+    /// For a single pen line: its centre line as `[x, y, t, joined]` per point,
+    /// `t` the distance along the whole line (0…1) and `joined` 1 where a
+    /// segment runs from the previous point. Lets materials colour along it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spine: Option<Vec<f32>>,
+}
+
+/// Flatten centre lines into `[x, y, t, joined]` quads, at most ~384 points.
+fn spine_out(lines: &[Vec<Pt>]) -> Vec<f32> {
+    let total: f64 = lines.iter().map(|l| l.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>()).sum::<f64>().max(1e-9);
+    let n: usize = lines.iter().map(|l| l.len()).sum();
+    let stride = n.div_ceil(384).max(1);
+    let mut out = Vec::new();
+    let mut acc = 0.0;
+    for l in lines {
+        let mut prev: Option<Pt> = None;
+        for (i, &p) in l.iter().enumerate() {
+            if let Some(q) = prev {
+                acc += q.dist(p);
+            }
+            let keep = i % stride == 0 || i + 1 == l.len();
+            if keep {
+                out.extend_from_slice(&[p.x as f32, p.y as f32, (acc / total) as f32, if i == 0 { 0.0 } else { 1.0 }]);
+            }
+            prev = Some(p);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Serialize)]
@@ -358,10 +386,15 @@ pub struct TextLayout {
     pub cap: f64,
 }
 
+/// Centre lines of single-line renders, by render id.
+type Spines = HashMap<String, Vec<Vec<Pt>>>;
+
 struct Local {
     geo: Geo,
     em: f64,
     frames: Vec<(String, Rect)>,
+    /// A pen line's centre lines (after squiggles), for colour along the line.
+    spine: Option<Vec<Vec<Pt>>>,
 }
 
 fn rect_arr(r: Rect) -> Option<[f64; 4]> {
@@ -675,6 +708,7 @@ impl Engine {
             return Ok(g.clone());
         }
         let em = layer.em();
+        let mut spine: Option<Vec<Vec<Pt>>> = None;
         let (geo, em) = match &layer.content {
             Content::Text { text, font, size, tracking, line_height, align, axes, morph, ligatures } => {
                 let mut g = self.text_geo(text, font, axes, *tracking, *line_height, *align, morph.as_ref(), *ligatures)?;
@@ -721,6 +755,13 @@ impl Engine {
                         .collect();
                 }
                 // At most ~2 px cells: coarser fields show as steps along long lines.
+                spine = Some(lines.iter().map(|(l, closed)| {
+                    let mut l = l.clone();
+                    if *closed && l.first().zip(l.last()).is_some_and(|(a, b)| a.dist(*b) > 1e-9) {
+                        l.push(l[0]);
+                    }
+                    l
+                }).collect());
                 let cell = ((em + width.abs()) / quality.clamp(24.0, 1024.0) * 0.5).min(2.0 * 120.0 / quality.clamp(24.0, 1024.0)).max(0.05);
                 (Geo::poly_only(crate::stroke::polylines_capped(&lines, *width, cell, *cap)), em)
             }
@@ -748,7 +789,9 @@ impl Engine {
         };
         let mut frames = Vec::new();
         let geo = apply_all_frames(geo, &layer.modifiers, &Ctx { em, quality }, &mut frames);
-        let out = Rc::new(Local { geo, em, frames });
+        // Warps would bend the outline away from the centre line: no spine then.
+        let spine = if layer.modifiers.iter().any(|m| m.on) { None } else { spine };
+        let out = Rc::new(Local { geo, em, frames, spine });
         if self.layers.len() > 256 {
             self.layers.clear();
         }
@@ -759,8 +802,16 @@ impl Engine {
     /// Build every layer, then every render. Returns each render's geometry
     /// (with the smallest member em, for curve fitting) plus per-layer info.
     pub fn build_scene(&mut self, doc: &Document) -> (Vec<(String, Geo, f64)>, Vec<LayerOut>) {
+        let (r, l, _) = self.build_scene_spines(doc);
+        (r, l)
+    }
+
+    /// [`Engine::build_scene`] plus, per render made of a single pen line, its
+    /// centre lines in document coordinates.
+    fn build_scene_spines(&mut self, doc: &Document) -> (Vec<(String, Geo, f64)>, Vec<LayerOut>, Spines) {
         let quality = doc.quality.unwrap_or(PREVIEW_QUALITY).clamp(24.0, 1024.0);
         let mut built: HashMap<&str, (Geo, f64)> = HashMap::new();
+        let mut layer_spines: HashMap<&str, Vec<Vec<Pt>>> = HashMap::new();
         let mut outs = Vec::with_capacity(doc.layers.len());
         for layer in &doc.layers {
             let mut out = LayerOut { id: layer.id.clone(), bbox: None, error: None, d: None, local: None, frames: Vec::new() };
@@ -775,6 +826,9 @@ impl Engine {
                         out.d = Some(svg::poly_d(&g.poly, 1));
                         out.frames = local.frames.iter().filter_map(|(uid, r)| rect_arr(*r).map(|b| FrameOut { uid: uid.clone(), bbox: b })).collect();
                         built.insert(layer.id.as_str(), (g, local.em * layer.scale_em()));
+                        if let Some(sp) = &local.spine {
+                            layer_spines.insert(layer.id.as_str(), sp.iter().map(|l| l.iter().map(|p| m.apply(*p)).collect()).collect());
+                        }
                     }
                     Err(e) => out.error = Some(e),
                 }
@@ -791,7 +845,13 @@ impl Engine {
         };
         let ops: HashMap<&str, Op> = doc.layers.iter().map(|l| (l.id.as_str(), l.op)).collect();
         let mut renders = Vec::with_capacity(specs.len());
+        let mut spines = HashMap::new();
         for spec in specs {
+            if let ([only], false) = (&spec.members[..], spec.modifiers.iter().any(|m| m.on)) {
+                if let Some(sp) = layer_spines.get(only.id()) {
+                    spines.insert(spec.id.clone(), sp.clone());
+                }
+            }
             let mut acc = Geo { poly: Shape::default(), curves: Some(Vec::new()) };
             let mut min_em = f64::INFINITY;
             let mut first_em = None;
@@ -826,11 +886,11 @@ impl Engine {
             }
             renders.push((spec.id.clone(), acc, min_em));
         }
-        (renders, outs)
+        (renders, outs, spines)
     }
 
     pub fn build(&mut self, doc: &Document) -> BuildOut {
-        let (renders, layers) = self.build_scene(doc);
+        let (renders, layers, spines) = self.build_scene_spines(doc);
         let mut bbox = Rect::EMPTY;
         let mut points = 0;
         let renders = renders
@@ -839,7 +899,8 @@ impl Engine {
                 let b = geo.poly.bbox();
                 bbox = bbox.union(&b);
                 points += geo.poly.point_count();
-                RenderOut { id, d: svg::poly_d(&geo.poly, 2), bbox: rect_arr(b), points: geo.poly.point_count() }
+                let spine = spines.get(&id).map(|sp| spine_out(sp));
+                RenderOut { id, d: svg::poly_d(&geo.poly, 2), bbox: rect_arr(b), points: geo.poly.point_count(), spine }
             })
             .collect();
         BuildOut { renders, bbox: rect_arr(bbox), layers, points }
@@ -1760,5 +1821,20 @@ mod tests {
         let out = e.build(&doc(&format!(r#"{{"layers":[{{"id":"p","content":{{"type":"path","d":"{}","size":100}}}}]}}"#, t.d)));
         let b = out.bbox.unwrap();
         assert!((b[2] - b[0] - 100.0).abs() < 3.0, "{b:?}");
+    }
+
+    #[test]
+    fn squiggled_line_reports_its_spine() {
+        let mut e = engine();
+        let line = r#"{"type":"line","d":"M-1 0L1 0","size":100,"width":10,"cap":"butt","squiggle":{"kind":"zigzag","amplitude":20,"spacing":25}}"#;
+        let out = e.build(&doc(&format!(r#"{{"layers":[{{"id":"l","content":{}}}]}}"#, line)));
+        let r = &out.renders[0];
+        let sp = r.spine.as_ref().expect("a single pen line has a spine");
+        // [x, y, t, joined] quads, t running 0 → 1 along the zigzag.
+        assert_eq!(sp.len() % 4, 0);
+        assert_eq!(sp[2], 0.0);
+        assert!((sp[sp.len() - 2] - 1.0).abs() < 1e-5);
+        let b = r.bbox.unwrap();
+        assert!(b[3] - b[1] > 45.0, "zigzag spans ±amplitude: {b:?}");
     }
 }

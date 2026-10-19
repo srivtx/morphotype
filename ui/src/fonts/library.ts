@@ -25,6 +25,7 @@ export const BUNDLED: { id: string; file: string }[] = [
   { id: 'bricolage', file: 'BricolageGrotesque-Variable.woff' },
   { id: 'caveat', file: 'Caveat-Variable.woff' },
   { id: 'caveat-brush', file: 'CaveatBrush-Regular.woff' },
+  { id: 'anton', file: 'Anton-Regular.woff' },
 ];
 
 /** Make the font usable in CSS (for previews in menus) as "mt-<id>". */

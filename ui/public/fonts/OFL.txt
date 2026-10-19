@@ -13,6 +13,7 @@ Bundled fonts — all licensed under the SIL Open Font License 1.1 (full text be
 * Copyright 2023 The Young Serif Project Authors (https://github.com/noirblancrouge/YoungSerif)
 * Copyright 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage)
 * Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat) (Caveat and Caveat Brush)
+* Copyright 2020 The Anton Project Authors (https://github.com/googlefonts/AntonFont)
 
 Files are the Latin subsets distributed by Fontsource (https://fontsource.org).
 Young Serif, Bricolage Grotesque, Caveat and Caveat Brush are Latin subsets of the Google Fonts

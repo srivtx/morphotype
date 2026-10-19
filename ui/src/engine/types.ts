@@ -191,6 +191,8 @@ export interface RenderOut {
   d: string;
   bbox: Box | null;
   points: number;
+  /** A single pen line's centre line: `[x, y, t, joined]` per point (t 0…1 along it). */
+  spine?: number[];
 }
 
 export interface BuildOut {

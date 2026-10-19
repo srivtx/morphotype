@@ -75,11 +75,13 @@ export interface SceneItem {
   clipD?: string | null;
   /** Reference layers draw on the canvas but not in exports or previews. */
   guide?: boolean;
+  /** A pen line's centre line, for materials that colour along it. */
+  spine?: number[] | null;
 }
 
 /** The scene item for one built object and its style. */
-export function sceneItem(id: string, out: { d: string; bbox: Box | null }, st: Style, guide?: boolean, clipD?: string | null): SceneItem {
-  return { id, d: out.d, bbox: out.bbox, clipD, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, soften: st.soften, guide };
+export function sceneItem(id: string, out: { d: string; bbox: Box | null; spine?: number[] }, st: Style, guide?: boolean, clipD?: string | null): SceneItem {
+  return { id, d: out.d, bbox: out.bbox, clipD, spine: out.spine ?? null, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, soften: st.soften, guide };
 }
 
 interface Field {
@@ -110,6 +112,8 @@ interface Obj {
   fieldKey: string;
   heightKey: string;
   region: Region | null;
+  /** Uploaded centre line and the array it came from. */
+  spine: { tex: WebGLTexture; n: number; src: number[] } | null;
 }
 
 /**
@@ -220,7 +224,7 @@ export class Renderer {
         prev.item = item;
         next.push(prev);
       } else {
-        next.push({ item, path: item.d ? new Path2D(item.d) : null, clipPath: item.clipD ? new Path2D(item.clipD) : null, field: null, fieldKey: '', heightKey: '', region: null });
+        next.push({ item, path: item.d ? new Path2D(item.d) : null, clipPath: item.clipD ? new Path2D(item.clipD) : null, field: null, fieldKey: '', heightKey: '', region: null, spine: null });
       }
     }
     for (const o of old.values()) this.freeField(o);
@@ -324,6 +328,10 @@ export class Renderer {
   private bdBlur: WebGLTexture | null = null;
 
   private freeField(o: Obj) {
+    if (o.spine) {
+      this.gl.deleteTexture(o.spine.tex);
+      o.spine = null;
+    }
     const f = o.field;
     if (!f) return;
     const gl = this.gl;
@@ -332,6 +340,20 @@ export class Renderer {
     for (const t of [f.sdf, f.heightA, f.heightB]) freeTarget(gl, t);
     o.field = null;
     o.fieldKey = '';
+  }
+
+  /** The object's centre line as a 1-row float texture (re-uploaded when it changes). */
+  private spineTexture(o: Obj) {
+    const src = o.item.spine;
+    if (!src || src.length < 8) return null;
+    if (o.spine && o.spine.src === src) return o.spine;
+    const gl = this.gl;
+    const n = Math.min(src.length >> 2, Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number, 4096));
+    if (o.spine) gl.deleteTexture(o.spine.tex);
+    const tex = texture(gl, n, 1, formats(gl).rgba32f);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, 1, gl.RGBA, gl.FLOAT, new Float32Array(src.slice(0, n * 4)));
+    o.spine = { tex, n, src };
+    return o.spine;
   }
 
   private ensureSeeds(w: number, h: number) {
@@ -566,7 +588,9 @@ export class Renderer {
         gl.useProgram(p.prog);
         const pic = o.item.effect.photo ? String(o.item.params.image ?? '') : '';
         const photo = pic ? this.photoTexture(pic) : null;
+        const sp = o.item.effect.spine ? this.spineTexture(o) : null;
         bindTextures(gl, p, {
+          ...(o.item.effect.spine ? { u_spine: sp?.tex ?? o.field.mask } : {}),
           u_mask: o.field.mask,
           u_sdf: o.field.sdf.tex,
           u_height: o.field.heightA.tex,
@@ -576,6 +600,7 @@ export class Renderer {
         });
         const meta = imageAsset(pic);
         setUniforms(gl, p, {
+          ...(o.item.effect.spine ? { u_spineN: sp?.n ?? 0 } : {}),
           ...this.effectUniforms(o),
           u_rect: rectOf(o.region),
           u_hasClip: o.field.clip ? 1 : 0,

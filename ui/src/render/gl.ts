@@ -65,6 +65,7 @@ export interface Format {
 export function formats(gl: WebGL2RenderingContext) {
   return {
     rg32f: { internal: gl.RG32F, format: gl.RG, type: gl.FLOAT, filter: gl.NEAREST },
+    rgba32f: { internal: gl.RGBA32F, format: gl.RGBA, type: gl.FLOAT, filter: gl.NEAREST },
     r16f: { internal: gl.R16F, format: gl.RED, type: gl.HALF_FLOAT, filter: gl.LINEAR },
     rgba8: { internal: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE, filter: gl.LINEAR },
     // Copies of the screen (whose default framebuffer has no alpha channel).

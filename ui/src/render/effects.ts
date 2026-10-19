@@ -36,6 +36,12 @@ export interface EffectDef {
    * `u_backdropBlur`. Read them with `behind(uv)` and `behindBlur(uv)`.
    */
   backdrop?: boolean;
+  /**
+   * Reads a pen line's centre line (bound as `u_spine`, `u_spineN` points of
+   * x, y, t, joined in artboard px from the centre); `alongLine(uv, side)`
+   * returns how far along the line (0…1) a pixel lies.
+   */
+  spine?: boolean;
 }
 
 const num = (key: string, label: string, min: number, max: number, step: number, def: number, advanced = false): ParamDef => ({
@@ -586,6 +592,8 @@ const flat: EffectDef = {
     num('gradX', 'Radial centre X', -1, 1, 0.01, 0, true),
     num('gradY', 'Radial centre Y', -1, 1, 0.01, 0, true),
     num('gradSize', 'Radial size', 0.05, 3, 0.01, 1, true),
+    num('gradStart', 'Gradient starts', 0, 1, 0.005, 0, true),
+    num('gradEnd', 'Gradient ends', 0, 1, 0.005, 1, true),
     num('outline', 'Outline', 0, 60, 0.5, 0),
     col('outlineColor', 'Outline colour', '#ff5a1f'),
     num('shadowOpacity', 'Shadow', 0, 1, 0.01, 0),
@@ -598,7 +606,7 @@ const flat: EffectDef = {
   reach: (p) => n(p, 'outline') + Math.max(Math.abs(n(p, 'shadowX')), Math.abs(n(p, 'shadowY'))) + n(p, 'shadowBlur') * 2,
   glsl: /* glsl */ `
 uniform vec3 u_fill, u_fill2, u_outlineColor, u_shadowColor;
-uniform float u_gradient, u_angle, u_gradType, u_gradX, u_gradY, u_gradSize, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture;
+uniform float u_gradient, u_angle, u_gradType, u_gradX, u_gradY, u_gradSize, u_gradStart, u_gradEnd, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture;
 vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   // Blur 0 gives a hard offset shadow, as in flat "neo-brutalist" graphics.
@@ -613,6 +621,8 @@ vec4 effect(vec2 uv) {
   float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(a), -cos(a))) + 0.5, 0.0, 1.0);
   // Radial: 0 at the centre, 1 on an ellipse fitted to the box (× size).
   if (u_gradType > 0.5) g = clamp(length((boxUv(uv) - 0.5 - 0.5 * vec2(u_gradX, u_gradY)) * 2.0) / max(u_gradSize, 0.01), 0.0, 1.0);
+  // The ramp can run over just part of the shape (a highlight cap, a fade at the bottom).
+  g = clamp((g - u_gradStart) / max(u_gradEnd - u_gradStart, 1e-3), 0.0, 1.0);
   vec3 colr = mix(u_fill, u_fill2, g * u_gradient);
   if (u_texture > 0.0) {
     // Ink on paper: soft blotches, fibres and a slightly worn edge.
@@ -1537,6 +1547,88 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
+const ribbon: EffectDef = {
+  id: 'ribbon',
+  name: 'Ribbon',
+  description: 'Colour that flows along a pen line, from one end to the other, with tube shading and a gloss — for ribbons, cords and neon tubes. Other shapes blend left to right.',
+  spine: true,
+  params: [
+    col('c1', 'Start', '#ff8a1f'),
+    col('c2', 'Colour 2', '#ff4f7a'),
+    col('c3', 'Colour 3', '#b98cff'),
+    col('c4', 'Colour 4', '#3b8cff'),
+    col('c5', 'End', '#bfe3ff'),
+    num('stop2', 'Colour 2 at', 0, 1, 0.01, 0.25),
+    num('stop3', 'Colour 3 at', 0, 1, 0.01, 0.5),
+    num('stop4', 'Colour 4 at', 0, 1, 0.01, 0.75),
+    num('shade', 'Tube shading', 0, 1, 0.01, 0.35),
+    num('gloss', 'Gloss', 0, 1, 0.01, 0.3),
+    num('lightAngle', 'Light angle', -180, 180, 1, -60),
+    num('twist', 'Twists', 0, 12, 0.5, 0),
+    num('fade', 'Fade out', 0, 1, 0.01, 0),
+    num('fadeStart', 'Fade from', 0, 1, 0.01, 0.8, true),
+  ],
+  reach: () => 2,
+  glsl: /* glsl */ `
+uniform sampler2D u_spine;
+uniform float u_spineN;
+uniform vec3 u_c1, u_c2, u_c3, u_c4, u_c5;
+uniform float u_stop2, u_stop3, u_stop4, u_shade, u_gloss, u_lightAngle, u_twist, u_fade, u_fadeStart;
+/** How far along the pen line (0…1) the nearest point is; also its distance and the line's direction there. */
+float alongLine(vec2 p, out float dist, out vec2 dir, out float side) {
+  float best = 1e20, t = 0.0;
+  dir = vec2(1.0, 0.0);
+  side = 1.0;
+  vec4 a = texelFetch(u_spine, ivec2(0, 0), 0);
+  for (int i = 1; i < 4096; i++) {
+    if (float(i) >= u_spineN) break;
+    vec4 b = texelFetch(u_spine, ivec2(i, 0), 0);
+    if (b.w > 0.5) {
+      vec2 ab = b.xy - a.xy;
+      float l2 = max(dot(ab, ab), 1e-9);
+      float u = clamp(dot(p - a.xy, ab) / l2, 0.0, 1.0);
+      vec2 q = p - (a.xy + ab * u);
+      float d = dot(q, q);
+      if (d < best) { best = d; t = mix(a.z, b.z, u); dir = ab / sqrt(l2); side = sign(ab.x * q.y - ab.y * q.x); }
+    }
+    a = b;
+  }
+  dist = sqrt(best);
+  return t;
+}
+vec3 ramp5(float t) {
+  float s2 = max(u_stop2, 1e-3), s3 = max(u_stop3, s2 + 1e-3), s4 = max(u_stop4, s3 + 1e-3);
+  if (t < s2) return mix(u_c1, u_c2, t / s2);
+  if (t < s3) return mix(u_c2, u_c3, (t - s2) / (s3 - s2));
+  if (t < s4) return mix(u_c3, u_c4, (t - s3) / (s4 - s3));
+  return mix(u_c4, u_c5, clamp((t - s4) / max(1.0 - s4, 1e-3), 0.0, 1.0));
+}
+vec4 effect(vec2 uv) {
+  float sd = sdfPx(uv);
+  float cov = cover(sd);
+  if (cov <= 0.0) return vec4(0.0);
+  float dist, side, t;
+  vec2 dir;
+  if (u_spineN >= 2.0) {
+    t = alongLine(artPx(uv) - u_art * 0.5, dist, dir, side);
+  } else {
+    t = boxUv(uv).x; dist = 0.0; dir = vec2(1.0, 0.0); side = 1.0;
+  }
+  // Across the tube: −1 … 1 from one edge to the other (half width = centre to edge).
+  float half_ = max(dist - sd / u_k, 1e-3);
+  float across = clamp(side * dist / half_, -1.0, 1.0) * cos(3.14159265 * u_twist * t);
+  vec3 n = normalize(vec3(vec2(-dir.y, dir.x) * across, sqrt(max(1.0 - across * across, 0.0)) + 0.15));
+  float la = radians(u_lightAngle);
+  vec3 L = normalize(vec3(cos(la), sin(la), 1.1));
+  float diff = max(dot(n, L), 0.0);
+  vec3 col = ramp5(t) * mix(1.0, 0.62 + 0.5 * diff, u_shade);
+  vec3 h = normalize(L + vec3(0.0, 0.0, 1.0));
+  col += u_gloss * pow(max(dot(n, h), 0.0), 24.0);
+  float a = cov * (1.0 - u_fade * smoothstep(u_fadeStart, 1.0, t));
+  return vec4(min(col, 1.0) * a, a);
+}`,
+};
+
 const keycap: EffectDef = {
   id: 'keycap',
   name: 'Keycap',
@@ -1688,7 +1780,7 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic, keycap, patternFx];
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic, keycap, patternFx, ribbon];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;
@@ -1768,6 +1860,14 @@ export const PRESETS: Preset[] = [
   { name: 'Prism lens', effect: 'lens', params: { dispersion: 1.2, iridescence: 1.1, refraction: 0.9, magnify: 0.1 }, bg: '#000000', tags: 'glass crystal rainbow iridescent cube' },
   { name: 'Magnifier drop', effect: 'lens', params: { refraction: 1.3, dispersion: 2, magnify: 0.3, edgeBend: 0.7, iridescence: 0, highlight: 0, film: 0.85, rim: 0.4, blur: 1, bevel: 130, softness: 50, tintAmount: 0 }, bg: '#eef0f0', tags: 'glass lens drop water magnify chromatic aberration' },
   { name: 'Crystal block', effect: 'lens', params: { chamfer: 1, bevel: 50, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.35, rainbow: 1.6, rainbowWidth: 0.7, rainbowShift: 0.3, thickness: 1, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }, bg: '#000000', tags: 'glass crystal cube prism rainbow facets chamfer' },
+  { name: 'Sunburst', effect: 'pattern', params: { kind: 4, ink: '#111111', paper: '#ff5a1f', rays: 24, weight: 0.5 }, bg: '#000000', tags: 'pattern rays radial stripes retro' },
+  { name: 'Truchet', effect: 'pattern', params: { kind: 8, ink: '#111111', paper: '#ffb703', scale: 36, weight: 0.22 }, bg: '#000000', tags: 'pattern maze arcs tiles generative' },
+  { name: 'Houndstooth', effect: 'pattern', params: { kind: 10, ink: '#111111', paper: '#f4f1ea', scale: 40 }, bg: '#000000', tags: 'pattern fabric tweed check' },
+  { name: 'Op-art', effect: 'pattern', params: { kind: 11, ink: '#111111', paper: '#f4f1ea', scale: 18, weight: 0.5, amount: 0.7, rays: 60 }, bg: '#000000', tags: 'pattern stripes bulge illusion warp' },
+  { name: 'Memphis', effect: 'pattern', params: { kind: 17, ink: '#ff5a1f', paper: '#f4f1ea', scale: 56, weight: 0.6 }, bg: '#000000', tags: 'pattern squiggles confetti 80s' },
+  { name: 'Gingham', effect: 'pattern', params: { kind: 19, ink: '#d62b2b', paper: '#f4f1ea', scale: 40, weight: 0.5 }, bg: '#000000', tags: 'pattern picnic check fabric' },
+  { name: 'Ribbon', effect: 'ribbon', params: {}, bg: '#ffffff', tags: 'gradient along line colour flow neon tube cord' },
+  { name: 'Sunset ribbon', effect: 'ribbon', params: { c1: '#ff960f', c2: '#fe517b', c3: '#fea0b6', c4: '#12a7fe', c5: '#bfe3ff', stop2: 0.29, stop3: 0.46, stop4: 0.7, shade: 0.12, gloss: 0.04 }, bg: '#ffffff', tags: 'gradient along line ribbon app icon' },
   { name: 'Thermal', effect: 'thermal', params: {}, bg: '#e8133c', tags: 'heat camera infrared map' },
   { name: 'Hot core', effect: 'thermal', params: { invert: 1, glowAmount: 0.6 }, bg: '#0b1a8f', tags: 'heat thermal' },
   { name: 'Prism light', effect: 'prism', params: {}, bg: '#000000', tags: 'rainbow streaks light rays spectrum' },

@@ -221,7 +221,20 @@ pub fn polylines_capped(lines: &[(Vec<Pt>, bool)], width: f64, cell: f64, cap: L
         match l.len() {
             0 => {}
             1 => seg(l[0], l[0], false, false),
-            n => {
+            _ => {
+                // A flat end is cut across its own segment only; if that segment is
+                // shorter than the radius, the round join after it would bulge past
+                // the end. Merge such tiny end segments (flattened curves have many).
+                let mut l = l.clone();
+                if butt && !closed {
+                    while l.len() > 2 && l[0].dist(l[1]) < r {
+                        l.remove(1);
+                    }
+                    while l.len() > 2 && l[l.len() - 1].dist(l[l.len() - 2]) < r {
+                        l.remove(l.len() - 2);
+                    }
+                }
+                let n = l.len();
                 for (k, w) in l.windows(2).enumerate() {
                     let open = butt && !closed;
                     seg(w[0], w[1], open && k == 0, open && k == n - 2);
