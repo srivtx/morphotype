@@ -10,6 +10,7 @@ import { edit, redo, select, setSettings, store, toast, undo } from '../state/st
 import { ancestors } from '../state/tree';
 import { goHome } from './projects';
 import {
+  addEmptyLayer,
   addIconGrid,
   addShape,
   alignSelected,
@@ -133,6 +134,7 @@ export function commands(): Command[] {
       (k): Command => ({ id: `add-${k}`, title: `Add ${SYMBOL_UI[k].label.toLowerCase()}`, group: 'Add', icon: 'shapes', keywords: `shape symbol ${SYMBOL_UI[k].group}`, run: () => addShape(symbolLayer(k)) }),
     ),
     // Object
+    { id: 'new-layer', title: 'New empty layer', group: 'Arrange', icon: 'plus', keys: ['shift+mod+n'], keywords: 'blank transparent layer folder draw into', when: () => store.get().mode === 'design', run: addEmptyLayer },
     { id: 'group', title: 'Group', group: 'Arrange', icon: 'group', keys: ['mod+g'], when: hasSel, run: () => groupSelected(false) },
     { id: 'merge', title: 'Merge into one shape', group: 'Arrange', icon: 'merge', keys: ['shift+mod+m'], keywords: 'union boolean combine weld', when: hasSel, run: () => groupSelected(true) },
     { id: 'ungroup', title: 'Ungroup', group: 'Arrange', icon: 'ungroup', keys: ['shift+mod+g'], when: () => selectedNodes().some(isGroup), run: ungroupSelected },

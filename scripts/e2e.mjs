@@ -55,10 +55,16 @@ try {
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(out, '00-home.png') });
   check((await page.locator('.home-start').count()) === 1, 'Home opens at launch with new design and font');
+  await page.locator('.home-page').getByRole('radio', { name: 'Clear' }).click();
   await page.locator('.home-sizes .chip', { hasText: 'Portrait' }).click();
   await page.waitForSelector('.stat', { timeout: 30_000 });
   let st0 = await state();
   check(st0.screen === 'editor' && st0.projectId && st0.project.canvas.height === 1350 && st0.project.layers.length === 0, 'a portrait design starts blank with its own id');
+  check(st0.project.background.fill.kind === 'none', 'a design can start on a transparent page');
+  await page.locator('.empty-start-page').getByRole('radio', { name: 'White' }).click();
+  await page.waitForTimeout(300);
+  st0 = await state();
+  check(st0.project.background.fill.kind === 'solid' && st0.settings.newPage === 'white', 'the start panel switches the page back to white');
   await page.keyboard.press('o');
   await page.waitForTimeout(1500);
   await page.locator('.home-btn').click();
@@ -69,7 +75,7 @@ try {
   await page.locator('.home-card-open').first().click();
   await page.waitForSelector('.stat', { timeout: 10_000 });
   const st1 = await state();
-  check(st1.projectId === st0.projectId && st1.project.layers.length === 1 && st1.past.length === 1, 'back from Home: the same design, undo history kept');
+  check(st1.projectId === st0.projectId && st1.project.layers.length === 1 && st1.past.length === 2, 'back from Home: the same design, undo history kept (page + shape)');
   // A reload must bring it back from the library.
   await page.reload();
   await page.waitForSelector('.home-card', { timeout: 30_000 });
@@ -375,6 +381,20 @@ try {
   s = await state();
   check(!(s.build?.layers ?? []).some((l) => l.error), 'pen layers build without errors');
   await page.keyboard.press('Escape');
+  // An empty layer: what the pen draws next goes inside it.
+  await page.keyboard.press(`Shift+${mod}+n`);
+  check(await until((st) => st.project.layers.some((n) => n.type === 'group' && /^Layer \d+$/.test(n.name) && n.children.length === 0)), 'an empty layer can be added');
+  await page.keyboard.press('p');
+  {
+    const cx = vb.x + vb.width / 2;
+    const cy = vb.y + vb.height / 2;
+    await page.mouse.click(cx - 200, cy + 260);
+    await page.mouse.click(cx + 200, cy + 260);
+    await page.keyboard.press('Enter');
+  }
+  check(await until((st) => st.project.layers.some((n) => n.type === 'group' && /^Layer \d+$/.test(n.name) && n.children.some((c) => c.content?.type === 'line'))), 'the pen draws into the selected empty layer');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => window.morphotype.store.set({ selection: [] }));
   await page.evaluate(() => {
     const c = document.createElement('canvas');
     c.width = 400;

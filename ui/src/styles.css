@@ -3860,3 +3860,7 @@ button.home-new:hover,
 .pixel-preview.smooth {
   image-rendering: auto;
 }
+
+/* Page choice for new designs (Home and the empty-artboard start panel). */
+.home-page { display: inline-flex; align-items: center; margin-right: 4px; }
+.empty-start-page { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; }

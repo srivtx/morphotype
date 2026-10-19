@@ -886,21 +886,42 @@ const lens: EffectDef = {
   backdrop: true,
   params: [
     num('refraction', 'Refraction', 0, 2, 0.01, 0.7),
-    num('dispersion', 'Colour split', 0, 1.5, 0.01, 0.6),
+    num('dispersion', 'Colour split', 0, 2, 0.01, 0.6),
     num('magnify', 'Magnify', -1, 1, 0.01, 0.2),
+    num('focusX', 'Focus X', -1, 1, 0.01, 0),
+    num('focusY', 'Focus Y', -1, 1, 0.01, 0),
+    num('rainbow', 'Rainbow light', 0, 2, 0.01, 0),
+    num('rainbowWidth', 'Rainbow width', 0.1, 3, 0.01, 1),
+    num('rainbowShift', 'Rainbow shift', -1, 1, 0.01, 0),
+    num('lightAngle', 'Light angle', -180, 180, 1, -130),
     num('iridescence', 'Iridescence', 0, 1.5, 0.01, 0.5),
+    num('highlight', 'Highlight', 0, 2, 0.01, 0.8),
+    num('film', 'Edge film', 0, 1, 0.01, 0),
+    num('edgeBend', 'Edge bend', 0, 2, 0.01, 0),
     num('rim', 'Rim', 0, 2, 0.01, 0.8),
     col('tint', 'Tint', '#ffffff'),
     num('tintAmount', 'Tint amount', 0, 1, 0.01, 0.03),
+    num('thickness', 'Thickness', 0, 1, 0.01, 0),
     num('blur', 'Frost', 0, 60, 0.5, 0),
-    num('bevel', 'Dome', 4, 300, 1, 70, true),
-    num('softness', 'Softness', 0, 80, 1, 10, true),
+    num('bevel', 'Dome', 4, 600, 1, 70, true),
+    num('chamfer', 'Flat facets', 0, 1, 1, 0, true),
+    num('softness', 'Smooth dome', 0, 300, 1, 10, true),
   ],
-  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
-  reach: (p) => n(p, 'refraction') * 70,
+  height: (p) => ({ profile: n(p, 'chamfer') > 0.5 ? 1 : 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  reach: (p, size) => n(p, 'refraction') * (30 + n(p, 'bevel') * 0.8) + n(p, 'thickness') * 0.75 * Math.min(size.w, size.h),
   glsl: /* glsl */ `
 uniform vec3 u_tint;
-uniform float u_refraction, u_dispersion, u_magnify, u_iridescence, u_rim, u_tintAmount;
+uniform float u_refraction, u_dispersion, u_magnify, u_focusX, u_focusY, u_iridescence, u_rim, u_tintAmount, u_thickness, u_rainbow, u_rainbowWidth, u_lightAngle, u_highlight, u_film, u_rainbowShift, u_edgeBend;
+/** Pure spectral colour, 0 = deep red … 1 = violet, fading out at both ends. */
+vec3 spectral(float t) {
+  vec3 c = clamp(abs(fract(t * 0.8 + vec3(0.0, 2.0, 1.0) / 3.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+  return c * smoothstep(0.0, 0.12, t) * smoothstep(1.0, 0.85, t);
+}
+/** Where a view ray through surface normal n lands on the back plane, depth h art px below. */
+vec2 lensShift(vec3 n, float ior, float h) {
+  vec3 t = refract(vec3(0.0, 0.0, -1.0), n, 1.0 / ior);
+  return offsetUv(t.xy / max(-t.z, 0.2) * (h + 6.0));
+}
 vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   float d = dt / u_k;
@@ -908,19 +929,97 @@ vec4 effect(vec2 uv) {
   if (cov <= 0.0) return vec4(0.0);
   vec3 n = normalAt(uv, 1.0);
   float steep = 1.0 - n.z;
-  vec2 ctr = (u_bbox.xy + u_bbox.zw) * 0.5;
-  vec2 m = ctr + (uv - ctr) * (1.0 - u_magnify * 0.6);
-  vec2 off = offsetUv(-n.xy * u_refraction * 60.0 * (0.35 + steep));
-  float sp = u_dispersion * 0.4;
-  vec3 c = vec3(behindBlur(m + off * (1.0 - sp)).r, behindBlur(m + off).g, behindBlur(m + off * (1.0 + sp)).b);
+  float la = radians(u_lightAngle);
+  vec3 L = normalize(vec3(cos(la) * 0.78, sin(la) * 0.78, 0.62));
+  // Magnify around the focus point (the middle of the shape by default).
+  vec2 ctr = (u_bbox.xy + u_bbox.zw) * 0.5 + (u_bbox.zw - u_bbox.xy) * 0.5 * vec2(u_focusX, u_focusY);
+  float zoom = 1.0 - u_magnify * 0.6;
+  vec2 box = (u_bbox.zw - u_bbox.xy) * u_region.zw;
+  vec2 m = ctr + (uv - ctr) * zoom;
+  // Physically based: the view ray enters the dome (Snell's law), then runs
+  // down to the flat back of the glass, as deep as the dome is tall there. A
+  // convex dome magnifies by itself; steep rims bend hardest.
+  // A thick block: rays through the slopes run much deeper before they leave.
+  float hArt = H(uv) * u_bevelTex / u_k + u_thickness * 0.6 * min(box.x, box.y);
+  // Edge bend: at a grazing edge the glass reflects its own inside (total
+  // internal reflection), squeezing a wide strip of it into a thin band.
+  vec2 edgeOff = vec2(0.0);
+  if (u_edgeBend > 0.0) {
+    // Steer by the smooth surface normal (the raw outline would make the band ragged).
+    vec2 e = vec2(4.0) / u_texSize;
+    vec2 g = vec2(sdfPx(uv + vec2(e.x, 0.0)) - sdfPx(uv - vec2(e.x, 0.0)), sdfPx(uv + vec2(0.0, e.y)) - sdfPx(uv - vec2(0.0, e.y)));
+    g = normalize(g + 1e-6) + n.xy * 4.0;
+    float rimW = 0.08 * min(box.x, box.y);
+    float s = clamp(1.0 + d / rimW, 0.0, 1.0);
+    edgeOff = offsetUv(-normalize(g + 1e-6) * s * s * rimW * 2.2 * u_edgeBend);
+  }
+  float ior = 1.0 + 0.5 * u_refraction;
+  // Each wavelength has its own index (Cauchy): violet bends more than red.
+  float spread = u_dispersion * 0.18;
+  vec3 c;
+  if (spread < 0.001) c = behindBlur(m + edgeOff + lensShift(n, ior, hArt)).rgb;
+  else {
+    // Jittered per pixel so the wavelengths blend into a continuous spectrum
+    // instead of showing separate coloured copies.
+    vec3 acc = vec3(0.0), ws = vec3(0.0);
+    vec2 fp = floor(artPx(uv) * u_k);
+    float jit = fract(52.9829189 * fract(dot(fp, vec2(0.06711056, 0.00583715))));
+    for (int i = 0; i < 16; i++) {
+      float t = (float(i) + jit) / 16.0;
+      vec3 w = max(vec3(0.0), 1.0 - abs(t - vec3(0.1, 0.5, 0.9)) / 0.42);
+      // Lateral colour: each wavelength is also magnified a little differently.
+      vec2 mt = m + (uv - ctr) * ((t - 0.5) * u_dispersion * 0.05);
+      acc += behindBlur(mt + edgeOff * (1.0 + (t - 0.5) * u_dispersion * 0.35) + lensShift(n, ior + (t - 0.5) * spread, hArt)).rgb * w;
+      ws += w;
+    }
+    c = acc / ws;
+  }
+  // Thick glass passes less light through its slopes (absorption, reflection).
+  c *= 1.0 - smoothstep(0.03, 0.3, steep) * clamp(u_thickness, 0.0, 1.0) * 0.8;
+  // Thin-film colour on the steep, lit side of the glass.
+  float lit = 0.35 + 0.65 * max(dot(normalize(n.xy + 1e-5), normalize(L.xy)), 0.0);
   vec3 iri = spectrum(atan(n.y, n.x) / 6.2832 + steep * 1.7);
-  c = mix(c, c * 0.35 + iri, clamp(steep * steep * u_iridescence * 1.6, 0.0, 1.0) * 0.7);
+  c = mix(c, c * 0.35 + iri, clamp(steep * steep * u_iridescence * 1.6 * lit, 0.0, 1.0) * 0.7);
   c = mix(c, u_tint, u_tintAmount);
-  vec3 L = normalize(vec3(-0.5, -0.6, 0.62));
+  // Rainbow light: a bright studio light seen through the slopes of the glass.
+  // Every wavelength bends by a different amount, so where the slope turns
+  // toward the light its image fans out into ordered spectral bands.
+  if (u_rainbow > 0.0) {
+    // Where the light's image lands depends on the slope and on where on the
+    // glass we are, so flat facets still sweep through the spectrum.
+    vec2 ld = normalize(L.xy);
+    vec2 pc = boxUv(uv) - 0.5;
+    vec2 slope = n.xy / max(n.z, 0.2);
+    float toward = dot(slope, ld);
+    float w = 0.9 * u_rainbowWidth;
+    // The light's image runs around the bevel, so the hue follows the angle
+    // around the shape, measured from the light.
+    vec2 pd = normalize(pc + 1e-5);
+    float around = atan(ld.x * pd.y - ld.y * pd.x, dot(ld, pd)) / 3.14159;
+    float u = 0.5 - around / w + toward * 0.25 + u_rainbowShift;
+    float back = (-toward * 0.5 - dot(pc, ld) * 0.8 - 0.25) / w;
+    float onSlope = smoothstep(0.02, 0.15, 1.0 - n.z);
+    // Slopes facing the light show the light itself, not what's behind.
+    // A big studio light: slopes up to sideways-on to it still catch it.
+    float litFace = smoothstep(-0.35, 0.2, toward) * onSlope * min(u_rainbow, 1.0);
+    vec3 band = spectral(u);
+    c = mix(c, band * max(u_rainbow, 1.0), litFace * max(max(band.r, band.g), band.b));
+    c += spectral(back) * 0.12 * smoothstep(0.0, 0.2, -toward) * u_rainbow * onSlope;
+  }
   float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 40.0);
-  c += vec3(spec) * 0.8 * u_rim;
+  c += vec3(spec) * 0.8 * u_highlight;
+  // Fresnel: grazing glass reflects a little light.
+  c += pow(steep, 3.0) * 0.18 * u_rim;
   // A thin dark rim where the glass edge catches nothing.
   c *= 1.0 - smoothstep(-2.5, 0.0, d) * 0.4 * u_rim;
+  // Edge film: a hairline of thin-film colour along the outline, gold where
+  // the edge faces the light and violet-blue where it turns away.
+  if (u_film > 0.0) {
+    float facing = dot(normalize(n.xy + 1e-5), normalize(L.xy));
+    vec3 film = mix(vec3(0.33, 0.24, 0.62), vec3(0.72, 0.6, 0.22), smoothstep(-0.6, 0.6, facing));
+    float band = smoothstep(-4.5, -1.5, d);
+    c = mix(c, film, band * u_film);
+  }
   return vec4(clamp(c, 0.0, 1.0) * cov, cov);
 }`,
 };
@@ -1175,6 +1274,8 @@ export const PRESETS: Preset[] = [
   { name: 'Frosted indigo', effect: 'frost', params: { tint: '#dfe3ff', tint2: '#3542d6', gradient: 0.85, tintAmount: 0.4, blur: 30 }, bg: '#14151c', tags: 'glass blur gradient folder' },
   { name: 'Clear lens', effect: 'lens', params: {}, bg: '#eef0f0', tags: 'glass refraction bubble water drop' },
   { name: 'Prism lens', effect: 'lens', params: { dispersion: 1.2, iridescence: 1.1, refraction: 0.9, magnify: 0.1 }, bg: '#000000', tags: 'glass crystal rainbow iridescent cube' },
+  { name: 'Magnifier drop', effect: 'lens', params: { refraction: 1.3, dispersion: 2, magnify: 0.3, edgeBend: 0.7, iridescence: 0, highlight: 0, film: 0.85, rim: 0.4, blur: 1, bevel: 130, softness: 50, tintAmount: 0 }, bg: '#eef0f0', tags: 'glass lens drop water magnify chromatic aberration' },
+  { name: 'Crystal block', effect: 'lens', params: { chamfer: 1, bevel: 50, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.35, rainbow: 1.6, rainbowWidth: 1.1, rainbowShift: 0.15, thickness: 0.5, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }, bg: '#000000', tags: 'glass crystal cube prism rainbow facets chamfer' },
   { name: 'Thermal', effect: 'thermal', params: {}, bg: '#e8133c', tags: 'heat camera infrared map' },
   { name: 'Hot core', effect: 'thermal', params: { invert: 1, glowAmount: 0.6 }, bg: '#0b1a8f', tags: 'heat thermal' },
   { name: 'Prism light', effect: 'prism', params: {}, bg: '#000000', tags: 'rainbow streaks light rays spectrum' },

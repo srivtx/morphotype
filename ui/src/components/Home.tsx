@@ -6,7 +6,7 @@ import { importFonts, openProject } from '../app/actions';
 import { deleteFromLibrary, duplicateFromLibrary, newDesign, newFont, openFromLibrary, renameInLibrary, startTemplate } from '../app/projects';
 import { platform } from '../platform';
 import { listProjects, onLibraryChange, type ProjectMeta } from '../state/library';
-import { store, useStore } from '../state/store';
+import { setSettings, store, useStore } from '../state/store';
 import { TEMPLATES, type Template } from '../state/templates';
 import { INTENTS, startIntent, TemplateCard } from './Dialogs';
 import { Icon, Logo, type IconName } from './icons';
@@ -132,6 +132,7 @@ const SIZES: { label: string; w: number; h: number }[] = [
 ];
 
 function StartRow() {
+  const page = useStore((s) => s.settings.newPage);
   return (
     <section className="home-start">
       <div className="home-new main">
@@ -143,6 +144,18 @@ function StartRow() {
           <span className="dim small">Logos, posters, posts, stickers</span>
         </button>
         <div className="home-sizes">
+          <span className="home-page" aria-label="Page">
+            <Segmented
+              size="sm"
+              value={page}
+              options={[
+              { value: 'white', label: 'White', title: 'Start on a white page' },
+              { value: 'transparent', label: 'Clear', title: 'Start on a transparent page' },
+              { value: 'dark', label: 'Dark', title: 'Start on a dark page' },
+            ]}
+              onChange={(v) => setSettings({ newPage: v })}
+            />
+          </span>
           {SIZES.map((s) => (
             <button key={s.label} className="chip" onClick={() => newDesign(s.w, s.h)} data-tip={`${s.w} × ${s.h}`}>
               <span className="size-glyph" style={{ aspectRatio: `${s.w} / ${s.h}` }} />

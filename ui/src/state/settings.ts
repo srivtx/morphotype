@@ -37,6 +37,8 @@ export interface Settings {
   /** Pen: line width for open paths, and the ink for lines and shapes. */
   penWidth: number;
   penColor: string;
+  /** The page new designs start on. */
+  newPage: 'white' | 'transparent' | 'dark';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -66,6 +68,7 @@ export const DEFAULT_SETTINGS: Settings = {
   brushColor: '#ff6fb5',
   penWidth: 14,
   penColor: '#0a0a0a',
+  newPage: 'white',
   typeTour: false,
 };
 
@@ -95,6 +98,19 @@ export const SETTING_DEFS: SettingDef[] = [
     options: [
       { value: 'home', label: 'Show Home' },
       { value: 'last', label: 'Reopen the last project' },
+    ],
+  },
+  {
+    key: 'newPage',
+    type: 'choice',
+    section: 'General',
+    label: 'New designs start on',
+    hint: 'A transparent page shows a checkerboard and exports without a background.',
+    keywords: 'page background white transparent clear dark blank empty',
+    options: [
+      { value: 'white', label: 'White page' },
+      { value: 'transparent', label: 'Transparent' },
+      { value: 'dark', label: 'Dark page' },
     ],
   },
   { key: 'advanced', type: 'toggle', section: 'Editing', label: 'Advanced controls', hint: 'Show every parameter (seeds, phases, raw numbers) instead of just the essentials.', keywords: 'simple expert pro' },

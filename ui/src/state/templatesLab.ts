@@ -34,6 +34,12 @@ function pen(dPx: string, name: string, st: Style, width?: number, cap: LineCap 
   return width !== undefined ? lineLayer(d, size, width, at, cap) : pathLayer(d, size, name, at);
 }
 
+/** Path data measured on a reference picture, moved to artboard px: (x, y) → ((x − ox)·k, (y − oy)·k). */
+function fromRef(d: string, ox: number, oy: number, k: number): string {
+  const m = (p: { x: number; y: number }) => ({ x: (p.x - ox) * k, y: (p.y - oy) * k });
+  return serializePath(parsePath(d).map((c) => ({ ...c, nodes: c.nodes.map((n) => ({ ...n, ...m(n), hin: n.hin && m(n.hin), hout: n.hout && m(n.hout) })) })));
+}
+
 /** Groups have no position of their own: move their layers instead. */
 const shifted = (nodes: ShapeLayer[], dx: number, dy: number): ShapeLayer[] => {
   for (const n of nodes) (n.x += dx), (n.y += dy);
@@ -49,8 +55,9 @@ export const LAB_TEMPLATES: Template[] = [
       project(
         'Glass lens',
         [
-          textLayer('glass.', 'inter-black', { y: 20, name: 'Word', style: ink('#151515') }, { size: 330, tracking: -0.05 }),
-          symbolLayer('circle', 560, { x: -110, y: -20, rotation: -24, sx: 1.04, sy: 0.9, name: 'Lens', style: style('lens', { refraction: 0.85, dispersion: 0.9, magnify: 0.22, iridescence: 0.7, rim: 0.9, bevel: 120, softness: 14 }) }),
+          textLayer('glass.', 'inter', { x: 6, y: -28, name: 'Word', style: ink('#151515'), modifiers: mods({ kind: 'weight', amount: 0.009 }) }, { size: 368, tracking: -0.023 }),
+          // A drop drawn with the pen, measured on a 1322 px picture: a full dome, so it magnifies.
+          pen(fromRef('M545 155C680 155 760 260 820 370C870 460 945 570 942 645C940 700 880 722 790 722C680 722 520 700 420 650C330 605 296 520 296 430C296 280 400 155 545 155Z', 661, 496, 1), 'Drop', style('lens', { refraction: 1.3, dispersion: 2, magnify: 0.3, focusX: -0.55, focusY: 0.43, edgeBend: 0.7, iridescence: 0, highlight: 0, film: 0.85, rim: 0.4, blur: 1, bevel: 130, softness: 50, tintAmount: 0 })),
         ],
         solid('#eeefef'),
         { width: 1320, height: 990 },
@@ -61,24 +68,26 @@ export const LAB_TEMPLATES: Template[] = [
     hint: 'A glass cube with three refracting faces over bold white type',
     category: 'Logo',
     make: () => {
-      const a = 250;
-      const turn = -14;
-      const r = (turn * Math.PI) / 180;
-      const at = (dx: number, dy: number) => ({ x: -30 + dx * Math.cos(r) - dy * Math.sin(r), y: -10 + dx * Math.sin(r) + dy * Math.cos(r) });
-      const face = (f: 'top' | 'left' | 'right', dx: number, dy: number, glass: Record<string, number>) =>
-        symbolLayer('roundRect', a, { ...at(dx, dy), rotation: turn, name: `${f[0].toUpperCase()}${f.slice(1)} face`, style: style('lens', glass), modifiers: mods({ kind: 'isometric', face: f }) }, { radius: 0.06, aspect: 1 });
+      // Measured on an 808 px picture: a glass block with a square window and
+      // four chamfered facets that throw rainbow light.
+      const k = 1200 / 808;
       return project(
         'Crystal word',
         [
-          textLayer('mono', 'inter-black', { name: 'Word', style: ink('#f4f4f4') }, { size: 300, tracking: -0.04 }),
-          face('left', -0.433 * a, 0.25 * a, { refraction: 0.8, dispersion: 1.2, iridescence: 1.2, magnify: -0.45, rim: 1.2, bevel: 34, softness: 3, tintAmount: 0.08 }),
-          face('right', 0.433 * a, 0.25 * a, { refraction: 0.9, dispersion: 1.3, iridescence: 1, magnify: -0.6, rim: 1.2, bevel: 34, softness: 3, tintAmount: 0.04 }),
-          face('top', 0, -0.5 * a, { refraction: 1.1, dispersion: 1.5, iridescence: 1.5, magnify: -0.3, rim: 1.3, bevel: 40, softness: 3, tintAmount: 0.12 }),
-          textLayer('mono', 'inter-black', { x: -470, y: -300, name: 'App tile label', style: ink('#f4f4f4') }, { size: 34, tracking: -0.02 }),
-          symbolLayer('squircle', 100, { x: -470, y: -300, name: 'App tile', style: { ...style('flat', { fill: '#0a0a0a' }), stroke: { width: 2, color: '#3a3a3a', align: 'inside', opacity: 1 } } }, { exponent: 5, aspect: 1 }),
+          textLayer('mono', 'inter-black', { y: -6 * k, name: 'Word', style: ink('#f4f4f4'), modifiers: mods({ kind: 'weight', amount: -0.012 }) }, { size: 192 * k, tracking: -0.02 }),
+          symbolLayer('roundRect', 175 * k, {
+            x: 3 * k,
+            y: 8 * k,
+            rotation: 30,
+            name: 'Glass block',
+            style: style('lens', { chamfer: 1, bevel: 35 * k, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.35, rainbow: 1.6, rainbowWidth: 1.1, rainbowShift: 0.15, thickness: 0.5, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }),
+          }, { radius: 0.05, aspect: 1 }),
+          symbolLayer('squircle', 69 * k, { x: -322 * k, y: -245 * k, name: 'App tile', style: { ...style('flat', { fill: '#0a0a0a' }), stroke: { width: 2, color: '#3a3a3a', align: 'inside', opacity: 1 } } }, { exponent: 5, aspect: 1 }),
+          textLayer('mono', 'inter-black', { x: -322 * k, y: -245 * k, name: 'App tile label', style: ink('#f4f4f4') }, { size: 15 * k, tracking: -0.01 }),
+          textLayer('iOS', 'inter', { x: 335 * k, y: -243 * k, name: 'Platform', style: ink('#f4f4f4'), modifiers: mods({ kind: 'weight', amount: 0.01 }) }, { size: 14 * k, tracking: 0 }),
         ],
         solid('#000000'),
-        { width: 1200, height: 900 },
+        { width: 1200, height: 940 },
       );
     },
   },
@@ -301,18 +310,19 @@ export const LAB_TEMPLATES: Template[] = [
     make: () => {
       const B = '#1f4ed8';
       const line = ink(B);
-      const w = 26;
+      // Measured on a 672 px picture; one stroke is 16 px there.
+      const k = 1080 / 672;
+      const r = (d: string) => fromRef(d, 336, 336, k);
+      const w = 16 * k;
       return project(
         'Wavy badge icon',
         [
-          symbolLayer('wavy', 840, { name: 'Badge', style: ink('#f4f1ea') }, { waves: 20, depth: 0.1, scallop: 0.1 }),
+          symbolLayer('wavy', 516 * k, { name: 'Badge', style: ink('#f4f1ea') }, { waves: 16, depth: 0.083, scallop: 0 }),
           group(
             [
-              pen('M-71 -93L154 -191L68 39Z', 'Pennant', line, w),
-              pen('M-50 -70C-44 -46 -28 -44 -24 -62C-18 -42 -2 -40 4 -58C6 -44 16 -36 28 -42', 'Wind', line, w),
-              pen('M68 39L104 78L162 78C176 78 182 92 176 104L158 140L46 140C24 140 8 124 -6 108L-40 72', 'Boot', line, w),
-              pen('M-195 119L-87 19', 'Lace', line, w),
-              pen('M-150 92C-190 120 -196 160 -164 172C-140 180 -120 160 -128 140', 'Hook', line, w),
+              pen(r('M349 346L348 332C348 326 348 320 342 319C336 318 334 324 328 324C322 324 318 320 318 314C318 308 319 300 314 298C309 296 305 300 300 303C296 305 291 304 291 300L291 282C291 277 294 274 298 272L420 219C426 216 432 221 429 227L378 362L411 399'), 'Flag', line, w),
+              pen(r('M378 247L426 222L409 270Z'), 'Flag tip', line),
+              pen(r('M279 349L218 408L262 451C271 459 286 451 284 434C283 425 276 418 268 413C292 391 336 385 362 404L413 448L451 411C461 401 455 384 440 384C430 384 421 391 412 400'), 'Legs', line, w),
             ],
             { name: 'Line icon' },
           ),
@@ -327,18 +337,28 @@ export const LAB_TEMPLATES: Template[] = [
     hint: 'An isometric cube mascot with ears, outlined in black',
     category: 'Logo',
     make: () => {
-      const white = stroked(ink('#ffffff'), 20);
+      // Measured on a 1204 px picture.
+      const k = 1080 / 1204;
+      const r = (d: string) => fromRef(d, 602, 602, k);
+      const white = stroked(ink('#ffffff'), 17 * k);
       const black = ink('#0a0a0a');
-      const round = (r: number) => mods({ kind: 'round', radius: r });
+      const round = (rr: number) => mods({ kind: 'round', radius: rr });
+      const face = 17 * k;
       return project(
         'Iso bunny',
         [
-          pen('M-235 -316L-74 -271L16 -74L-145 -96Z', 'Back ear', white, undefined, 'round', { modifiers: round(0.07) }),
-          pen('M-2 -78L236 43L236 205L16 326L-217 205L-217 43Z', 'Head', white, undefined, 'round', { modifiers: round(0.075) }),
-          pen('M79 -289L222 -172L227 43L83 -65Z', 'Front ear', white, undefined, 'round', { modifiers: round(0.08) }),
-          symbolLayer('plus', 78, { x: -141, y: 213, rotation: 12, name: 'Wink', style: black }, { thickness: 0.2 }),
-          pen('M-86 233C-58 186 6 182 40 232', 'Smile', black, 14),
-          pen('M-217 98C-196 110 -186 128 -186 156', 'Cheek', black, 14),
+          pen(r('M322 236L534 292L628 525L437 494Z'), 'Back ear', white, undefined, 'round', { modifiers: round(0.05) }),
+          pen(r('M357 648L520 535C580 510 650 515 700 540L870 652L870 848L690 948C640 970 580 970 530 948L357 852Z'), 'Head', white, undefined, 'round', { modifiers: round(0.03) }),
+          pen(r('M682 257L852 390L852 672L686 538Z'), 'Front ear', white, undefined, 'round', { modifiers: round(0.07) }),
+          group(
+            [
+              pen(r('M356 712C375 728 388 750 395 780'), 'Cheek', black, face, 'butt'),
+              pen(r('M405 800L488 855'), 'Wink', black, face, 'butt'),
+              pen(r('M445 786L436 873'), 'Wink', black, face, 'butt'),
+              pen(r('M509 856C528 822 548 810 568 810C595 810 620 828 650 858'), 'Closed eye', black, face, 'butt'),
+            ],
+            { name: 'Face' },
+          ),
         ],
         solid('#111111'),
         { width: 1080, height: 1080 },
@@ -351,17 +371,20 @@ export const LAB_TEMPLATES: Template[] = [
     category: 'Icon',
     make: () => {
       const grid = iconGridLayers(1080, '#7a7a7a', 3.5);
+      // Measured on a picture whose icon tile spans 663 px around (662, 494).
+      const k = 1080 / 737;
+      const r = (d: string) => fromRef(d, 662, 494, k);
       const flame =
-        'M-317 120C-330 0 -320 -120 -290 -185C-282 -200 -268 -198 -258 -188C-225 -158 -195 -130 -169 -125C-150 -200 -110 -290 -80 -318C-70 -327 -55 -325 -50 -312C-25 -260 40 -215 81 -199C90 -250 105 -295 122 -311C132 -320 146 -318 152 -306C250 -200 330 -80 318 40C305 200 160 330 -15 331C-200 332 -310 250 -317 120Z';
+        'M452 392C450 372 462 352 478 356C494 360 520 398 544 405C553 402 560 380 568 350C580 302 590 278 606 276C622 274 632 292 645 305C668 328 692 350 708 356C716 358 721 350 722 340L724 300C726 284 740 279 752 290C800 336 872 420 877 512C884 625 790 719 650 719C530 719 458 640 448 560C442 500 445 430 452 392Z';
       return project(
         'Flame icon',
         [
           group(grid, { name: 'Icon grid', locked: true, open: false }),
           group(
             [
-              pen(flame, 'Flame', ink('#ffffff')),
-              pen('M0 -41C39 -41 70 17 70 88C70 159 39 217 0 217C-34 217 -58 185 -66 150C-50 140 -48 125 -62 112C-76 98 -72 80 -58 70C-70 40 -45 -41 0 -41Z', 'Eye', ink('#000000'), undefined, 'round', { op: 'subtract' }),
-              pen('M199 -74C229 -74 254 -21 254 44C254 109 229 162 199 162C172 162 152 135 147 104C160 96 160 82 149 72C138 62 140 46 151 38C143 6 165 -74 199 -74Z', 'Eye', ink('#000000'), undefined, 'round', { op: 'subtract' }),
+              pen(r(flame), 'Flame', ink('#ffffff')),
+              pen(r('M650 469C680 469 705 510 711 555C716 600 705 650 675 650C648 650 632 625 629 598C628 588 640 582 647 576C652 570 650 558 642 552C632 546 620 548 617 535C614 515 622 486 634 476C639 472 644 469 650 469Z'), 'Eye', ink('#000000'), undefined, 'round', { op: 'subtract' }),
+              pen(r('M790 447C820 447 838 490 836 530C834 575 820 604 798 604C778 604 765 585 763 562C762 552 770 548 778 542C786 535 784 524 776 520C766 516 757 512 757 498C757 470 770 447 790 447Z'), 'Eye', ink('#000000'), undefined, 'round', { op: 'subtract' }),
             ],
             { name: 'Mascot', merge: true, style: ink('#ffffff') },
           ),

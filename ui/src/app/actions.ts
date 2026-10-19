@@ -108,7 +108,10 @@ export function updateSelected(fn: (n: Node) => void, key = '') {
   }, key ? `sel:${ids.join(',')}:${key}` : '');
 }
 
-/** Insert above the current selection (inside the same group), or on top. */
+/**
+ * Insert above the current selection (inside the same group), or on top. A
+ * selected open, plain group is a layer you work in: new things go inside it.
+ */
 export function addNode(n: Node, opts: { parent?: string | null; index?: number } = {}) {
   const s = store.get();
   let parent = opts.parent;
@@ -116,7 +119,10 @@ export function addNode(n: Node, opts: { parent?: string | null; index?: number 
   if (parent === undefined) {
     const anchor = s.selection.at(-1);
     const f = anchor ? find(s.project.layers, anchor) : null;
-    if (f && !(isGroup(f.node) && f.node.merge === false && false)) {
+    if (f && isGroup(f.node) && !f.node.merge && f.node.open && !f.node.locked && n !== f.node) {
+      parent = f.node.id;
+      index = f.node.children.length;
+    } else if (f) {
       parent = f.parent?.id ?? null;
       index = f.index + 1;
     } else parent = null;
@@ -126,6 +132,25 @@ export function addNode(n: Node, opts: { parent?: string | null; index?: number 
     list.splice(index ?? list.length, 0, n);
   });
   select([n.id]);
+}
+
+/**
+ * Where drawn things go: into the selected layer (a plain group), or the layer
+ * holding the selection, on top of it; otherwise on top of everything.
+ */
+function drawTarget(): { parent: string | null; index?: number } {
+  const s = store.get();
+  const anchor = s.selection.at(-1);
+  const f = anchor ? find(s.project.layers, anchor) : null;
+  if (!f) return { parent: null };
+  const g = isGroup(f.node) && !f.node.merge && f.node.open ? f.node : f.parent && isGroup(f.parent) && !f.parent.merge ? f.parent : null;
+  return g && !g.locked ? { parent: g.id, index: g.children.length } : { parent: null };
+}
+
+/** A new, empty layer to draw into: what you add while it's selected goes inside it. */
+export function addEmptyLayer() {
+  const count = (ns: Node[]): number => ns.reduce((k, x) => k + (isGroup(x) ? 1 + count(x.children) : 0), 0);
+  addNode(group([], { name: `Layer ${count(store.get().project.layers) + 1}` }), { parent: null });
 }
 
 /** Text, shapes and paths get sensible defaults: centred, style of the selection if any. */
@@ -267,7 +292,7 @@ export function finishDrawing(pts: [number, number, number][]) {
     style: b.style(s.settings.brushColor),
   };
   // Drawings stack in order and stay selected so the next stroke can be compared.
-  addNode(l, { parent: null });
+  addNode(l, drawTarget());
 }
 
 /**
@@ -287,7 +312,7 @@ export function finishPen(nodes: GNode[], closed: boolean) {
   const d = serializePath([{ open: !closed, nodes: nodes.map((n) => ({ ...k(n), hin: n.hin && k(n.hin), hout: n.hout && k(n.hout) })) }]);
   const ink = s.settings.penColor;
   const l = closed ? pathLayer(d, size, 'Shape', { x: cx, y: cy, style: style('flat', { fill: ink }) }) : lineLayer(d, size, s.settings.penWidth, { x: cx, y: cy, style: style('flat', { fill: ink }) });
-  addNode(l, { parent: null });
+  addNode(l, drawTarget());
 }
 
 // ---------- text ----------

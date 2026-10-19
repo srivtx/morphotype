@@ -192,6 +192,7 @@ export function LayersPanel() {
           <Menu buttonClass="icon-btn" label={<Icon name="plus" />} title="Add…" placement="bottom-end" width={230}>
             {(close) => (
               <div className="menu-list">
+                <MenuItem icon="plus" label="Empty layer" kbd={shortcutOf('new-layer')} onClick={() => (close(), run('new-layer'))} />
                 <MenuItem icon="text" label="Text" kbd="T" onClick={() => (close(), startText())} />
                 <MenuItem icon="image" label="Trace an image…" kbd={shortcutOf('trace')} onClick={() => (close(), void importImage())} />
                 <MenuItem

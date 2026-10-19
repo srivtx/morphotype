@@ -16,13 +16,13 @@ import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
 import { buildScene } from '../state/tree';
 import { setSettings, store, toast, useStore } from '../state/store';
-import { addShape, getRenderer, importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
-import { Popover } from '../components/ui';
+import { addShape, getRenderer, importFonts, importImage, onCopyEvent, onPasteEvent, openProject, setBackground } from './actions';
+import { Popover, Segmented } from '../components/ui';
 import { ShapePicker } from '../components/pickers';
 import { emptyProject, symbolLayer } from '../state/model';
 import { allCommands, matchKey, run } from './commands';
 import { startAutosave } from './autosave';
-import { newDesign, openLast } from './projects';
+import { newDesign, openLast, pageBackground } from './projects';
 import { openDocument } from '../state/store';
 
 function Toasts() {
@@ -168,6 +168,10 @@ function useDropFiles() {
 /** Starting points on an empty artboard. */
 function EmptyStart() {
   const [shapes, setShapes] = useState(false);
+  const page = useStore((s): 'white' | 'transparent' | 'dark' => {
+    const f = s.project.background.fill;
+    return f.kind === 'none' ? 'transparent' : f.kind === 'solid' && f.colors[0]?.toLowerCase() === '#ffffff' ? 'white' : f.kind === 'solid' && f.colors[0]?.toLowerCase() === '#0b0b0d' ? 'dark' : 'white';
+  });
   const btn = useRef<HTMLButtonElement>(null);
   return (
     <div className="empty-start" role="group" aria-label="Start your design">
@@ -188,6 +192,25 @@ function EmptyStart() {
         <button onClick={() => store.set({ dialog: { kind: 'templates' } })}>
           <Icon name="sparkle" size={18} /> Template
         </button>
+        <button onClick={() => run('new-layer')} data-tip="A blank, transparent layer: what you draw or add goes inside it">
+          <Icon name="plus" size={18} /> Empty layer
+        </button>
+      </div>
+      <div className="empty-start-page">
+        <span className="dim small">Page</span>
+        <Segmented
+          size="sm"
+          value={page}
+          options={[
+            { value: 'white', label: 'White' },
+            { value: 'transparent', label: 'Clear', title: 'Transparent: exports without a background' },
+            { value: 'dark', label: 'Dark' },
+          ]}
+          onChange={(v) => {
+            setBackground((b) => Object.assign(b, pageBackground(v)));
+            setSettings({ newPage: v });
+          }}
+        />
       </div>
       {shapes && (
         <Popover anchor={btn.current} onClose={() => setShapes(false)} width={340} placement="bottom-start">

@@ -3,6 +3,7 @@
 import { deleteProject, duplicateProject, listProjects, loadProject, renameProject, restoreProject } from '../state/library';
 import { migrate } from '../state/migrate';
 import { background, emptyProject, fill, uid, type Project } from '../state/model';
+import type { Settings } from '../state/settings';
 import { openDocument, store, toast } from '../state/store';
 import type { Template } from '../state/templates';
 import { errorText, loadProjectFonts } from './actions';
@@ -16,10 +17,14 @@ export async function goHome() {
   store.set({ screen: 'home' });
 }
 
+/** The background for a page kind: white reads as a page against the dark canvas. */
+export function pageBackground(kind: Settings['newPage']) {
+  return kind === 'transparent' ? background(fill('none', '#ffffff')) : background(fill('solid', kind === 'dark' ? '#0b0b0d' : '#ffffff'));
+}
+
 /** A blank artboard. */
 export function newDesign(w = 1080, h = 1080, name = 'Untitled') {
-  // A white page reads as a page against the dark canvas.
-  const p: Project = { ...emptyProject(), name, layers: [], canvas: { width: w, height: h }, background: background(fill('solid', '#ffffff')) };
+  const p: Project = { ...emptyProject(), name, layers: [], canvas: { width: w, height: h }, background: pageBackground(store.get().settings.newPage) };
   openDocument(p, { mode: 'design' });
   fit();
 }
