@@ -1315,6 +1315,7 @@ const mosaic: EffectDef = {
   params: [
     num('cell', 'Block size', 2, 200, 0.5, 24),
     num('bricks', 'Bricks', 0, 1, 0.01, 0.6),
+    num('wide', 'Brick width', 0.25, 8, 0.01, 1),
     num('gap', 'Gap', 0, 0.45, 0.01, 0),
     num('round', 'Rounded', 0, 0.5, 0.01, 0),
     col('c1', 'Colour 1', '#e8281e'),
@@ -1328,7 +1329,7 @@ const mosaic: EffectDef = {
   reach: () => 2,
   glsl: /* glsl */ `
 uniform vec3 u_c1, u_c2, u_c3, u_c4, u_c5, u_c6;
-uniform float u_cell, u_bricks, u_gap, u_round, u_seed;
+uniform float u_cell, u_bricks, u_wide, u_gap, u_round, u_seed;
 vec3 pal(float h) {
   float i = floor(h * 6.0);
   return i < 1.0 ? u_c1 : i < 2.0 ? u_c2 : i < 3.0 ? u_c3 : i < 4.0 ? u_c4 : i < 5.0 ? u_c5 : u_c6;
@@ -1338,7 +1339,7 @@ vec4 effect(vec2 uv) {
   float cov = cover(dt);
   if (cov <= 0.0) return vec4(0.0);
   // Cells counted from the object's top-left corner so blocks line up with it.
-  vec2 p = (artPx(uv) - (u_region.xy + u_bbox.xy * u_region.zw)) / u_cell;
+  vec2 p = (artPx(uv) - (u_region.xy + u_bbox.xy * u_region.zw)) / (u_cell * vec2(max(u_wide, 0.05), 1.0));
   vec2 c = floor(p);
   // Every 2x2 block is four singles, two bricks across, two bricks down, or one big block.
   vec2 blk = floor(c / 2.0);
@@ -1360,7 +1361,107 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic];
+
+const keycap: EffectDef = {
+  id: 'keycap',
+  name: 'Keycap',
+  description: 'A sculpted 3D key: a rounded, dished top face on curved walls, lit by a soft light and reflecting its surroundings. Can be translucent plastic that shows what is under it.',
+  backdrop: true,
+  params: [
+    col('color', 'Colour', '#f2f3f5'),
+    num('wall', 'Wall width', 2, 160, 0.5, 30),
+    num('tilt', 'Tilt', -1, 1, 0.01, 0.3),
+    num('tiltX', 'Tilt sideways', -1, 1, 0.01, -0.15),
+    num('topRound', 'Top rounding', 0, 200, 0.5, 40),
+    num('dish', 'Dish', 0, 1, 0.01, 0.6),
+    num('lightAngle', 'Light angle', -180, 180, 1, -135),
+    num('light', 'Light', 0, 2, 0.01, 1),
+    col('sky', 'Sky reflection', '#9ec4ea'),
+    col('bounce', 'Floor reflection', '#ffffff'),
+    num('gloss', 'Gloss', 0, 1, 0.01, 0.55),
+    num('rimLight', 'Rim light', 0, 2, 0.01, 0.8),
+    num('translucent', 'Translucent', 0, 1, 0.01, 0),
+    num('shadow', 'Shadow', 0, 1, 0.01, 0.4),
+    num('rise', 'Height', 4, 200, 1, 40, true),
+  ],
+  reach: (p) => (n(p, 'shadow') > 0 ? 60 : 4) + n(p, 'translucent') * 30,
+  glsl: /* glsl */ `
+uniform vec3 u_color, u_sky, u_bounce;
+uniform float u_wall, u_tilt, u_tiltX, u_topRound, u_dish, u_lightAngle, u_light, u_gloss, u_translucent, u_shadow, u_rise, u_rimLight;
+vec2 kBox() { return (u_bbox.zw - u_bbox.xy) * u_region.zw; }
+/** Signed distance (art px) to the top face: a rounded box inset by the wall, shifted by the tilt. */
+float kTop(vec2 uv) {
+  vec2 box = kBox();
+  vec2 pa = (boxUv(uv) - 0.5) * box;
+  vec2 c = vec2(u_tiltX, -u_tilt) * u_wall * 0.8;
+  vec2 hs = max(box * 0.5 - u_wall, vec2(1.0));
+  float r = min(u_topRound, min(hs.x, hs.y));
+  vec2 q = abs(pa - c) - (hs - r);
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+/** Height of the key surface in art px: curved walls up to a dished top. */
+float kH(vec2 uv) {
+  float dOut = max(-sdfArt(uv), 0.0);
+  float dt = kTop(uv);
+  vec2 hs = max(kBox() * 0.5 - u_wall, vec2(1.0));
+  float H = u_rise;
+  if (dt <= 0.0) {
+    // A smooth bowl (superellipse radius, so no creases toward the corners).
+    vec2 pa = (boxUv(uv) - 0.5) * kBox() - vec2(u_tiltX, -u_tilt) * u_wall * 0.8;
+    vec2 q = abs(pa) / hs;
+    float rr = pow(pow(q.x, 4.0) + pow(q.y, 4.0), 0.25);
+    return H - u_dish * H * 0.9 * (1.0 - clamp(rr * rr, 0.0, 1.0));
+  }
+  // Walls: a rounded shoulder from the base to the rim.
+  float t = dOut / max(dOut + dt, 1e-3);
+  return H * (1.0 - pow(1.0 - t, 2.4));
+}
+vec4 effect(vec2 uv) {
+  float dt0 = sdfPx(uv);
+  float cov = cover(dt0);
+  vec4 sh = dropShadow(uv, vec2(0.0, 12.0), -3.0, 24.0, u_shadow * 0.55);
+  if (cov <= 0.0) return sh;
+  // Normal from the height field (finite differences in art px).
+  float e = 1.5;
+  vec2 ex = offsetUv(vec2(e, 0.0)), ey = offsetUv(vec2(0.0, e));
+  float hx = kH(uv + ex) - kH(uv - ex);
+  float hy = kH(uv + ey) - kH(uv - ey);
+  vec3 n = normalize(vec3(-hx / (2.0 * e), -hy / (2.0 * e), 1.0));
+  float la = radians(u_lightAngle);
+  vec3 L = normalize(vec3(cos(la) * 0.85, sin(la) * 0.85, 0.5));
+  // Soft key light plus a bright ambient (studio).
+  float diff = max(dot(n, L), 0.0);
+  vec3 base = u_color * (0.58 + 0.5 * diff * u_light);
+  // Fill light bounced up from below (the floor or the next key) onto the walls
+  // facing down (field y points down the screen). The dish stays in its own shade.
+  float onWall = smoothstep(0.0, 3.0, kTop(uv));
+  base += (u_color * u_bounce * 0.9 + u_bounce * 0.25) * max(n.y, 0.0) * onWall;
+  // Environment: sky above (screen up), floor bounce below (screen down).
+  vec3 R = reflect(vec3(0.0, 0.0, -1.0), n);
+  vec3 env = mix(u_sky, u_bounce, smoothstep(-0.6, 0.6, R.y));
+  // Plastic: a little reflection face-on, more at grazing angles.
+  float fres = 0.04 + 0.5 * pow(1.0 - max(n.z, 0.0), 3.0);
+  vec3 c = mix(base, env * (0.5 + 0.5 * u_color), clamp(fres * (0.5 + u_gloss), 0.0, 1.0));
+  // A soft-box highlight from the light side.
+  float spec = pow(max(dot(R, L), 0.0), mix(6.0, 30.0, u_gloss));
+  c += vec3(spec) * u_gloss * 0.45 * u_light;
+  // A second, harder light from the side opposite the key light: bright rims on the walls.
+  vec3 L2 = normalize(vec3(-cos(la) * 0.95, -sin(la) * 0.3, 0.25));
+  c += vec3(pow(max(dot(R, L2), 0.0), 3.0)) * u_rimLight * 0.5 * smoothstep(0.05, 0.3, 1.0 - n.z) * onWall;
+  // Translucent plastic: what's under the key, refracted by the surface and tinted.
+  if (u_translucent > 0.0) {
+    // Tinted plastic passes the brightness of what's under it, in its own colour.
+    vec3 under = behind(uv + offsetUv(-n.xy * 26.0)).rgb;
+    float lum = dot(under, vec3(0.3, 0.55, 0.15));
+    float thin = 1.0 - n.z;
+    vec3 trans = u_color * (0.3 + 0.95 * lum) * (0.85 + 0.7 * thin) + max(under - 0.5, 0.0) * 0.2;
+    c = mix(c, trans + vec3(spec) * u_gloss * 0.6, u_translucent * (1.0 - fres * 0.5));
+  }
+  return over(vec4(clamp(c, 0.0, 1.0) * cov, cov), sh);
+}`,
+};
+
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic, keycap];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;

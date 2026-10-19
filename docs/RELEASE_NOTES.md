@@ -1,10 +1,10 @@
-## Morphotype 0.6
+## Morphotype 0.7
 
-A real pen tool, colour tracing and reference images: recreate logos and icons exactly, as editable vectors.
+Glass that behaves like glass, glowing and grainy gradients, 3D keycaps, toy-brick mosaics and clipping groups, with fourteen templates measured from real designs.
 
 ### Install on a Mac
 
-1. Download `Morphotype_0.6.0_universal.dmg` below (it runs on Apple silicon and Intel).
+1. Download `Morphotype_0.7.0_universal.dmg` below (it runs on Apple silicon and Intel).
 2. Open it and drag **Morphotype** into **Applications**.
 3. The app isn't notarised yet, so macOS blocks it the first time. Either go to **System Settings → Privacy & Security** and click **Open Anyway** next to Morphotype, or run this once in Terminal (it also fixes a "damaged" message):
    `xattr -dr com.apple.quarantine /Applications/Morphotype.app && open /Applications/Morphotype.app`
@@ -13,20 +13,27 @@ A real pen tool, colour tracing and reference images: recreate logos and icons e
 
 ### What's new
 
-**Pen tool (P)**
-- Click for corner points, drag for smooth curves, and click the first point to close a filled shape. Enter or Esc keeps it as an open line; ⌫ takes back the last point, and ⇧ keeps 45° steps.
-- Open paths are real **lines**: any width, with round, flat or square ends, and any material, stroke or depth on top.
-- Every pen shape and line stays editable point by point (Edit points is now ⇧P or Enter).
+**Glass, done properly**
+- **Lens glass** now bends light the way glass does (Snell's law through a smooth dome). Each wavelength bends a little differently, so edges fringe smoothly into colour. A **Focus** point handles off-centre lenses; **Thickness** gives you a solid block; **Edge bend** reflects the inside at a grazing rim; **Edge film** adds a hairline of thin-film colour; and **Flat facets** gives chamfered crystal edges.
+- **Rainbow light**: a studio light seen through the slopes of the glass fans out into warm, ordered spectral bands that sweep around the bevel. Shift, width and light angle are adjustable.
+- New presets: **Magnifier drop** and **Crystal block**.
 
-**Recreate a picture**
-- **Colour tracing**: in Add image → Trace, set Colours above 1 and a flat logo becomes one smooth vector layer per colour, stacked so no gaps show between them.
-- **Reference**: place a picture under your work, faded and locked, with the pen ready. It's drawn while you design but never appears in PNG, SVG or project previews. Any layer can be made a reference in its Layer section.
+**New materials** (all GPU, from the distance field)
+- **Glow gradient**: colour by distance from the edge, inside (edge → middle → core) and outside (two-colour fade). For glowing UI tiles, auras and light fades.
+- **Grain gradient**: a rounded, lit form in three colours, dissolved into film grain with a grainy edge.
+- **Mosaic**: fills a shape with blocks and bricks in six palette colours, with brick width, gaps and rounding.
+- **Keycap**: a 3D key with a dished top face, shaded walls, tilt, gloss, a translucent option and a contact shadow.
 
-**Templates**
-- The logo and icon templates are redrawn with real pen paths: the isometric bunny's silhouette and ears, the flame's peaks and wiggly eyes, the weather icon's OK hand and arm, the wavy badge's line icon, and a glass cube with three refracting faces.
+**Every layer**
+- **Soften** (next to Opacity): soft edges of any size, free on the GPU, and exported to SVG as a blur.
 
-**Fixes**
-- Pressing Enter in a number field inside a dialog could activate the dialog's Close button and throw away your settings. Dialogs now keep focus where you left it, and Enter only commits the number.
-- Appearance lists Add stroke and Add depth side by side with proper spacing.
+**Layers**
+- **Clipping groups**: turn on *Clip to the bottom layer* on a group, and everything above that layer, glows and soft edges included, only shows inside its shape. This works on the canvas, in previews and in SVG.
+- **Empty layer** (⇧⌘N): a blank layer to draw into. While it's selected, what you draw or add with the pen goes inside it.
+- New designs can start on a **white, transparent or dark page**. Pick on Home or in the start panel.
+
+**Templates measured from real designs**
+- Rebuilt: Glass lens, Crystal word (a perspective glass cube from two stacked glass layers), Wavy badge icon, Iso bunny and Flame icon. Their paths are measured from the reference pictures.
+- New: Glow widgets, Health widgets, Grain spheres, Brick icons, Object words, Keycap tower, Macro keypad, Tetris card, Pixel word and Creative mode.
 
 Projects from earlier versions open as before.

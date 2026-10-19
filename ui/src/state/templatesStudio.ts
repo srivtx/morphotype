@@ -177,6 +177,217 @@ export const STUDIO_TEMPLATES: Template[] = [
     },
   },
   {
+    name: 'Brick icons',
+    hint: 'Six icons filled with toy-brick mosaics: silhouettes with the Mosaic material',
+    category: 'Icon',
+    make: () => {
+      const { P, pen, box, k } = frame(600, 600, 0.9);
+      const R = '#f22d1b';
+      const Y = '#ffd200';
+      const B = '#1f8fe8';
+      const G = '#0f9f55';
+      const W = '#ffffff';
+      const mosaic = (seed: number, cell = 30, wide = 1): Style => style('mosaic', { cell: cell * k, wide, bricks: 0.85, gap: 0, round: 0, c1: R, c2: Y, c3: B, c4: G, c5: W, c6: '#62c3ff', seed });
+      const dotColors = [Y, B, R, R, R, G, G, Y, R, R, W, B];
+      const dots: Node[] = dotColors.map((c, i) => symbolLayer('circle', 27 * k, { ...P(557 + (i % 3) * 43, 845 + Math.floor(i / 3) * 37), name: 'Key', style: ink(c) }));
+      const car = (y: number, seed: number, name: string) =>
+        group(
+          [
+            pen(`M893 ${y}L1025 ${y}L1050 ${y + 22}L1081 ${y + 22}L1081 ${y + 58}L836 ${y + 58}L836 ${y + 22}L868 ${y + 22}Z`, 'Body', mosaic(seed, 13, 5)),
+            box(870, y + 58, 905, y + 76, 0, 'Wheel', ink(R)),
+            box(1010, y + 58, 1045, y + 76, 0, 'Wheel', ink(B)),
+          ],
+          { name },
+        );
+      return project(
+        'Brick icons',
+        [
+          group([pen('M224 160L246 160L246 185L262 185L262 210L295 235L295 545L177 545L177 235L210 210L210 185L224 185Z', 'Bottle', mosaic(3)), box(200, 210, 272, 236, 0, 'Shoulder', ink(W)), box(224, 160, 246, 185, 0, 'Cap', ink(R))], { name: 'Bottle' }),
+          group(
+            [
+              pen('M455 322L560 300L582 390L520 392C490 392 465 360 455 322Z', 'Leaf', mosaic(11, 20)),
+              pen('M740 322L635 300L613 390L675 392C705 392 730 360 740 322Z', 'Leaf', mosaic(12, 20)),
+              symbolLayer('circle', 40 * k, { ...P(598, 205), name: 'Petal', style: ink(W) }),
+              symbolLayer('circle', 40 * k, { ...P(572, 232), name: 'Petal', style: ink(B) }),
+              symbolLayer('circle', 40 * k, { ...P(625, 232), name: 'Petal', style: ink(R) }),
+              symbolLayer('circle', 40 * k, { ...P(598, 258), name: 'Petal', style: ink(Y) }),
+              symbolLayer('circle', 22 * k, { ...P(560, 195), name: 'Bud', style: ink(G) }),
+              box(577, 280, 620, 330, 0, 'Stalk', mosaic(14, 22)),
+              box(583, 390, 612, 455, 0, 'Stem', ink(Y)),
+              box(525, 452, 672, 495, 0, 'Pot', ink('#4fb3ff')),
+              box(545, 495, 655, 535, 0, 'Pot base', ink(R)),
+            ],
+            { name: 'Plant' },
+          ),
+          group([pen('M880 262L918 200L1070 200L1070 262L1070 512L880 512Z', 'Carton', mosaic(21)), box(958, 413, 1040, 482, 6, 'Label', ink('#111111')), box(970, 428, 1028, 436, 3, 'Line', ink(Y)), box(970, 445, 1028, 453, 3, 'Line', ink(R)), box(970, 462, 1028, 470, 3, 'Line', ink(Y))], { name: 'Milk' }),
+          group([box(120, 758, 362, 930, 0, 'Screen', mosaic(31)), box(82, 952, 400, 975, 0, 'Base', mosaic(32, 23, 2))], { name: 'Laptop' }),
+          group([box(524, 712, 680, 983, 14, 'Calculator', mosaic(41, 20)), box(540, 735, 664, 818, 0, 'Face', ink('#000000')), box(553, 750, 618, 770, 0, 'Screen', ink(W)), box(630, 750, 648, 770, 0, 'Key', ink(Y)), box(540, 830, 664, 965, 0, 'Pad', ink('#000000')), ...dots], { name: 'Calculator' }),
+          group([car(718, 51, 'Car 1'), car(808, 52, 'Car 2'), car(900, 53, 'Car 3')], { name: 'Cars' }),
+        ],
+        solid('#000000'),
+        { width: 1080, height: 1080 },
+      );
+    },
+  },
+  {
+    name: 'Object words',
+    hint: 'Rounded type where letters are swapped for objects: a toggle, a screw, a glass bubble, sticker tiles',
+    category: 'Type',
+    make: () => {
+      const { P, box, text, k } = frame(472.5, 602, 1.2);
+      const white = { ...ink('#ffffff'), modifiers: mods({ kind: 'round', radius: 0.01 }) };
+      const word = (t: string, x: number, y: number, name: string) => text(t, 'inter', x, y, 212, white, name, { modifiers: white.modifiers }, { tracking: -0.01 });
+      const tilt = (n: ShapeLayer, deg: number) => ((n.rotation = deg), n);
+      return project(
+        'Object words',
+        [
+          word('Ab', 281, 237, 'Ab'),
+          group(
+            [
+              box(418, 197, 605, 318, 60, 'Track', ink('#7cf27a')),
+              symbolLayer('circle', 112 * k, { ...P(479, 258), name: 'Knob', style: style('inflate', { body: '#ffffff', shade: '#c9d3cf', bevel: 40, gloss: 0.2, shadow: 0.35, shadowOffset: 6, shadowSoft: 14 }) }),
+            ],
+            { name: 'Toggle' },
+          ),
+          word('ut', 699, 237, 'ut'),
+          word('W', 320, 465, 'W'),
+          group(
+            [
+              symbolLayer('pill', 70 * k, { ...P(478, 520), rotation: 90, name: 'Thread', style: style('inflate', { body: '#7a7a7a', shade: '#2a2a2a', bevel: 30, gloss: 0.5, shadow: 0 }) }, { aspect: 1.5 }),
+              symbolLayer('circle', 124 * k, { ...P(478, 460), name: 'Head', style: style('inflate', { body: '#d6d6d6', shade: '#4a4a4a', bevel: 70, gloss: 0.8, shadow: 0 }) }),
+              symbolLayer('star', 56 * k, { ...P(478, 454), name: 'Torx', style: style('inflate', { body: '#3b3b3b', shade: '#0a0a0a', bevel: 10, gloss: 0.3, shadow: 0 }) }, { points: 6, inner: 0.62, rounding: 0.12 }),
+            ],
+            { name: 'Screw' },
+          ),
+          word('rk', 632, 465, 'rk'),
+          word('T', 266, 690, 'T'),
+          group(
+            [
+              text('a', 'inter', 392, 704, 190, white, 'a', { modifiers: white.modifiers }),
+              symbolLayer('bubble', 182 * k, { ...P(394, 702), name: 'Glass bubble', style: style('lens', { refraction: 1.2, dispersion: 0.6, magnify: 0.15, tint: '#000000', tintAmount: 0.62, rim: 1.6, highlight: 1.4, film: 0.4, iridescence: 0, bevel: 60, softness: 14 }) }, { tail: 0.35, roundness: 0.85 }),
+            ],
+            { name: 'Glass bubble' },
+          ),
+          word('lks', 603, 690, 'lks'),
+          word('F', 290, 905, 'F'),
+          group(
+            [
+              tilt(box(322, 860, 470, 1012, 4, 'Red tile', { ...ink('#f2352b'), stroke: { width: 1.5, color: '#ff9a92', align: 'inside', opacity: 0.8 } }), -4),
+              tilt(text('e', 'rubik-mono', 396, 936, 105, ink('#0a0a0a'), 'Heavy e', { modifiers: mods({ kind: 'weight', amount: 0.03 }) }), -4),
+              tilt(box(458, 858, 607, 1010, 4, 'Green tile', { ...ink('#4cae4f'), stroke: { width: 1.5, color: '#b6e8b4', align: 'inside', opacity: 0.8 } }), 5),
+              tilt(text('e', 'caveat', 532, 922, 190, ink('#c9ff3d'), 'Script e', { modifiers: mods({ kind: 'weight', amount: 0.025 }) }), 5),
+            ],
+            { name: 'Sticker tiles' },
+          ),
+          word('d', 651, 905, 'd'),
+        ],
+        solid('#0a0a0a'),
+        { width: 1134, height: 1445 },
+      );
+    },
+  },
+  {
+    name: 'Keycap tower',
+    hint: 'Four 3D keycaps stacked on a sky: the Keycap material, one translucent',
+    category: 'Social',
+    make: () => {
+      const { box, text, pen, k } = frame(522, 602, 1080 / 1044);
+      const cap = (y0: number, color: string, bounce: string, name: string, extra: Record<string, number | string> = {}) =>
+        box(400, y0, 633, y0 + 240, 34, name, style('keycap', { color, bounce, sky: '#8fb6dc', wall: 38 * k, tilt: 0.45, tiltX: -0.35, topRound: 46 * k, dish: 0.8, rise: 50, lightAngle: -130, light: 1, gloss: 0.6, rimLight: 1, shadow: 0.35, ...extra }));
+      const hand = { ...ink('#fdf8ec'), stroke: { width: 3.6 * k, color: '#141414', align: 'outside' as const, opacity: 1 } };
+      return project(
+        'Keycap tower',
+        [
+          cap(95, '#eef0f3', '#ff8a2a', 'go key'),
+          text('go', 'archivo', 503, 210, 56, ink('#111111'), 'go'),
+          group([box(500, 365, 535, 560, 6, 'Stem', ink('#b82400')), box(470, 445, 565, 470, 6, 'Stem cross', ink('#b82400'))], { name: 'Stem (seen through the key)' }),
+          cap(345, '#ff7f12', '#ffb36b', 'create key', { translucent: 0.85, gloss: 0.8 }),
+          text('create!', 'inter', 533, 470, 40, ink('#ffffff'), 'create', { modifiers: mods({ kind: 'weight', amount: 0.012 }) }),
+          cap(595, '#eef0f3', '#8ee03a', 'pollen key'),
+          text('pollen.', 'archivo', 502, 718, 44, ink('#111111'), 'pollen', {}, { tracking: -0.03 }),
+          cap(845, '#a8e83a', '#7fd0ff', 'peace key'),
+          // Measured on the picture: the palm and V fingers are one outlined shape;
+          // the folded fingers and the thumb sit on top, each with its own outline.
+          group(
+            [
+              group(
+                [
+                  pen('M530 918L542 962', 'Index finger', ink('#fdf8ec'), 15),
+                  pen('M558 922L543 965', 'Middle finger', ink('#fdf8ec'), 15),
+                  symbolLayer('circle', 52 * k, { x: (527 - 522) * k, y: (988 - 602) * k, name: 'Palm' }),
+                ],
+                { name: 'Hand', merge: true, style: hand },
+              ),
+              pen('M507 950L498 978', 'Ring finger', hand, 13),
+              pen('M520 956L513 983', 'Little finger', hand, 13),
+              pen('M511 978L551 988', 'Thumb', hand, 14),
+            ],
+            { name: 'Peace hand' },
+          ),
+        ],
+        background({ ...fill('linear', '#2a84c6', '#78b6e6'), angle: 180 }),
+        { width: 1080, height: 1246 },
+      );
+    },
+  },
+  {
+    name: 'Macro keypad',
+    hint: 'A cream macro pad with nine keycaps, a pixel screen and a dial',
+    category: 'Social',
+    make: () => {
+      const { P, box, text, k } = frame(481, 602, 1080 / 962);
+      const outline = { width: 2.5, color: '#2a1d16', align: 'outside' as const, opacity: 1 };
+      const key = (i: number, j: number, color: string, side: string, name: string, extra: Record<string, number> = {}) => {
+        const x0 = 229 + i * 174;
+        const y0 = 425 + j * 173;
+        return { ...box(x0, y0, x0 + 165, y0 + 165, 22, name, { ...style('keycap', { color, bounce: side, sky: '#fff6e8', wall: 24 * k, tilt: 0.5, tiltX: 0, topRound: 26 * k, dish: 0.6, rise: 34, lightAngle: -120, gloss: 0.5, rimLight: 0.6, shadow: 0.25, ...extra }), stroke: outline }) };
+      };
+      const label = (t: string, i: number, j: number) => [
+        text('P', 'inter', 285 + i * 174, 484 + j * 173, 16, ink('#1a1a1a'), 'P'),
+        text(t, 'inter', 309 + i * 174, 513 + j * 173, 52, ink('#1a1a1a'), t),
+      ];
+      const ctr = (i: number, j: number) => P(311 + i * 174, 503 + j * 173);
+      return project(
+        'Macro keypad',
+        [
+          box(197, 182, 775, 970, 40, 'Body', style('keycap', { color: '#efe6d4', bounce: '#fff3dc', sky: '#fff8ec', wall: 12 * k, tilt: 0.15, tiltX: 0, topRound: 34 * k, dish: 0.05, rise: 14, gloss: 0.3, rimLight: 0.4, shadow: 0.5 })),
+          box(186, 430, 200, 548, 6, 'Side button', ink('#4a74e8')),
+          box(157, 608, 198, 688, 10, 'Side knob', style('keycap', { color: '#efe6d4', bounce: '#fff3dc', sky: '#fff8ec', wall: 8, tilt: 0, tiltX: 0, topRound: 8, dish: 0.1, rise: 10, shadow: 0.2 })),
+          box(203, 207, 613, 397, 16, 'Screen', ink('#1d1d1d')),
+          text('CORRECT MY ENGLISH\nAND MAKE MY LANGUAGE\nMORE POLITE\n_', 'silkscreen', 237, 296, 24, ink('#f2f2ea'), 'Screen text', {}, { align: 'left', lineHeight: 1.2 }),
+          text('P2', 'silkscreen', 250, 366, 12, ink('#d97a52'), 'Page'),
+          text('0', 'silkscreen', 570, 366, 12, ink('#3fd06a'), 'Count'),
+          symbolLayer('circle', 18 * k, { ...P(657, 380), name: 'LED', style: style('inflate', { body: '#18a84a', shade: '#065a22', bevel: 8, gloss: 0.6, shadow: 0 }) }),
+          symbolLayer('circle', 212 * k, { ...P(752, 272), name: 'Dial', style: style('keycap', { color: '#f2ead9', bounce: '#fff3dc', sky: '#fff8ec', wall: 14 * k, tilt: 0, tiltX: 0, topRound: 200, dish: 0.25, rise: 20, gloss: 0.3, shadow: 0.5 }) }),
+          symbolLayer('ring', 178 * k, { ...P(752, 272), name: 'Light ring', style: { ...ink('#4c47ff'), soften: 1.5 } }, { thickness: 0.035 }),
+          symbolLayer('roundRect', 70 * k, { ...P(745, 268), rotation: 30, name: 'Logo', style: { ...ink('#f2ead9'), stroke: { width: 3, color: '#111111', align: 'center', opacity: 1 } } }, { radius: 0.3, aspect: 0.55 }),
+          symbolLayer('roundRect', 70 * k, { ...P(762, 278), rotation: 30, name: 'Logo', style: { ...ink('#f2ead9'), stroke: { width: 3, color: '#111111', align: 'center', opacity: 1 } } }, { radius: 0.3, aspect: 0.55 }),
+          key(0, 0, '#f6f6f8', '#cfd2dc', 'US key'),
+          group([0, 1, 2, 3, 4].map((r) => box(276, 487 + r * 7, 342, 490 + r * 7, 0, 'Stripe', ink('#e0202e'))).concat([box(276, 487, 302, 504, 0, 'Canton', ink('#1f3fa8'))]), { name: 'US flag' }),
+          key(1, 0, '#f6dcd6', '#e3b7ae', 'Key 2'),
+          ...label('2', 1, 0),
+          key(2, 0, '#e8c2ef', '#c99bd2', 'Key 3'),
+          ...label('3', 2, 0),
+          key(0, 1, '#2066ea', '#0d3fb5', 'Smile key'),
+          symbolLayer('circle', 44 * k, { ...ctr(0, 1), name: 'Smile', style: style('inflate', { body: '#ffd23a', shade: '#e09a00', bevel: 18, gloss: 0.5, shadow: 0 }) }),
+          key(1, 1, '#ffe414', '#e8b800', 'Bug key'),
+          symbolLayer('circle', 40 * k, { ...ctr(1, 1), name: 'Ladybug', style: ink('#f0463c') }),
+          key(2, 1, '#f6f6f8', '#cfd2dc', 'Japanese key'),
+          symbolLayer('circle', 46 * k, { ...ctr(2, 1), name: 'Sun', style: ink('#ff0a0a') }),
+          key(0, 2, '#21b33c', '#0f7d23', 'Brazil key'),
+          symbolLayer('roundRect', 52 * k, { ...ctr(0, 2), rotation: 45, sy: 0.55, name: 'Diamond', style: ink('#ffe414') }, { radius: 0.05, aspect: 1 }),
+          symbolLayer('circle', 20 * k, { ...ctr(0, 2), name: 'Globe', style: ink('#26a7e8') }),
+          key(1, 2, '#f6cfb2', '#e3a985', 'Key 8'),
+          ...label('8', 1, 2),
+          key(2, 2, '#f2867a', '#d05d52', 'Key 9'),
+          ...label('9', 2, 2),
+        ],
+        solid('#000000'),
+        { width: 1080, height: 1352 },
+      );
+    },
+  },
+  {
     name: 'Pixel word',
     hint: 'A wordmark whose X is built from pixels',
     category: 'Logo',
@@ -214,18 +425,20 @@ export const STUDIO_TEMPLATES: Template[] = [
         [
           box(128, 35, 672, 765, 0, 'Frame', ink('#1e1e1e')),
           box(142, 48, 658, 752, 0, 'Paper', ink('#ece5cf')),
-          text('CREATIVE', 'archivo', 392, 116, 96, ink('#161616'), 'Title', { sx: 0.78 }, { tracking: -0.02 }),
-          text('MODE', 'archivo', 392, 192, 96, ink('#161616'), 'Title', { sx: 0.78 }, { tracking: -0.02 }),
+          text('CREATIVE', 'archivo', 400, 110, 112, ink('#161616'), 'Title', { sx: 0.74 }, { tracking: -0.02 }),
+          text('MODE', 'archivo', 400, 204, 112, ink('#161616'), 'Title', { sx: 0.74 }, { tracking: -0.02 }),
           box(183, 262, 617, 722, 14, 'Panel', outlined('#0f9a4c')),
-          pen('M266 365L297 347L527 347L497 365Z', 'Box top', outlined('#f6c300')),
-          pen('M497 365L527 347L527 622L497 640Z', 'Box side', outlined('#e5601a')),
-          pen('M266 365L497 365L497 640L266 640Z', 'Box front', outlined('#e86fa6')),
-          pen('M335 503L415 503L415 572L335 572Z', 'Switch base', outlined('#e86fa6')),
-          pen('M333 437L414 437L414 503L333 503Z', 'Rocker front', outlined('#eb7fb0')),
-          pen('M348 412L398 412L414 437L333 437Z', 'Rocker top', outlined('#f3b3cf')),
-          pen('M398 412L428 452L428 512L414 503L414 437Z', 'Rocker side', outlined('#d23f86')),
-          text('ON', 'inter', 380, 397, 16, ink('#1b1b1b'), 'On'),
-          text('OFF', 'inter', 380, 613, 16, ink('#1b1b1b'), 'Off'),
+          pen('M270 368L310 345L537 345L497 368Z', 'Box top', outlined('#f6c300')),
+          pen('M497 368L537 345L537 618L497 640Z', 'Box side', outlined('#e5601a')),
+          pen('M270 368L497 368L497 640L270 640Z', 'Box front', outlined('#e86fa6')),
+          // The rocker, measured corner by corner: base, slanted front, dark side, light top.
+          pen('M342 503L427 503L427 572L342 572Z', 'Switch base', outlined('#e86fa6')),
+          pen('M430 432L430 500L427 503L427 432Z', 'Side shadow', ink('#2a1420')),
+          pen('M408 418L427 432L427 503L393 446Z', 'Rocker side', outlined('#d9468a')),
+          pen('M308 446L393 446L427 503L342 503Z', 'Rocker front', outlined('#e66fa4')),
+          pen('M324 418L408 418L393 446L308 446Z', 'Rocker top', outlined('#e9b6c9')),
+          text('ON', 'inter', 372, 403, 21, ink('#1b1b1b'), 'On'),
+          text('OFF', 'inter', 372, 619, 21, ink('#1b1b1b'), 'Off'),
         ],
         solid('#d9dce6'),
         { width: 1200, height: 1200 },

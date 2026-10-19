@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "morpho-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "rustybuzz",
@@ -1815,7 +1815,7 @@ dependencies = [
 
 [[package]]
 name = "morpho-wasm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "morpho-core",
  "serde",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "morphotype-app"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "morpho-core",
  "serde",
