@@ -28,6 +28,8 @@ export type LeaveKind = 'none' | 'fade' | 'rise' | 'drop' | 'left' | 'right' | '
 export type SlideDir = 'right' | 'left' | 'up' | 'down';
 /** Which child of a staggered group goes first. */
 export type StaggerOrder = 'first' | 'last' | 'centre' | 'random';
+/** Text: each letter, or each word, moves on its own. */
+export type LetterMode = 'letters' | 'words';
 
 export interface Motion {
   loop: LoopKind;
@@ -72,6 +74,8 @@ export interface Motion {
   easePass?: boolean;
   /** Staggered groups: which child goes first. */
   order?: StaggerOrder;
+  /** Text: each letter (or word) moves in turn about its own centre, `stagger` s apart; absent, the text moves as one. */
+  letters?: LetterMode;
   /** Then: Move to…: more spots after it, visited in order (each holds until the next). */
   stops?: Stop[];
 }

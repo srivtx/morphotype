@@ -10,6 +10,7 @@
 //   Pattern    a pattern with Speed, flowing the whole time
 import { effectById } from '../render/effects';
 import type { Timeline } from './clock';
+import { textPieces } from './letters';
 import { isGroup, MODIFIER_UI, SYMBOL_UI, type Group, type Node, type Project } from './model';
 import { ENTER_OPTIONS, lastSlot, LEAVE_OPTIONS, leaveEnd, legsOf, loopPeriod, LOOP_OPTIONS, seedOf, settleTime, staggerSlot, type Motion, type ParamAnim } from './motion';
 
@@ -98,10 +99,11 @@ export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: 
   }
   const m = n.motion;
   if (m) {
-    // A staggered group's own clips span its children, from the first starting to the last settling.
-    const k = isGroup(n) && !n.merge && m.stagger > 0 ? n.children.length : 0;
+    // A staggered group's own clips span its children, from the first starting to the last settling; a text's, its letters or words.
+    const k = isGroup(n) && !n.merge && m.stagger > 0 ? n.children.length : textPieces(n);
     const spread = k ? m.stagger * lastSlot(m.order, k) : 0;
-    const turn = k ? ` · ${k} in turn` : '';
+    const unit = isGroup(n) ? '' : ` ${m.letters === 'words' ? 'word' : 'letter'}${k === 1 ? '' : 's'}`;
+    const turn = k ? ` · ${k}${unit} in turn` : '';
     if (m.enter !== 'none') out.push({ kind: 'enter', owner: n.id, start: m.delay, end: m.delay + spread + settleTime(m.transition), motion: m, children: k || undefined, label: optionLabel(ENTER_OPTIONS, m.enter) + turn });
     if (m.leave && m.leave !== 'none') {
       out.push({ kind: 'leave', owner: n.id, start: m.leaveAt ?? 0, end: leaveEnd(m) + spread, motion: m, children: k || undefined, label: leaveLabel(m) + turn, steps: k ? undefined : steps(m, 0) });

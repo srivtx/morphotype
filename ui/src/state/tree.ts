@@ -1,6 +1,7 @@
 import type { EngineDocument, EngineLayer, Member, Op, RenderSpec } from '../engine/types';
 import { isGroup, type Group, type Node, type Project, type ShapeLayer, type Style } from './model';
-import { isStill, seedOf, staggerSlot, type MotionLink } from './motion';
+import { splitsText } from './letters';
+import { isStill, seedOf, staggerSlot, type LetterMode, type MotionLink } from './motion';
 
 export interface Found {
   node: Node;
@@ -124,6 +125,8 @@ export interface SceneObject {
   clip?: string;
   /** Motions moving it, its own first, then its groups'. */
   motion?: MotionLink[];
+  /** A text whose own motion plays on each letter or word in turn (its render says which outline is which). */
+  letters?: LetterMode;
 }
 
 /** A node's own motion, plus the links its group hands down to its `index`-th child. */
@@ -214,8 +217,10 @@ export function buildScene(p: Project, quality?: number, typing?: string | null)
           continue;
         }
         const r: RenderSpec = { id: n.id, members: [n.id] };
+        const letters = splitsText(n) ? n.motion!.letters : undefined;
+        if (letters) r.letters = true;
         made.push(r);
-        objects.push({ id: n.id, style: n.style, guide: n.guide || undefined, motion });
+        objects.push({ id: n.id, style: n.style, guide: n.guide || undefined, motion, letters });
         base = [r];
       }
     }

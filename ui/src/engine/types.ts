@@ -171,6 +171,8 @@ export interface RenderSpec {
   members: Member[];
   modifiers?: ModEntry[];
   em?: number;
+  /** Say which letter and word each outline belongs to (see RenderOut.glyphs). */
+  letters?: boolean;
 }
 
 export interface EngineDocument {
@@ -195,6 +197,10 @@ export interface RenderOut {
   points: number;
   /** A single pen line's centre line: `[x, y, t, joined]` per point (t 0…1 along it). */
   spine?: number[];
+  /** Asked for with RenderSpec.letters: the letter (in reading order) of each subpath of `d`… */
+  glyphs?: number[];
+  /** …and each letter's word. */
+  words?: number[];
 }
 
 export interface BuildOut {
