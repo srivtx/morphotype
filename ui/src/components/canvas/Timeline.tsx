@@ -10,14 +10,14 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExt
 import { exportVideo } from '../../app/actions';
 import { effectById } from '../../render/effects';
 import { clock, DEFAULT_TIMELINE, timelineOf, type Timeline } from '../../state/clock';
-import { animatedValue, animMix, ENTER_UI, isStill, lastSlot, LOOP_UI, motionEnd, newMotion, poseAt, progressAt, seedOf, settleTime, staggerSlot, type LoopKind, type Motion, type ParamAnim } from '../../state/motion';
+import { addStop, animatedValue, animMix, ENTER_UI, isStill, lastSlot, legsOf, LOOP_UI, motionEnd, newMotion, poseAt, progressAt, seedOf, settleTime, staggerSlot, thenTransition, type LoopKind, type Motion, type ParamAnim, type Transition } from '../../state/motion';
 import { isGroup, type Node, type Project } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, useStore } from '../../state/store';
 import { frameAt, loopLengthOf, rowsOf, snapTime, type Clip, type Row, type Track } from '../../state/tracks';
 import { findNode } from '../../state/tree';
 import { ColorField } from '../ColorPicker';
 import { Icon } from '../icons';
-import { AdvancedSwitch, ChildrenControls, CycleSlider, EnterControls, LoopControls, ThenControls } from '../MotionPanel';
+import { AdvancedSwitch, ChildrenControls, CycleSlider, EnterControls, LoopControls, StopControls, ThenControls } from '../MotionPanel';
 import { Popover, Segmented, Slider } from '../ui';
 
 /** Frames per second: what video export renders, and what the ruler and drags count in. */
@@ -212,6 +212,8 @@ interface Editing {
   row: string;
   id: string;
   anchor: HTMLElement;
+  /** Then with stops: which step of the path (0 is Move to… itself). */
+  step?: number;
 }
 
 const trackId = (k: Track) => (k.kind === 'param' ? `${k.kind}:${k.scope}:${k.key}` : (k.kind === 'enter' || k.kind === 'leave') && k.index !== undefined ? `${k.kind}:inherited` : k.kind);
@@ -299,7 +301,7 @@ function Dock({ project, height, onHeight, onFold }: { project: Project; height:
       </div>
       {editing && open && openTrack && (
         <Popover anchor={editing.anchor} onClose={() => setEditing(null)} placement="top-start" width={300} className="tl-editor" autoFocus={false}>
-          <ClipEditor row={open.node} track={openTrack} onDone={() => setEditing(null)} />
+          <ClipEditor row={open.node} track={openTrack} step={editing.step} onDone={() => setEditing(null)} />
         </Popover>
       )}
     </div>
@@ -357,7 +359,7 @@ interface RowsProps {
 const Rows = memo(function Rows({ rows, tl, laneW, selection, folded, onFold, onEdit }: RowsProps) {
   const all = rows.flatMap((r) => r.tracks);
   // Clip edges anything can snap to.
-  const edges = [0, ...all.flatMap((k) => (k.kind === 'enter' || k.kind === 'leave' ? [k.start, k.end] : []))];
+  const edges = [0, ...all.flatMap((k) => (k.kind === 'enter' || k.kind === 'leave' ? [k.start, k.end, ...(k.steps ?? []).flatMap((p) => [p.start, p.end])] : []))];
   const ctx: LaneCtx = { tl, laneW, edges, onEdit };
   return (
     <>
@@ -502,6 +504,10 @@ function AddMenu({ node }: { node: Node }) {
             <span className="mi-label">Then move on</span>
             <kbd>a clip</kbd>
           </button>
+          <button role="menuitem" className="menu-item" disabled={m?.leave !== 'move'} onClick={() => add((x) => void addStop(x))}>
+            <span className="mi-label">Add a stop</span>
+            <kbd>after Then</kbd>
+          </button>
           <p className="menu-note">To move a colour or any setting, click ◆ next to it in the Design or Style panel.</p>
         </Popover>
       )}
@@ -558,9 +564,9 @@ const r2 = (v: number) => Math.round(v * 100) / 100;
 
 function TrackView({ row, track: k, ctx }: { row: Node; track: Track; ctx: LaneCtx }) {
   const { tl } = ctx;
-  const open = (el: HTMLElement) => {
+  const open = (el: HTMLElement, step?: number) => {
     select([row.id]);
-    ctx.onEdit({ row: row.id, id: trackId(k), anchor: el });
+    ctx.onEdit({ row: row.id, id: trackId(k), anchor: el, step });
   };
   // Snap to frames, the playhead and other clips' edges within 6 px.
   const snap = (t: number) => snapTime(t, FPS, [...ctx.edges, clock.time(tl)], (6 * tl.duration) / Math.max(1, ctx.laneW));
@@ -575,7 +581,7 @@ function TrackView({ row, track: k, ctx }: { row: Node; track: Track; ctx: LaneC
 }
 
 /** An entrance or Then: a clip from start to settle with its curve drawn in. */
-function EnterClip({ k, ctx, open, snap }: { k: Clip & { kind: 'enter' | 'leave' }; ctx: LaneCtx; open: (el: HTMLElement) => void; snap: (t: number) => number }) {
+function EnterClip({ k, ctx, open, snap }: { k: Clip & { kind: 'enter' | 'leave' }; ctx: LaneCtx; open: (el: HTMLElement, step?: number) => void; snap: (t: number) => number }) {
   const d = ctx.tl.duration;
   const leave = k.kind === 'leave';
   const m = k.motion;
@@ -620,25 +626,22 @@ function EnterClip({ k, ctx, open, snap }: { k: Clip & { kind: 'enter' | 'leave'
         `tl:${k.owner}:${k.kind}:${k.children ? 'stagger' : 'duration'}`,
       ),
   );
-  // The curve: progress 0 → 1 over the settle time, overshoot included.
-  const path = useMemo(() => {
-    const N = 48;
-    const v = Array.from({ length: N + 1 }, (_, i) => progressAt(tr, (i / N) * settle));
-    const lo = Math.min(0, ...v);
-    const hi = Math.max(1, ...v);
-    return v.map((y, i) => `${i ? 'L' : 'M'}${((i / N) * 100).toFixed(2)} ${(92 - ((y - lo) / (hi - lo)) * 84).toFixed(2)}`).join(' ');
-  }, [tr, settle]);
+  // The curve: progress 0 → 1 over the settle time (Then's runs down).
+  const path = useMemo(() => curvePath(tr, settle, leave), [tr, settle, leave]);
   const what = leave ? 'Then' : 'Comes in';
   const tip = `${what}: ${k.label}${k.from ? ` (set on ${k.from}, ${m.stagger.toFixed(2)} s apart)` : ''}. Starts at ${k.start.toFixed(2)} s (frame ${frameAt(k.start, FPS)}), settles at ${k.end.toFixed(2)} s (frame ${frameAt(k.end, FPS)})`;
   const resizable = k.children ? k.children > 1 : !physics;
   const seed = useMemo(() => seedOf(k.owner), [k.owner]);
+  const steps = !k.children && k.steps && k.steps.length > 1 ? k.steps : null;
   return (
-    <div className={`tl-clip tl-enter ${leave ? 'leave' : ''} ${k.index !== undefined ? 'inherited' : ''}`} style={{ left: pct(Math.min(k.start, d), d), width: pct(Math.max(0, Math.min(k.end, d) - Math.min(k.start, d)), d) }} onPointerDown={body} data-tip={tip}>
-      {k.children ? (
+    <div className={`tl-clip tl-enter ${leave ? 'leave' : ''} ${steps ? 'steps' : ''} ${k.index !== undefined ? 'inherited' : ''}`} style={{ left: pct(Math.min(k.start, d), d), width: pct(Math.max(0, Math.min(k.end, d) - Math.min(k.start, d)), d) }} onPointerDown={body} data-tip={tip}>
+      {steps ? (
+        steps.map((_, i) => <StepSegment key={i} k={k} i={i} steps={steps} ctx={ctx} open={open} snap={snap} moveStart={body} />)
+      ) : k.children ? (
         Array.from({ length: k.children }, (_, i) => <i key={i} className="tl-stagger" style={{ left: `${((staggerSlot(m.order, i, k.children!, seed) * m.stagger) / Math.max(1e-3, len)) * 100}%` }} />)
       ) : (
         <svg className="tl-curve" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
-          <path d={leave ? path.replace(/ ([\d.]+)(?= |$|L)/g, (_, y) => ` ${(100 - Number(y)).toFixed(2)}`) : path} />
+          <path d={path} />
         </svg>
       )}
       <span className="tl-clip-label">{k.label}</span>
@@ -646,7 +649,85 @@ function EnterClip({ k, ctx, open, snap }: { k: Clip & { kind: 'enter' | 'leave'
         {physics && !k.children ? '~' : ''}
         {len.toFixed(2)}s
       </span>
-      {resizable && <i className="tl-clip-handle" onPointerDown={end} data-tip={k.children ? 'Drag to spread the children out' : 'Drag to change how long it takes'} />}
+      {resizable && !steps && <i className="tl-clip-handle" onPointerDown={end} data-tip={k.children ? 'Drag to spread the children out' : 'Drag to change how long it takes'} />}
+    </div>
+  );
+}
+
+/** Progress 0 → 1 over a transition's settle time, as a path across a 100 × 100 box (overshoot included). */
+function curvePath(tr: Transition, settle: number, down = false): string {
+  const N = 48;
+  const v = Array.from({ length: N + 1 }, (_, i) => progressAt(tr, (i / N) * settle));
+  const lo = Math.min(0, ...v);
+  const hi = Math.max(1, ...v);
+  return v.map((y, i) => `${i ? 'L' : 'M'}${((i / N) * 100).toFixed(2)} ${(down ? 8 + ((y - lo) / (hi - lo)) * 84 : 92 - ((y - lo) / (hi - lo)) * 84).toFixed(2)}`).join(' ');
+}
+
+/**
+ * One step of Then's path in its clip: Move to… (0) or a stop. Drag it to
+ * change when it sets off (the first moves the whole of Then; a stop, how
+ * long it waits first), drag its end to retime it, click to edit it.
+ */
+function StepSegment({ k, i, steps, ctx, open, snap, moveStart }: { k: Clip; i: number; steps: { start: number; end: number }[]; ctx: LaneCtx; open: (el: HTMLElement, step?: number) => void; snap: (t: number) => number; moveStart: (e: React.PointerEvent<HTMLElement>) => void }) {
+  const m = k.motion;
+  const legs = legsOf(m);
+  const leg = legs[i];
+  const d = ctx.tl.duration;
+  // The clip is cut off at the timeline's end: place steps on what's shown.
+  const len = Math.max(1e-3, Math.min(k.end, d) - Math.min(k.start, d));
+  const [a, b] = [steps[i].start, steps[i].end];
+  const tr = leg?.transition ?? thenTransition(m);
+  const path = useMemo(() => curvePath(tr, Math.max(1e-3, b - a), true), [tr, a, b]);
+  if (!leg) return null;
+  const key = `tl:${k.owner}:step${i}`;
+  // The first step moves the whole of Then, as the clip does (a click opens Then).
+  const body =
+    i === 0
+      ? moveStart
+      : dragger(
+          ctx,
+          (el) => open(el, i),
+          (ds) =>
+            editNode(
+              k.owner,
+              (n) => {
+                const s = n.motion?.stops?.[i - 1];
+                if (s) s.hold = Math.max(0, r2(snap(a + ds) - steps[i - 1].end));
+              },
+              `${key}:hold`,
+            ),
+        );
+  const end = dragger(
+    ctx,
+    () => {},
+    (ds) =>
+      editNode(
+        k.owner,
+        (n) => {
+          const x = n.motion;
+          if (!x) return;
+          const want = Math.max(1 / 30, snap(b + ds) - a);
+          const next = { ...tr, duration: Math.max(0.05, r2(tr.duration * (want / Math.max(1e-3, b - a)))) };
+          if (i === 0) {
+            // Stops that followed Then's curve keep it: only this step changes.
+            for (const s of x.stops ?? []) s.transition ??= { ...tr };
+            x.leaveTransition = next;
+          } else {
+            const s = x.stops?.[i - 1];
+            if (s) s.transition = next;
+          }
+        },
+        `${key}:duration`,
+      ),
+  );
+  const tip = `${i === 0 ? 'Move to…' : `Stop ${i + 1}`}: sets off at ${a.toFixed(2)} s (frame ${frameAt(a, FPS)}), there by ${b.toFixed(2)} s (frame ${frameAt(b, FPS)}). Drag to ${i === 0 ? 'move Then' : 'change how long it waits first'}, drag its end to retime it, click to edit`;
+  return (
+    <div className="tl-step" style={{ left: pct(a - k.start, len), width: pct(b - a, len) }} onPointerDown={body} data-tip={tip} aria-label={i === 0 ? 'Move to…' : `Stop ${i + 1}`} role="button">
+      <svg className="tl-curve" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+        <path d={path} />
+      </svg>
+      <em>{i + 1}</em>
+      {tr.type !== 'physics' && <i className="tl-clip-handle" onPointerDown={end} data-tip="Drag to retime this step" />}
     </div>
   );
 }
@@ -737,7 +818,7 @@ function CycleClip({ row, k, ctx, open }: { row: Node; k: Extract<Track, { kind:
 }
 
 /** The editor that opens on a clip: everything about that one track, with the same controls as the Motion panel. */
-function ClipEditor({ row, track: k, onDone }: { row: Node; track: Track; onDone: () => void }) {
+function ClipEditor({ row, track: k, step, onDone }: { row: Node; track: Track; step?: number; onDone: () => void }) {
   const owner = k.owner;
   const setMotion = (fn: (m: Motion) => void, key = '') =>
     editNode(
@@ -769,12 +850,20 @@ function ClipEditor({ row, track: k, onDone }: { row: Node; track: Track; onDone
     </button>
   );
   const children = ownerNode && isGroup(ownerNode) && !ownerNode.merge ? ownerNode.children.length : 0;
+  if (k.kind === 'leave' && step && k.motion.stops?.[step - 1]) {
+    return (
+      <div className="tl-edit">
+        {head(`Stop ${step + 1}`)}
+        <StopControls m={k.motion} index={step - 1} set={setMotion} onRemove={onDone} />
+      </div>
+    );
+  }
   if (k.kind === 'enter' || k.kind === 'leave') {
     const m = k.motion;
     return (
       <div className="tl-edit">
         {head(k.kind === 'enter' ? 'Comes in' : 'Then')}
-        {k.kind === 'enter' ? <EnterControls m={m} set={setMotion} /> : <ThenControls m={m} set={setMotion} />}
+        {k.kind === 'enter' ? <EnterControls m={m} set={setMotion} /> : <ThenControls m={m} set={setMotion} stops={!k.steps} />}
         {children > 0 && <ChildrenControls m={m} set={setMotion} count={children} />}
         {k.kind === 'enter' ? remove('Remove entrance', (x) => (x.enter = 'none')) : remove('Remove Then', (x) => (x.leave = 'none'))}
       </div>

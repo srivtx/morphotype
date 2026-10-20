@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { animatedValue, applyMat, bezierAt, DEFAULT_TRANSITION, FEELS, feelOf, lastSlot, loopPeriod, motionEnd, motionReach, newMotion, placement, poseAt, poseMatrix, progressAt, settleTime, springAt, springOf, staggerSlot } from './motion';
+import { addStop, animatedValue, applyMat, bezierAt, DEFAULT_TRANSITION, FEELS, feelOf, lastSlot, leaveEnd, legsOf, loopPeriod, motionEnd, motionReach, newMotion, placement, poseAt, poseMatrix, progressAt, settleTime, springAt, springOf, staggerSlot } from './motion';
 
 describe('transitions', () => {
   it('eases like CSS cubic-bezier', () => {
@@ -116,6 +116,47 @@ describe('moves, Then, slides and stagger order', () => {
     // Fades leave fading.
     expect(poseAt(newMotion({ leave: 'rise', leaveDistance: 40, leaveAt: 0, transition: smooth }), 1)).toMatchObject({ y: -40, opacity: 0 });
     expect(motionEnd(m)).toBe(3);
+  });
+
+  it('travels through every stop after Then, in order, holding at each', () => {
+    const slow = { ...smooth, duration: 2 };
+    const m = newMotion({ leave: 'move', toX: 300, leaveAt: 1, transition: smooth, stops: [{ x: 300, y: 200, hold: 0.5 }, { x: 0, y: 200, transition: slow }] });
+    const at = (t: number) => {
+      const p = poseAt(m, t);
+      return [Math.round(p.x * 1000) / 1000, Math.round(p.y * 1000) / 1000];
+    };
+    expect(at(0.5)).toEqual([0, 0]);
+    expect(at(1.5)).toEqual([150, 0]);
+    // Arrived at 2, holds until 2.5, then down to the second spot by 3.5.
+    expect(at(2.2)).toEqual([300, 0]);
+    expect(at(3)).toEqual([300, 100]);
+    expect(at(3.5)).toEqual([300, 200]);
+    // No hold: straight on, with its own two-second curve.
+    expect(at(4.5)).toEqual([150, 200]);
+    expect(at(6)).toEqual([0, 200]);
+    expect(poseAt(m, 6).opacity).toBe(1);
+    expect(legsOf(m).map((l) => [l.start, l.end])).toEqual([
+      [1, 2],
+      [2.5, 3.5],
+      [3.5, 5.5],
+    ]);
+    expect(leaveEnd(m)).toBe(5.5);
+    expect(motionEnd(m)).toBe(5.5);
+    // Stops follow Then's curve unless they have their own; they only apply to Move to….
+    expect(legsOf(m)[1].transition).toBe(smooth);
+    expect(poseAt({ ...m, leave: 'right', leaveDistance: 100 }, 6)).toMatchObject({ x: 100, y: 0 });
+    expect(legsOf({ ...m, leave: 'right' })).toEqual([]);
+  });
+
+  it('adds each new stop a turn to the right of the way it was going', () => {
+    const m = newMotion({ leave: 'move', toX: 200, toY: 0, leaveAt: 1 });
+    expect(addStop(m)).toMatchObject({ x: 200, y: 160 });
+    expect(addStop(m)).toMatchObject({ x: 40, y: 160 });
+    expect(m.stops).toHaveLength(2);
+    // Files without stops play as they did.
+    const old = newMotion({ leave: 'move', toX: 200, leaveAt: 1, transition: smooth });
+    expect(poseAt(old, 1.5).x).toBeCloseTo(100);
+    expect(leaveEnd(old)).toBe(2);
   });
 
   it('slides one way in any direction, or there and back', () => {

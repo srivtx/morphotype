@@ -4,13 +4,14 @@
 //
 //   Entrance   a clip from when it starts (delay, plus the group's stagger)
 //              to when it settles
+//   Then       the same, with a segment for each stop on its path
 //   Loop       cycles across the whole timeline, fitted to it when looping
 //   Setting    a material, modifier or shape setting going to and fro
 //   Pattern    a pattern with Speed, flowing the whole time
 import { effectById } from '../render/effects';
 import type { Timeline } from './clock';
 import { isGroup, MODIFIER_UI, SYMBOL_UI, type Group, type Node, type Project } from './model';
-import { ENTER_OPTIONS, lastSlot, LEAVE_OPTIONS, loopPeriod, LOOP_OPTIONS, seedOf, settleTime, staggerSlot, type Motion, type ParamAnim } from './motion';
+import { ENTER_OPTIONS, lastSlot, LEAVE_OPTIONS, leaveEnd, legsOf, loopPeriod, LOOP_OPTIONS, seedOf, settleTime, staggerSlot, type Motion, type ParamAnim } from './motion';
 
 /** An entrance or Then: a clip from when it starts to when it settles. */
 export interface Clip {
@@ -26,6 +27,8 @@ export interface Clip {
   /** The group a staggered child's clip is set on. */
   from?: string;
   label: string;
+  /** Then with stops: each step of the path (Move to…, then each stop), placed on the clock. */
+  steps?: { start: number; end: number }[];
 }
 
 export type Track =
@@ -80,7 +83,9 @@ export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: 
   const L = loopLengthOf(tl);
   const out: Track[] = [];
   const g = parent?.group;
-  const leaveLabel = (m: Motion) => optionLabel(LEAVE_OPTIONS, m.leave ?? 'none');
+  const leaveLabel = (m: Motion) => optionLabel(LEAVE_OPTIONS, m.leave ?? 'none') + (m.leave === 'move' && m.stops?.length ? ` · ${m.stops.length + 1} stops` : '');
+  // Then, from when it sets off to when its last stop settles, shifted `off` seconds.
+  const steps = (m: Motion, off: number) => (m.leave === 'move' && m.stops?.length ? legsOf(m).map((l) => ({ start: l.start + off, end: l.end + off })) : undefined);
   const gm = g && !g.merge && g.motion && g.motion.stagger > 0 ? g.motion : null;
   if (g && gm) {
     // A staggered group's entrance and Then play on each child in turn.
@@ -88,8 +93,7 @@ export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: 
     const off = slot * gm.stagger;
     if (gm.enter !== 'none') out.push({ kind: 'enter', owner: g.id, start: gm.delay + off, end: gm.delay + off + settleTime(gm.transition), motion: gm, index: slot, label: optionLabel(ENTER_OPTIONS, gm.enter), from: g.name });
     if (gm.leave && gm.leave !== 'none') {
-      const at = (gm.leaveAt ?? 0) + off;
-      out.push({ kind: 'leave', owner: g.id, start: at, end: at + settleTime(gm.leaveTransition ?? gm.transition), motion: gm, index: slot, label: leaveLabel(gm), from: g.name });
+      out.push({ kind: 'leave', owner: g.id, start: (gm.leaveAt ?? 0) + off, end: leaveEnd(gm) + off, motion: gm, index: slot, label: leaveLabel(gm), from: g.name, steps: steps(gm, off) });
     }
   }
   const m = n.motion;
@@ -100,8 +104,7 @@ export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: 
     const turn = k ? ` · ${k} in turn` : '';
     if (m.enter !== 'none') out.push({ kind: 'enter', owner: n.id, start: m.delay, end: m.delay + spread + settleTime(m.transition), motion: m, children: k || undefined, label: optionLabel(ENTER_OPTIONS, m.enter) + turn });
     if (m.leave && m.leave !== 'none') {
-      const at = m.leaveAt ?? 0;
-      out.push({ kind: 'leave', owner: n.id, start: at, end: at + spread + settleTime(m.leaveTransition ?? m.transition), motion: m, children: k || undefined, label: leaveLabel(m) + turn });
+      out.push({ kind: 'leave', owner: n.id, start: m.leaveAt ?? 0, end: leaveEnd(m) + spread, motion: m, children: k || undefined, label: leaveLabel(m) + turn, steps: k ? undefined : steps(m, 0) });
     }
     if (m.loop !== 'none') out.push({ kind: 'loop', owner: n.id, motion: m, period: loopPeriod(m.period, L), label: optionLabel(LOOP_OPTIONS, m.loop) });
   }

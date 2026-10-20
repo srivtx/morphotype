@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { background, fill, group, style, symbolLayer, type Project } from './model';
-import { newMotion, settleTime } from './motion';
+import { DEFAULT_TRANSITION, newMotion, settleTime } from './motion';
 import { rowsOf, snapTime, tracksOf } from './tracks';
 
 const square = (name: string) => symbolLayer('roundRect', 100, { name, style: style('flat', { fill: '#ff0000' }) }, { radius: 0.1 });
@@ -32,6 +32,31 @@ describe('timeline rows', () => {
     expect(span.kind === 'enter' && [span.start, span.end, span.children]).toEqual([0.5, 0.5 + 0.4 + settle, 3]);
     const c = rows[1].tracks[0];
     expect(c.kind === 'enter' && [c.owner, c.index, c.start]).toEqual([g.id, 2, 0.5 + 0.4]);
+  });
+
+  it("shows Then with stops as one clip with a step for each", () => {
+    const smooth = { ...DEFAULT_TRANSITION, duration: 1, ease: [0, 0, 1, 1] as [number, number, number, number] };
+    const a = square('A');
+    a.motion = newMotion({ leave: 'move', toX: 100, leaveAt: 1, transition: smooth, stops: [{ x: 100, y: 100, hold: 0.5 }, { x: 0, y: 100 }] });
+    const [then] = tracksOf(a, { duration: 6, loop: true });
+    expect(then.kind === 'leave' && [then.start, then.end, then.label, then.steps]).toEqual([
+      1,
+      4.5,
+      'Move to… · 3 stops',
+      [
+        { start: 1, end: 2 },
+        { start: 2.5, end: 3.5 },
+        { start: 3.5, end: 4.5 },
+      ],
+    ]);
+    // A staggered group's stops play on each child in turn.
+    const g = group([square('B'), square('C')], { name: 'G', motion: newMotion({ ...a.motion, stagger: 0.5 }) });
+    const c = rowsOf(project([g]), [])[1].tracks[0];
+    expect(c.kind === 'leave' && c.steps?.map((p) => p.start)).toEqual([1.5, 3, 4]);
+    expect(rowsOf(project([g]), [])[0].tracks[0]).toMatchObject({ end: 5, steps: undefined });
+    // Without stops, nothing changes.
+    a.motion.stops = undefined;
+    expect(tracksOf(a, { duration: 6, loop: true })[0]).toMatchObject({ start: 1, end: 2, label: 'Move to…', steps: undefined });
   });
 
   it('shows loops at the cycle the clock really plays', () => {
