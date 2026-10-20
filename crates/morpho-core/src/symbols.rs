@@ -5,6 +5,7 @@
 use crate::field::{extract, Grid};
 use crate::geom::{normalize_winding, pt, Pt, Rect, Shape};
 use crate::noise::noise2;
+use crate::stroke::LineCap;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{PI, TAU};
 
@@ -49,16 +50,16 @@ pub enum Symbol {
     CatHead { #[serde(default = "d::<30>")] ears: f64 },
     /// Chat bubble with a tail (mascot app icons).
     Bubble { #[serde(default = "d::<30>")] tail: f64, #[serde(default = "d::<260>")] roundness: f64 },
-    /// Thick spiral stroke with round ends.
-    Spiral { #[serde(default = "d::<250>")] turns: f64, #[serde(default = "d::<55>")] weight: f64 },
+    /// Thick spiral stroke, round-ended unless `cap` says otherwise.
+    Spiral { #[serde(default = "d::<250>")] turns: f64, #[serde(default = "d::<55>")] weight: f64, #[serde(default)] cap: LineCap },
     /// Rounded petals with pinched valleys.
     Flower { #[serde(default = "d::<400>")] petals: f64, #[serde(default = "d::<35>")] depth: f64 },
     Arrow { #[serde(default = "d::<45>")] head: f64, #[serde(default = "d::<30>")] shaft: f64 },
     Bolt,
     /// Crescent; `phase` 0 = thin sliver, 1 = nearly full.
     Moon { #[serde(default = "d::<40>")] phase: f64 },
-    /// A smiling mouth: a thick arc with round ends. Negative `curve` frowns.
-    Smile { #[serde(default = "d::<50>")] curve: f64, #[serde(default = "d::<35>")] weight: f64 },
+    /// A smiling mouth: a thick arc, round-ended unless `cap` says otherwise. Negative `curve` frowns.
+    Smile { #[serde(default = "d::<50>")] curve: f64, #[serde(default = "d::<35>")] weight: f64, #[serde(default)] cap: LineCap },
     /// Quarter disc filling the box; the square corner is bottom-left. Modular logos.
     Quarter,
     /// Half disc, flat side down, in a 2:1 box.
@@ -121,6 +122,26 @@ pub enum Symbol {
 }
 
 const SEG: usize = 256;
+
+/// Closes one end of a thick stroke drawn as a single outline: from `a`, the
+/// side the outline arrives on, over to `b`, the other side. `past` points
+/// away from the stroke, so the cap bulges outwards whichever way the
+/// outline runs.
+fn stroke_end(pts: &mut Vec<Pt>, a: Pt, b: Pt, past: Pt, cap: LineCap) {
+    let c = (a + b) * 0.5;
+    let half = (a - c).len();
+    let past = past.normalized() * half;
+    match cap {
+        LineCap::Butt => {}
+        LineCap::Square => pts.extend([a + past, b + past]),
+        LineCap::Round => {
+            for k in 1..16 {
+                let t = PI * k as f64 / 16.0;
+                pts.push(c + (a - c) * t.cos() + past * t.sin());
+            }
+        }
+    }
+}
 
 fn ellipse(c: Pt, rx: f64, ry: f64, n: usize) -> Vec<Pt> {
     (0..n)
@@ -389,7 +410,7 @@ pub fn build(sym: &Symbol) -> Shape {
             }
             Shape::new(vec![pts])
         }
-        Symbol::Spiral { turns, weight } => {
+        Symbol::Spiral { turns, weight, cap } => {
             let turns = turns.clamp(0.5, 6.0);
             let r0 = 0.05;
             let spacing = (0.5 - r0) / (turns + 0.5);
@@ -413,20 +434,10 @@ pub fn build(sym: &Symbol) -> Shape {
                 left.push(p + nrm * half);
                 right.push(p - nrm * half);
             }
-            let cap = |p: Pt, from: Pt, out: &mut Vec<Pt>| {
-                let d = from - p;
-                let a0 = d.y.atan2(d.x);
-                for k in 1..12 {
-                    let a = a0 + PI * k as f64 / 12.0;
-                    out.push(pt(p.x + half * a.cos(), p.y + half * a.sin()));
-                }
-            };
             let mut pts = left.clone();
-            let (end, _) = centre(total);
-            cap(end, *left.last().unwrap(), &mut pts);
+            stroke_end(&mut pts, *left.last().unwrap(), *right.last().unwrap(), centre(total).1, *cap);
             pts.extend(right.iter().rev());
-            let (start, _) = centre(0.0);
-            cap(start, right[0], &mut pts);
+            stroke_end(&mut pts, right[0], left[0], -centre(0.0).1, *cap);
             Shape::new(vec![pts])
         }
         Symbol::Flower { petals, depth } => {
@@ -474,7 +485,7 @@ pub fn build(sym: &Symbol) -> Shape {
             }
             Shape::new(vec![pts])
         }
-        Symbol::Smile { curve, weight } => {
+        Symbol::Smile { curve, weight, cap } => {
             let c = curve.clamp(-1.0, 1.0);
             let w = weight.clamp(0.05, 1.0) * 0.3;
             let h = (0.08 + c.abs() * 1.3).min(1.45);
@@ -491,19 +502,14 @@ pub fn build(sym: &Symbol) -> Shape {
             for k in 0..=n {
                 pts.push(at(r + w / 2.0, mid - h + 2.0 * h * k as f64 / n as f64));
             }
-            let cap = |pts: &mut Vec<Pt>, a: f64, from_out: bool| {
-                let e = at(r, a);
-                let dir = if from_out { a } else { a + PI };
-                for k in 1..16 {
-                    let t = dir + PI * k as f64 / 16.0 * if from_out == (sign > 0.0) { 1.0 } else { -1.0 } * sign;
-                    pts.push(pt(e.x + w / 2.0 * t.cos(), e.y + w / 2.0 * t.sin()));
-                }
-            };
-            cap(&mut pts, mid + h, true);
+            // The arc runs with the angle, so past its ends is the tangent
+            // forwards at `mid + h` and backwards at `mid - h`.
+            let (a1, a0) = (mid + h, mid - h);
+            stroke_end(&mut pts, at(r + w / 2.0, a1), at(r - w / 2.0, a1), pt(-a1.sin(), a1.cos()), *cap);
             for k in 0..=n {
                 pts.push(at(r - w / 2.0, mid + h - 2.0 * h * k as f64 / n as f64));
             }
-            cap(&mut pts, mid - h, false);
+            stroke_end(&mut pts, at(r - w / 2.0, a0), at(r + w / 2.0, a0), pt(a0.sin(), -a0.cos()), *cap);
             Shape::new(vec![pts])
         }
         Symbol::Quarter => {
@@ -691,7 +697,7 @@ mod tests {
             {"kind":"star","rounding":0.2},{"kind":"sparkle"},{"kind":"burst"},{"kind":"pin"},{"kind":"cursor"},{"kind":"blob","wobble":1},
             {"kind":"eyes"},{"kind":"heart"},{"kind":"plus"},{"kind":"catHead"},{"kind":"bubble"},{"kind":"spiral"},
             {"kind":"flower"},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1},
-            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3},{"kind":"folder"},{"kind":"quarter"},{"kind":"half"},{"kind":"cove"},{"kind":"pill"},{"kind":"pill","aspect":0.4},{"kind":"folder","corner":0},
+            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"smile","cap":"butt"},{"kind":"smile","curve":-0.4,"cap":"square"},{"kind":"spiral","cap":"butt"},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3},{"kind":"folder"},{"kind":"quarter"},{"kind":"half"},{"kind":"cove"},{"kind":"pill"},{"kind":"pill","aspect":0.4},{"kind":"folder","corner":0},
             {"kind":"wavy"},{"kind":"wavy","scallop":1,"waves":12,"depth":0.2},{"kind":"lens"},{"kind":"cloud"},{"kind":"cloud","puffs":5,"seed":2},
             {"kind":"globe"},{"kind":"globe","aspect":1.8,"meridians":4},{"kind":"asterisk"},{"kind":"asterisk","arms":24,"weight":0.02,"inner":0.2}]"#,
         )
@@ -702,6 +708,41 @@ mod tests {
             assert!(sh.area() > 0.0, "{s:?} area {}", sh.area());
             let b = sh.bbox();
             assert!(b.width() <= 1.05 && b.height() <= 1.05, "{s:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn stroke_symbol_ends_bulge_out() {
+        // Two round ends add one disc of the stroke's width to the flat-ended
+        // outline and two square ends add a w×w square, so the extra areas
+        // compare as π : 4. A cap that bites into the stroke takes area away.
+        let shapes = [("smile", r#""curve":0.5"#), ("smile", r#""curve":-0.8,"weight":0.9"#), ("smile", r#""curve":0"#), ("spiral", r#""turns":3"#)];
+        for (kind, params) in shapes {
+            let area = |cap: &str| {
+                let s: Symbol = serde_json::from_str(&format!(r#"{{"kind":"{kind}",{params},"cap":"{cap}"}}"#)).unwrap();
+                build(&s).area()
+            };
+            let (butt, round, square) = (area("butt"), area("round"), area("square"));
+            assert!(round > butt, "{kind} {params}: round {round} ≤ flat {butt}");
+            let ratio = (square - butt) / (round - butt);
+            assert!((ratio - 4.0 / PI).abs() < 0.01, "{kind} {params}: square/round extra {ratio}");
+        }
+        // Files saved before caps were a choice keep round ends.
+        let old: Symbol = serde_json::from_str(r#"{"kind":"smile"}"#).unwrap();
+        assert!(matches!(old, Symbol::Smile { cap: LineCap::Round, .. }));
+    }
+
+    #[test]
+    fn smile_is_symmetric() {
+        for cap in [LineCap::Round, LineCap::Butt, LineCap::Square] {
+            for curve in [0.5, -0.6, 0.0, 1.0] {
+                let b = build(&Symbol::Smile { curve, weight: 0.35, cap }).bbox();
+                assert!((b.x0 + b.x1).abs() < 1e-3, "{cap:?} {curve}: {b:?}");
+                if cap == LineCap::Round {
+                    // Chord of 0.9 including the caps.
+                    assert!((b.width() - 0.9).abs() < 2e-3, "{curve}: {}", b.width());
+                }
+            }
         }
     }
 

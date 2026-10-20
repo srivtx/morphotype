@@ -4,7 +4,7 @@
 import { useRef, useState } from 'react';
 import { addGlyphPart, bakeGlyph, duplicateGlyphPart, editGlyphPart, editType, removeGlyphPart, reorderGlyphPart } from '../../app/typeActions';
 import type { GlyphPart, GlyphPreview, Op, SymbolKind } from '../../engine/types';
-import { SYMBOL_DEFAULTS, SYMBOL_UI, type TypeProject } from '../../state/model';
+import { isChoice, SYMBOL_DEFAULTS, SYMBOL_UI, type TypeProject } from '../../state/model';
 import { beginGesture, commitEdit, store, useStore } from '../../state/store';
 import { useShape } from '../../render/thumbs';
 import { Icon } from '../icons';
@@ -208,19 +208,26 @@ export function GlyphPartPanel({ glyph, part }: { glyph: string; part: GlyphPart
         <Slider label="Stretch across" value={part.sx} min={-3} max={3} step={0.01} reset={1} onChange={(v) => set((p) => (p.sx = v), 'sx')} />
         <Slider label="Stretch up" value={part.sy} min={-3} max={3} step={0.01} reset={1} onChange={(v) => set((p) => (p.sy = v), 'sy')} />
         {ui?.fields
-          .filter((f) => advanced || !f.advanced)
-          .map((f) => (
-            <Slider
-              key={f.key}
-              label={f.label}
-              min={f.min}
-              max={f.max}
-              step={f.step}
-              value={Number((part.symbol as unknown as Record<string, number>)[f.key] ?? 0)}
-              reset={Number((SYMBOL_DEFAULTS[part.symbol!.kind] as unknown as Record<string, number>)[f.key])}
-              onChange={(v) => set((p) => ((p.symbol as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
-            />
-          ))}
+          .filter((f) => isChoice(f) || advanced || !f.advanced)
+          .map((f) =>
+            isChoice(f) ? (
+              <div className="field" key={f.key}>
+                <span>{f.label}</span>
+                <Segmented size="sm" value={String((part.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => set((p) => ((p.symbol as unknown as Record<string, string>)[f.key] = v))} />
+              </div>
+            ) : (
+              <Slider
+                key={f.key}
+                label={f.label}
+                min={f.min}
+                max={f.max}
+                step={f.step}
+                value={Number((part.symbol as unknown as Record<string, number>)[f.key] ?? 0)}
+                reset={Number((SYMBOL_DEFAULTS[part.symbol!.kind] as unknown as Record<string, number>)[f.key])}
+                onChange={(v) => set((p) => ((p.symbol as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
+              />
+            ),
+          )}
         <div className="button-row">
           <button className="btn small" onClick={() => duplicateGlyphPart(glyph, part.id)}>
             <Icon name="duplicate" size={13} /> Duplicate

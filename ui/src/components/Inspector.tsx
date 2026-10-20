@@ -7,7 +7,7 @@ import { backgroundCss, fillCss } from '../render/background';
 import { effectById } from '../render/effects';
 import { luminance, QUICK_COLORS, recolor } from '../render/palette';
 import { useShape, viewBoxOf } from '../render/thumbs';
-import { CANVAS_PRESETS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Depth, depth, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
+import { CANVAS_PRESETS, CAP_OPTIONS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Depth, depth, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
 import { BG_PRESETS, lookOf, SHAPE_RECIPES, type Recipe } from '../state/recipes';
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
@@ -510,16 +510,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
           <Slider label="Width" value={c.width} min={0.5} max={300} step={0.5} suffix="px" onChange={(v) => setC<'line'>((x) => (x.width = v), 'lw')} />
           <div className="field">
             <span>Ends</span>
-            <Segmented
-              size="sm"
-              value={c.cap}
-              options={[
-                { value: 'round', label: 'Round', title: 'Round ends, like a marker' },
-                { value: 'butt', label: 'Flat', title: 'Cut square at the last point' },
-                { value: 'square', label: 'Square', title: 'Square, half the width past the last point' },
-              ]}
-              onChange={(v) => setC<'line'>((x) => (x.cap = v))}
-            />
+            <Segmented size="sm" value={c.cap} options={CAP_OPTIONS} onChange={(v) => setC<'line'>((x) => (x.cap = v))} />
           </div>
           <Slider label="Size" value={c.size} min={10} max={3000} step={1} onChange={(v) => setC<'line'>((x) => (x.size = v), 'ls')} />
           <LineAlong c={c} setC={setC} />
@@ -581,19 +572,27 @@ function SymbolEditor({ c, setC }: { c: Of<'symbol'>; setC: <T extends Content['
       )}
       <Slider label="Size" value={c.size} min={10} max={1600} step={1} onChange={(v) => setC<'symbol'>((x) => (x.size = v), 'size')} />
       {ui.fields
-        .filter((f) => advanced || !f.advanced)
-        .map((f) => (
-          <Slider
-            key={f.key}
-            label={f.label}
-            min={f.min}
-            max={f.max}
-            step={f.step}
-            value={Number((c.symbol as unknown as Record<string, number>)[f.key] ?? 0)}
-            reset={Number((SYMBOL_DEFAULTS[c.symbol.kind] as unknown as Record<string, number>)[f.key])}
-            onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
-          />
-        ))}
+        .filter((f) => isChoice(f) || advanced || !f.advanced)
+        .map((f) =>
+          isChoice(f) ? (
+            <div className="field" key={f.key}>
+              <span>{f.label}</span>
+              {/* Files from before a choice existed have no value: the engine's default is the first option. */}
+              <Segmented size="sm" value={String((c.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, string>)[f.key] = v))} />
+            </div>
+          ) : (
+            <Slider
+              key={f.key}
+              label={f.label}
+              min={f.min}
+              max={f.max}
+              step={f.step}
+              value={Number((c.symbol as unknown as Record<string, number>)[f.key] ?? 0)}
+              reset={Number((SYMBOL_DEFAULTS[c.symbol.kind] as unknown as Record<string, number>)[f.key])}
+              onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
+            />
+          ),
+        )}
     </Section>
   );
 }
