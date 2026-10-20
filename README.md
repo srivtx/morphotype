@@ -6,7 +6,7 @@ A Mac-first type and logo lab. Morph one typeface into another, reshape letterin
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/srivtx/morphotype/releases). It's a universal app for Apple silicon and Intel Macs. Open it and drag **Morphotype** to Applications. The app isn't notarised yet, so the first time macOS blocks it: go to **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Morphotype.app` once in Terminal. `Morphotype-web.zip` in the same release is the browser version, ready to host anywhere.
+Download the latest `.dmg` from [Releases](https://github.com/srivtx/morphotype/releases). It's a universal app for Apple silicon and Intel Macs. Open it and drag **Morphotype** to Applications. The app isn't notarised yet, so the first time macOS blocks it: go to **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Morphotype.app` once in Terminal. On Windows 10 or 11, download `Morphotype_<version>_x64-setup.exe` from the same release and run it. It isn't code-signed yet, so SmartScreen may warn the first time: click **More info → Run anyway**. `Morphotype-web.zip` in the same release is the browser version, ready to host anywhere.
 
 ## What it does
 
@@ -86,13 +86,14 @@ npm install
 | Run in the browser | `npm run dev`, then open http://localhost:1420 |
 | Run the Mac app | `npm run tauri dev` |
 | Build the Mac app (.app and .dmg) | `npm run tauri build` (universal binary: add `-- --target universal-apple-darwin`) |
+| Build the Windows installer (on Windows) | `npx tauri build --bundles nsis` |
 | Build the web app | `npm run build` (output in `dist/`) |
 | Rust and UI unit tests | `npm test` |
 | Browser end-to-end test | `npm run build && npm run test:e2e` |
 | Live render studio (templates → PNG, compare with a reference) | `node scripts/studio.mjs`, then e.g. `curl '127.0.0.1:7799/compare?tpl=UFO%20poster&ref=ref.png&out=diff.png'` |
 | Measure an outline on a reference picture | `cargo run --release --example refpath -- mask.pgm` (a white-on-black PGM mask → path data) |
 
-CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-macOS* artifact). The first build of a new version (the `version` in `package.json`) on `main` also publishes a GitHub Release with the `.dmg` and the web build attached.
+CI builds an unsigned universal `.dmg` and an unsigned Windows installer on every push and pull request (the *Morphotype-macOS* and *Morphotype-Windows* artifacts), and checks exported fonts with OTS and fontbakery (the *font-audit* artifact holds the fonts and reports). The first build of a new version (the `version` in `package.json`) on `main` also publishes a GitHub Release with the `.dmg`, the Windows installer and the web build attached.
 
 ### Shortcuts
 
@@ -137,7 +138,7 @@ The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk
 
 ## Known limitations
 
-- Exported fonts don't carry kerning or OpenType features yet; metrics come from the base font(s).
+- Exported fonts carry the base font's kerning (blended with the morph target's), but no other OpenType features such as ligatures or alternates, and kerning can't be edited yet. Metrics come from the base font(s).
 - Content outside the artboard isn't rendered (like a clipped frame), though you can still select and move it.
 - WOFF2 imports aren't supported yet; import the TTF or OTF instead.
 - Morphing between structurally very different glyphs, such as a two-storey and a single-storey "a", can pinch mid-way. Moving the blend toward either end resolves it.

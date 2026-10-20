@@ -1833,6 +1833,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

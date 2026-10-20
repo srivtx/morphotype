@@ -3,6 +3,7 @@
 use crate::geom::{pt, CurveContour, Pt, Seg};
 use rustybuzz::ttf_parser::{self, name_id, GlyphId, OutlineBuilder, Tag};
 use serde::Serialize;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct FontError(pub String);
@@ -109,6 +110,11 @@ pub struct FontInfo {
     pub axes: Vec<Axis>,
     /// Number of faces in a collection (.ttc); 1 otherwise.
     pub faces: u32,
+    /// Copyright notice, licence and licence URL (name IDs 0, 13 and 14),
+    /// which derived fonts must keep.
+    pub copyright: String,
+    pub license: String,
+    pub license_url: String,
 }
 
 fn name_of(face: &ttf_parser::Face, id: u16) -> Option<String> {
@@ -178,6 +184,9 @@ impl FontData {
             glyph_count: face.number_of_glyphs(),
             axes,
             faces,
+            copyright: name_of(&face, name_id::COPYRIGHT_NOTICE).unwrap_or_default(),
+            license: name_of(&face, name_id::LICENSE).unwrap_or_default(),
+            license_url: name_of(&face, name_id::LICENSE_URL).unwrap_or_default(),
         };
         Ok(FontData { data, index, info })
     }
@@ -235,6 +244,47 @@ pub fn shape_line(face: &rustybuzz::Face, text: &str, ligatures: bool) -> Vec<Pl
             y_offset: p.y_offset,
         })
         .collect()
+}
+
+/// The font's own kerning between every ordered pair of `chars`, in font
+/// units: whatever GPOS or `kern` does to the pair, measured by shaping with
+/// kerning on and off. Pairs that don't kern are left out.
+pub fn pair_kerning(face: &rustybuzz::Face, chars: &[char]) -> HashMap<(char, char), i32> {
+    let chars: Vec<char> = chars.iter().copied().filter(|c| !c.is_whitespace() && face.glyph_index(*c).is_some()).collect();
+    let feats = |kern: bool| -> Vec<rustybuzz::Feature> {
+        [(b"kern", kern), (b"liga", false), (b"clig", false), (b"calt", false)].iter().map(|(t, on)| rustybuzz::Feature::new(Tag::from_bytes(t), *on as u32, ..)).collect()
+    };
+    let (on, off) = (feats(true), feats(false));
+    // Pen offset that glyph i + 1 gets from the pair (i, i + 1).
+    let shape = |text: &[char], f: &[rustybuzz::Feature]| -> Option<Vec<(i32, i32)>> {
+        let mut buf = rustybuzz::UnicodeBuffer::new();
+        buf.push_str(&text.iter().collect::<String>());
+        buf.set_direction(rustybuzz::Direction::LeftToRight);
+        let out = rustybuzz::shape(face, f, buf);
+        (out.len() == text.len()).then(|| out.glyph_positions().iter().map(|p| (p.x_advance, p.x_offset)).collect())
+    };
+    let mut kern = HashMap::new();
+    let mut record = |text: &[char]| -> bool {
+        let (Some(a), Some(b)) = (shape(text, &on), shape(text, &off)) else { return false };
+        for i in 0..text.len() - 1 {
+            let d = (a[i].0 - b[i].0) + (a[i + 1].1 - b[i + 1].1);
+            if d != 0 {
+                kern.insert((text[i], text[i + 1]), d);
+            }
+        }
+        true
+    };
+    // One run per left character, alternating with every other character,
+    // covers both orders of each pair: "AaAbAc…" holds Aa, aA, Ab, bA…
+    for &l in &chars {
+        let run: Vec<char> = chars.iter().flat_map(|&r| [l, r]).chain([l]).collect();
+        if !record(&run) {
+            for &r in &chars {
+                record(&[l, r]);
+            }
+        }
+    }
+    kern
 }
 
 struct Builder {

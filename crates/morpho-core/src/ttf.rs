@@ -21,6 +21,13 @@ pub struct FontMeta {
     /// Degrees, negative leans right (OpenType convention).
     pub italic_angle: f64,
     pub copyright: String,
+    /// Description (name ID 10), licence (13) and licence URL (14); empty
+    /// strings are left out.
+    pub description: String,
+    pub license: String,
+    pub license_url: String,
+    /// Kerning between characters (left, right, font units), written as GPOS.
+    pub kerning: Vec<(u32, u32, i16)>,
 }
 
 /// A glyph in font units, y-down (as produced by the rest of the engine).
@@ -62,41 +69,118 @@ fn clamp16(v: f64) -> i16 {
     v.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16
 }
 
+/// Parameters in (0, 1) where a curve with these per-axis control values has
+/// a real extreme (one that sticks out by at least half a unit), ascending.
+fn extreme_ts(ctrl: &[Pt]) -> Vec<f64> {
+    let mut ts = Vec::new();
+    for axis in 0..2 {
+        let v: Vec<f64> = ctrl.iter().map(|p| if axis == 0 { p.x } else { p.y }).collect();
+        // Roots of the derivative, as a quadratic a t² + b t + c.
+        let (a, b, c) = match v.len() {
+            3 => (0.0, 2.0 * (v[0] - 2.0 * v[1] + v[2]), 2.0 * (v[1] - v[0])),
+            _ => (3.0 * (-v[0] + 3.0 * v[1] - 3.0 * v[2] + v[3]), 6.0 * (v[0] - 2.0 * v[1] + v[2]), 3.0 * (v[1] - v[0])),
+        };
+        let mut roots = Vec::new();
+        if a.abs() < 1e-12 {
+            if b.abs() > 1e-12 {
+                roots.push(-c / b);
+            }
+        } else {
+            let disc = b * b - 4.0 * a * c;
+            if disc >= 0.0 {
+                let s = disc.sqrt();
+                roots.extend([(-b + s) / (2.0 * a), (-b - s) / (2.0 * a)]);
+            }
+        }
+        let n = v.len() - 1;
+        let at = |t: f64| -> f64 {
+            // Bernstein evaluation along this axis.
+            let u = 1.0 - t;
+            match n {
+                2 => u * u * v[0] + 2.0 * u * t * v[1] + t * t * v[2],
+                _ => u * u * u * v[0] + 3.0 * u * u * t * v[1] + 3.0 * u * t * t * v[2] + t * t * t * v[3],
+            }
+        };
+        for t in roots {
+            if t > 0.02 && t < 0.98 {
+                let e = at(t);
+                if (e - v[0]).abs() >= 0.5 && (e - v[n]).abs() >= 0.5 {
+                    ts.push(t);
+                }
+            }
+        }
+    }
+    ts.sort_by(|a, b| a.total_cmp(b));
+    ts.dedup_by(|a, b| (*a - *b).abs() < 0.02);
+    ts
+}
+
 /// Quadratic point list for one contour: (x, y, on_curve), y-up integers.
+/// Curves are split at their extremes, so every extreme is an explicit point,
+/// and on-curve points that TrueType can imply (the midpoint of two off-curve
+/// neighbours, not at an extreme) are left out.
 fn quad_points(c: &CurveContour) -> Vec<(i16, i16, bool)> {
     let flip = |p: Pt| (clamp16(p.x), clamp16(-p.y));
-    let mut pts: Vec<(i16, i16, bool)> = Vec::new();
+    // (x, y, on_curve, keep): `keep` marks nodes that must stay explicit.
+    let mut pts: Vec<(i16, i16, bool, bool)> = Vec::new();
     let s = flip(c.start);
-    pts.push((s.0, s.1, true));
+    pts.push((s.0, s.1, true, true));
     let mut cur = c.start;
+    let quad = |pts: &mut Vec<(i16, i16, bool, bool)>, a: Pt, p: Pt, keep: bool| {
+        let (qa, qp) = (flip(a), flip(p));
+        pts.push((qa.0, qa.1, false, false));
+        pts.push((qp.0, qp.1, true, keep));
+    };
     for seg in &c.segs {
         match *seg {
             Seg::Line(p) => {
                 let q = flip(p);
-                pts.push((q.0, q.1, true));
+                pts.push((q.0, q.1, true, true));
                 cur = p;
             }
             Seg::Quad(a, p) => {
-                let (qa, qp) = (flip(a), flip(p));
-                pts.push((qa.0, qa.1, false));
-                pts.push((qp.0, qp.1, true));
+                let (mut p0, mut c1, mut done) = (cur, a, 0.0);
+                for t in extreme_ts(&[cur, a, p]) {
+                    let t = (t - done) / (1.0 - done);
+                    let (l, r) = (p0.lerp(c1, t), c1.lerp(p, t));
+                    let m = l.lerp(r, t);
+                    quad(&mut pts, l, m, true);
+                    (p0, c1, done) = (m, r, done + t * (1.0 - done));
+                }
+                let _ = p0;
+                quad(&mut pts, c1, p, false);
                 cur = p;
             }
             Seg::Cubic(a, b, p) => {
-                for (ctrl, end) in cubic_to_quads(cur, a, b, p, 0.5) {
-                    let (qa, qp) = (flip(ctrl), flip(end));
-                    pts.push((qa.0, qa.1, false));
-                    pts.push((qp.0, qp.1, true));
+                let mut pieces = Vec::new();
+                let (mut q, mut done) = ([cur, a, b, p], 0.0);
+                for t in extreme_ts(&q) {
+                    let t = (t - done) / (1.0 - done);
+                    let (ab, bc, cd) = (q[0].lerp(q[1], t), q[1].lerp(q[2], t), q[2].lerp(q[3], t));
+                    let (abc, bcd) = (ab.lerp(bc, t), bc.lerp(cd, t));
+                    let m = abc.lerp(bcd, t);
+                    pieces.push([q[0], ab, abc, m]);
+                    q = [m, bcd, cd, q[3]];
+                    done += t * (1.0 - done);
+                }
+                pieces.push(q);
+                for [p0, c1, c2, p3] in pieces {
+                    let qs = cubic_to_quads(p0, c1, c2, p3, 0.5);
+                    let last = qs.len() - 1;
+                    for (i, (ctrl, end)) in qs.into_iter().enumerate() {
+                        quad(&mut pts, ctrl, end, i == last);
+                    }
                 }
                 cur = p;
             }
         }
     }
     // Drop duplicate consecutive on-curve points and the closing duplicate.
-    let mut out: Vec<(i16, i16, bool)> = Vec::with_capacity(pts.len());
+    let mut out: Vec<(i16, i16, bool, bool)> = Vec::with_capacity(pts.len());
     for p in pts {
-        if let Some(last) = out.last() {
+        if let Some(last) = out.last_mut() {
             if last.0 == p.0 && last.1 == p.1 && last.2 && p.2 {
+                last.3 |= p.3;
                 continue;
             }
         }
@@ -105,12 +189,21 @@ fn quad_points(c: &CurveContour) -> Vec<(i16, i16, bool)> {
     while out.len() > 1 {
         let (f, l) = (out[0], out[out.len() - 1]);
         if f.0 == l.0 && f.1 == l.1 && l.2 {
+            out[0].3 |= l.3;
             out.pop();
         } else {
             break;
         }
     }
-    out
+    let n = out.len();
+    let implied = |i: usize| {
+        let (p, a, b) = (out[i], out[(i + n - 1) % n], out[(i + 1) % n]);
+        let mid = |p: i16, a: i16, b: i16| (2 * p as i32 - a as i32 - b as i32).abs() <= 1;
+        // An axis-aligned tangent marks an extreme, which stays explicit.
+        p.2 && !p.3 && !a.2 && !b.2 && mid(p.0, a.0, b.0) && mid(p.1, a.1, b.1) && a.0 != b.0 && a.1 != b.1
+    };
+    let drop: Vec<bool> = if n > 3 { (0..n).map(implied).collect() } else { vec![false; n] };
+    out.iter().zip(drop).filter(|(_, d)| !d).map(|(p, _)| (p.0, p.1, p.2)).collect()
 }
 
 struct GlyphBin {
@@ -183,6 +276,12 @@ fn encode_glyph(contours: &[CurveContour]) -> GlyphBin {
     GlyphBin { data: w.0, bbox: (x0, y0, x1, y1), points: all.len(), contours: cs.len() }
 }
 
+/// head.fontRevision (16.16 fixed) from a version string such as "1.004".
+fn font_revision(version: &str) -> u32 {
+    let v: f64 = version.trim().parse().unwrap_or(1.0);
+    (v.clamp(0.0, 32767.0) * 65536.0).round() as u32
+}
+
 fn checksum(b: &[u8]) -> u32 {
     let mut s = 0u32;
     for chunk in b.chunks(4) {
@@ -204,6 +303,55 @@ fn ps_name(family: &str, style: &str) -> String {
     if out.is_empty() { "Morphotype-Regular".into() } else { out }
 }
 
+/// First name ID used by the STAT table (Weight, Italic, the weight's name,
+/// Italic or Roman).
+const STAT_NAMES: u16 = 256;
+
+fn weight_name(class: u16) -> &'static str {
+    match class {
+        0..=149 => "Thin",
+        150..=249 => "ExtraLight",
+        250..=349 => "Light",
+        350..=449 => "Regular",
+        450..=549 => "Medium",
+        550..=649 => "SemiBold",
+        650..=749 => "Bold",
+        750..=849 => "ExtraBold",
+        _ => "Black",
+    }
+}
+
+/// STAT 1.1 with wght and ital axes and this font's place on each, so apps
+/// can group and name the style (Regular and Roman are elidable).
+fn stat_table(m: &FontMeta) -> Vec<u8> {
+    let italic = m.italic_angle.abs() > 0.5;
+    let mut w = W(Vec::new());
+    w.u16(1);
+    w.u16(1);
+    w.u16(8); // designAxisSize
+    w.u16(2); // designAxisCount
+    w.u32(20); // designAxesOffset
+    w.u16(2); // axisValueCount
+    w.u32(20 + 16); // offsetToAxisValueOffsets
+    w.u16(2); // elidedFallbackNameID
+    for (i, tag) in [b"wght", b"ital"].into_iter().enumerate() {
+        w.tag(tag);
+        w.u16(STAT_NAMES + i as u16);
+        w.u16(i as u16);
+    }
+    w.u16(4);
+    w.u16(4 + 12);
+    let values = [(0u16, m.weight_class.clamp(1, 1000) as f64, m.weight_class == 400), (1, if italic { 1.0 } else { 0.0 }, !italic)];
+    for (axis, value, elidable) in values {
+        w.u16(1); // format 1
+        w.u16(axis);
+        w.u16(if elidable { 0x0002 } else { 0 });
+        w.u16(STAT_NAMES + 2 + axis);
+        w.u32((value * 65536.0).round() as i32 as u32);
+    }
+    w.0
+}
+
 fn name_table(m: &FontMeta) -> Vec<u8> {
     let ribbi = matches!(m.style.as_str(), "Regular" | "Bold" | "Italic" | "Bold Italic");
     let mut recs: Vec<(u16, String)> = vec![(0, m.copyright.clone())];
@@ -214,7 +362,7 @@ fn name_table(m: &FontMeta) -> Vec<u8> {
         recs.push((1, format!("{} {}", m.family, m.style)));
         recs.push((2, "Regular".into()));
     }
-    recs.push((3, format!("{};{};{}", m.version, m.family, m.style)));
+    recs.push((3, format!("{};MRPH;{}", m.version, ps_name(&m.family, &m.style))));
     recs.push((4, if m.style == "Regular" { m.family.clone() } else { format!("{} {}", m.family, m.style) }));
     recs.push((5, format!("Version {}", m.version)));
     recs.push((6, ps_name(&m.family, &m.style)));
@@ -222,6 +370,18 @@ fn name_table(m: &FontMeta) -> Vec<u8> {
         recs.push((16, m.family.clone()));
         recs.push((17, m.style.clone()));
     }
+    for (id, s) in [(10, &m.description), (13, &m.license), (14, &m.license_url)] {
+        if !s.is_empty() {
+            recs.push((id, s.chars().take(16_000).collect()));
+        }
+    }
+    // Names the STAT table refers to.
+    let italic = m.italic_angle.abs() > 0.5;
+    recs.push((STAT_NAMES, "Weight".into()));
+    recs.push((STAT_NAMES + 1, "Italic".into()));
+    recs.push((STAT_NAMES + 2, weight_name(m.weight_class).into()));
+    recs.push((STAT_NAMES + 3, if italic { "Italic" } else { "Roman" }.into()));
+    recs.sort_by_key(|r| r.0);
     let strings: Vec<Vec<u8>> = recs.iter().map(|(_, s)| utf16be(s)).collect();
     let mut w = W(Vec::new());
     w.u16(0);
@@ -285,7 +445,8 @@ fn cmap_table(map: &[(u32, u16)]) -> Vec<u8> {
     for _ in &segs {
         f4.u16(0);
     }
-    // Format 12 covers everything (including non-BMP).
+    // Format 12 covers everything, written only when there is something
+    // beyond the BMP for it to add.
     let mut f12 = W(Vec::new());
     let mut groups: Vec<(u32, u32, u32)> = Vec::new();
     for &(c, g) in map {
@@ -307,20 +468,163 @@ fn cmap_table(map: &[(u32, u16)]) -> Vec<u8> {
         f12.u32(g.1);
         f12.u32(g.2);
     }
-    let mut w = W(Vec::new());
-    w.u16(0);
-    w.u16(3);
-    let header = 4 + 3 * 8;
-    let off4 = header as u32;
+    let full = map.iter().any(|m| m.0 > 0xFFFF);
+    let n = if full { 3 } else { 2 };
+    let off4 = (4 + 8 * n) as u32;
     let off12 = off4 + f4.0.len() as u32;
     // (platform, encoding, offset) sorted by platform then encoding.
-    for (p, e, o) in [(0u16, 3u16, off4), (3, 1, off4), (3, 10, off12)] {
+    let records = [(0u16, 3u16, off4), (3, 1, off4), (3, 10, off12)];
+    let mut w = W(Vec::new());
+    w.u16(0);
+    w.u16(n as u16);
+    for &(p, e, o) in &records[..n] {
         w.u16(p);
         w.u16(e);
         w.u32(o);
     }
     w.0.extend_from_slice(&f4.0);
-    w.0.extend_from_slice(&f12.0);
+    if full {
+        w.0.extend_from_slice(&f12.0);
+    }
+    w.0
+}
+
+/// post v2 glyph names: `.notdef`, then `uniXXXX` / `uXXXXX` production
+/// names (so text copied from a PDF maps back to its characters).
+fn glyph_names(codepoints: &[Option<u32>]) -> Vec<u8> {
+    let mut idx = W(Vec::new());
+    let mut names = W(Vec::new());
+    let mut next = 258u16;
+    idx.u16(codepoints.len() as u16);
+    for (i, c) in codepoints.iter().enumerate() {
+        let name = match c {
+            _ if i == 0 => None,
+            Some(c) if *c <= 0xFFFF => Some(format!("uni{c:04X}")),
+            Some(c) => Some(format!("u{c:05X}")),
+            None => Some(format!("glyph{i}")),
+        };
+        match name {
+            None => idx.u16(0),
+            Some(n) => {
+                idx.u16(next);
+                next += 1;
+                names.u8(n.len() as u8);
+                names.0.extend_from_slice(n.as_bytes());
+            }
+        }
+    }
+    idx.0.extend_from_slice(&names.0);
+    idx.0
+}
+
+/// GPOS with one `kern` feature (DFLT and latn scripts) holding pair
+/// adjustments. Pairs are (left glyph, right glyph, x-advance of the left).
+/// Subtables are split to keep their 16-bit offsets in range and reached
+/// through Extension lookups, so any number of pairs fits.
+fn gpos_table(pairs: &[(u16, u16, i16)]) -> Vec<u8> {
+    let mut by_left: std::collections::BTreeMap<u16, Vec<(u16, i16)>> = Default::default();
+    for &(l, r, v) in pairs {
+        by_left.entry(l).or_default().push((r, v));
+    }
+    // PairPos format 1 subtables, each well under 64 KB.
+    let mut subtables: Vec<Vec<u8>> = Vec::new();
+    let mut chunk: Vec<(u16, Vec<(u16, i16)>)> = Vec::new();
+    let mut size = 0usize;
+    let mut flush = |chunk: &mut Vec<(u16, Vec<(u16, i16)>)>| {
+        if chunk.is_empty() {
+            return;
+        }
+        let n = chunk.len();
+        let head = 10 + 2 * n;
+        let cov_len = 4 + 2 * n;
+        let mut w = W(Vec::new());
+        w.u16(1); // posFormat
+        w.u16(head as u16); // coverage right after the header
+        w.u16(0x0004); // valueFormat1: XAdvance
+        w.u16(0); // valueFormat2
+        w.u16(n as u16);
+        let mut off = head + cov_len;
+        for (_, set) in chunk.iter() {
+            w.u16(off as u16);
+            off += 2 + 4 * set.len();
+        }
+        w.u16(1); // coverage format 1
+        w.u16(n as u16);
+        for (l, _) in chunk.iter() {
+            w.u16(*l);
+        }
+        for (_, set) in chunk.iter_mut() {
+            set.sort_by_key(|p| p.0);
+            w.u16(set.len() as u16);
+            for &(r, v) in set.iter() {
+                w.u16(r);
+                w.i16(v);
+            }
+        }
+        subtables.push(w.0);
+        chunk.clear();
+    };
+    for (l, set) in by_left {
+        let add = 6 + 4 * set.len();
+        if size + add > 60_000 {
+            flush(&mut chunk);
+            size = 0;
+        }
+        size += add;
+        chunk.push((l, set));
+    }
+    flush(&mut chunk);
+
+    let mut w = W(Vec::new());
+    // Header: version 1.0, then ScriptList (10), FeatureList (48), LookupList (62).
+    w.u32(0x0001_0000);
+    w.u16(10);
+    w.u16(48);
+    w.u16(62);
+    // ScriptList: DFLT and latn share one LangSys using feature 0.
+    w.u16(2);
+    for (tag, off) in [(b"DFLT", 14u16), (b"latn", 26)] {
+        w.tag(tag);
+        w.u16(off);
+    }
+    for _ in 0..2 {
+        w.u16(4); // defaultLangSys
+        w.u16(0); // langSysCount
+        w.u16(0); // lookupOrder
+        w.u16(0xFFFF); // no required feature
+        w.u16(1);
+        w.u16(0);
+    }
+    // FeatureList: kern -> lookup 0.
+    w.u16(1);
+    w.tag(b"kern");
+    w.u16(8);
+    w.u16(0);
+    w.u16(1);
+    w.u16(0);
+    // LookupList with one Extension lookup (type 9) wrapping type 2.
+    w.u16(1);
+    w.u16(4);
+    let lookup = w.0.len();
+    let n = subtables.len();
+    w.u16(9);
+    w.u16(0);
+    w.u16(n as u16);
+    let ext0 = 6 + 2 * n;
+    for i in 0..n {
+        w.u16((ext0 + 8 * i) as u16);
+    }
+    let mut target = lookup + ext0 + 8 * n;
+    for (i, st) in subtables.iter().enumerate() {
+        let ext = lookup + ext0 + 8 * i;
+        w.u16(1);
+        w.u16(2);
+        w.u32((target - ext) as u32);
+        target += st.len();
+    }
+    for st in subtables {
+        w.0.extend_from_slice(&st);
+    }
     w.0
 }
 
@@ -397,7 +701,7 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
 
     let mut head = W(Vec::new());
     head.u32(0x0001_0000);
-    head.u32(0x0001_0000);
+    head.u32(font_revision(&m.version));
     head.u32(0); // checkSumAdjustment, patched below
     head.u32(0x5F0F_3CF5);
     head.u16(0x000B);
@@ -443,13 +747,19 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
     maxp.u16(max_cts as u16);
     maxp.u16(0);
     maxp.u16(0);
-    maxp.u16(2);
-    for _ in 0..7 {
-        maxp.u16(0);
-    }
-    maxp.u16(0);
+    maxp.u16(2); // maxZones
+    maxp.u16(0); // maxTwilightPoints
+    maxp.u16(0); // maxStorage
+    maxp.u16(0); // maxFunctionDefs
+    maxp.u16(0); // maxInstructionDefs
+    maxp.u16(1); // maxStackElements: the prep program pushes one value at a time
+    maxp.u16(0); // maxSizeOfInstructions
+    maxp.u16(0); // maxComponentElements
+    maxp.u16(0); // maxComponentDepth
 
     let map: Vec<(u32, u16)> = all.iter().enumerate().filter_map(|(i, g)| g.0.map(|c| (c, i as u16))).collect();
+    let gid = |c: u32| map.binary_search_by_key(&c, |m| m.0).ok().map(|i| map[i].1);
+    let kern: Vec<(u16, u16, i16)> = m.kerning.iter().filter(|k| k.2 != 0).filter_map(|&(l, r, v)| Some((gid(l)?, gid(r)?, v))).collect();
     let first = map.first().map(|m| m.0.min(0xFFFF) as u16).unwrap_or(0x20);
     let last = map.last().map(|m| m.0.min(0xFFFF) as u16).unwrap_or(0x20);
     let mut os2 = W(Vec::new());
@@ -498,14 +808,23 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
     os2.u16(2);
 
     let mut post = W(Vec::new());
-    post.u32(0x0003_0000);
-    post.u32(((-m.italic_angle) * 65536.0).round() as i32 as u32);
+    post.u32(0x0002_0000);
+    post.u32((m.italic_angle * 65536.0).round() as i32 as u32);
     post.i16(e(-0.1));
     post.i16(e(0.05));
     post.u32(0);
     for _ in 0..4 {
         post.u32(0);
     }
+    post.0.extend_from_slice(&glyph_names(&all.iter().map(|g| g.0).collect::<Vec<_>>()));
+    // The fonts aren't hinted: smooth at every size, and switch on smart
+    // dropout control so thin parts don't vanish at small sizes.
+    let mut gasp = W(Vec::new());
+    gasp.u16(1);
+    gasp.u16(1);
+    gasp.u16(0xFFFF);
+    gasp.u16(0x000F);
+    let prep = vec![0xB8, 0x01, 0xFF, 0x85, 0xB0, 0x04, 0x8D]; // PUSHW 511 SCANCTRL PUSHB 4 SCANTYPE
 
     let mut tables: Vec<([u8; 4], Vec<u8>)> = vec![
         (*b"OS/2", os2.0),
@@ -518,7 +837,13 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
         (*b"maxp", maxp.0),
         (*b"name", name_table(m)),
         (*b"post", post.0),
+        (*b"gasp", gasp.0),
+        (*b"prep", prep),
+        (*b"STAT", stat_table(m)),
     ];
+    if !kern.is_empty() {
+        tables.push((*b"GPOS", gpos_table(&kern)));
+    }
     tables.sort_by_key(|a| a.0);
     let n = tables.len();
     let mut es = 0u16;
@@ -629,6 +954,10 @@ mod tests {
             weight_class: 400,
             italic_angle: 0.0,
             copyright: "test".into(),
+            description: String::new(),
+            license: String::new(),
+            license_url: String::new(),
+            kerning: Vec::new(),
         }
     }
 

@@ -158,6 +158,8 @@ export interface TypeProject {
   charset: string;
   glyphs: Record<string, GlyphEdit>;
   sample: string;
+  /** Files exported or installed so far; the font's version is 1.<revision>. */
+  revision?: number;
 }
 
 export interface GlyphEdit {
