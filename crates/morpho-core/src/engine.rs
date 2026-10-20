@@ -3,9 +3,9 @@
 
 use crate::field::{extract, signed_distance, Grid};
 use crate::fit::fit_shape;
-use crate::font::{glyph_outline, shape_line, FontData, FontInfo};
+use crate::font::{glyph_outline, pair_kerning, shape_line, FontData, FontInfo};
 use crate::geom::{flatten_curves, normalize_winding, poly_to_curves, Affine, CurveShape, Pt, Rect, Shape};
-use crate::modifiers::{apply_all, apply_all_frames, Ctx, Geo, ModEntry, Modifier};
+use crate::modifiers::{apply, apply_all, apply_all_frames, Ctx, Geo, ModEntry, Modifier};
 use crate::morph::Morph;
 use crate::svg;
 use crate::symbols::{self, Symbol};
@@ -416,7 +416,12 @@ pub struct Engine {
     /// Finished font glyphs by spec, character and quality: editing one
     /// glyph or recompiling the tester only rebuilds what changed.
     font_glyphs: HashMap<u64, Option<(Geo, f64, bool)>>,
+    /// Kerning measured from a font, by font, axes and character set.
+    kerns: HashMap<(String, u64), Rc<Kerning>>,
 }
+
+/// Kerning between character pairs, in em.
+type Kerning = HashMap<(char, char), f64>;
 
 const PREVIEW_QUALITY: f64 = 120.0;
 const EXPORT_QUALITY: f64 = 360.0;
@@ -455,6 +460,7 @@ impl Engine {
         self.morphs.retain(|k, _| k.0 != id && k.3 != id);
         self.layers.clear();
         self.font_glyphs.clear();
+        self.kerns.retain(|k, _| k.0 != id);
     }
 
     pub fn has_font(&self, id: &str) -> bool {
@@ -555,7 +561,9 @@ impl Engine {
                         let aligned = ga.len() == gb.len() && ga.iter().zip(&gb).all(|(x, y)| x.cluster == y.cluster);
                         if aligned {
                             for (x, y) in ga.iter().zip(&gb) {
-                                let adv = x.x_advance as f64 / upm_a * (1.0 - t) + y.x_advance as f64 / upm_b * t;
+                                // A character the target font lacks stays as it is.
+                                let adv_b = if y.glyph == 0 { x.x_advance as f64 / upm_a } else { y.x_advance as f64 / upm_b };
+                                let adv = x.x_advance as f64 / upm_a * (1.0 - t) + adv_b * t;
                                 placed.push((x.glyph, y.glyph, adv, 0.0, 0.0, x.cluster as usize));
                             }
                         } else {
@@ -564,7 +572,7 @@ impl Engine {
                                 let a = face_a.glyph_index(ch).map_or(0, |g| g.0);
                                 let b = face_b.glyph_index(ch).map_or(0, |g| g.0);
                                 let aa = face_a.glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(a)).unwrap_or(0) as f64 / upm_a;
-                                let ab = face_b.glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(b)).unwrap_or(0) as f64 / upm_b;
+                                let ab = if b == 0 { aa } else { face_b.glyph_hor_advance(rustybuzz::ttf_parser::GlyphId(b)).unwrap_or(0) as f64 / upm_b };
                                 placed.push((a, b, aa * (1.0 - t) + ab * t, 0.0, 0.0, bi));
                             }
                         }
@@ -622,6 +630,10 @@ impl Engine {
                                 cs.push(c);
                             }
                         }
+                    }
+                    Some(_) if g.b == 0 && g.a != 0 => {
+                        let geo = self.glyph(font, axes, g.a)?;
+                        poly.extend(geo.poly.clone().transformed(&m));
                     }
                     Some(mo) => {
                         let mm = self.glyph_morph(font, axes, g.a, &mo.font, &mo.axes, g.b)?;
@@ -1106,7 +1118,7 @@ impl Engine {
             _ => default_charset(),
         };
         v.extend(spec.glyphs.iter().filter_map(|g| g.ch.chars().next()));
-        v.push(' ');
+        v.extend([' ', '\u{a0}']);
         v.sort();
         v.dedup();
         v
@@ -1148,7 +1160,9 @@ impl Engine {
             let f = self.font(&spec.font)?;
             let face = f.face(&axes_vec(&spec.axes)).ok_or("The font couldn't be opened.")?;
             let fu = f.info.units_per_em.max(1) as f64;
-            face.glyph_index(ch).map(|g| (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / fu))
+            // A no-break space is a space, even where the font has none.
+            let g = face.glyph_index(ch).or_else(|| (ch == '\u{a0}').then(|| face.glyph_index(' ')).flatten());
+            g.map(|g| (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / fu))
         };
         let edited_d = edit.and_then(|e| e.d.as_deref()).filter(|d| !d.trim().is_empty());
         let has_parts = edit.is_some_and(|e| e.parts.iter().any(|p| p.visible));
@@ -1175,17 +1189,24 @@ impl Engine {
                         (g.poly.clone(), Some(g.curves.clone()), adv_a)
                     }
                     Some(m) => {
-                        let (gb, adv_b) = {
+                        let target = {
                             let f = self.font(&m.font)?;
                             let face = f.face(&axes_vec(&m.axes)).ok_or("The font couldn't be opened.")?;
                             let ub = f.info.units_per_em.max(1) as f64;
-                            match face.glyph_index(ch) {
-                                Some(g) => (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / ub),
-                                None => (0, adv_a),
-                            }
+                            face.glyph_index(ch).map(|g| (g.0, face.glyph_hor_advance(g).unwrap_or(0) as f64 / ub))
                         };
-                        let mm = self.glyph_morph(&spec.font, &spec.axes, ga, &m.font, &m.axes, gb)?;
-                        (mm.at(t), None, adv_a * (1.0 - t) + adv_b * t)
+                        match target {
+                            Some((gb, adv_b)) => {
+                                let mm = self.glyph_morph(&spec.font, &spec.axes, ga, &m.font, &m.axes, gb)?;
+                                (mm.at(t), None, adv_a * (1.0 - t) + adv_b * t)
+                            }
+                            // The target font lacks this character: keep the base glyph
+                            // rather than blending towards its .notdef box.
+                            None => {
+                                let g = self.glyph(&spec.font, &spec.axes, ga)?;
+                                (g.poly.clone(), Some(g.curves.clone()), adv_a)
+                            }
+                        }
                     }
                 },
             }
@@ -1288,7 +1309,8 @@ impl Engine {
                 if let Some(e) = edit {
                     mods.extend(e.modifiers.iter().filter(|m| m.on).cloned());
                 }
-                let mut geo = apply_all(geo, &mods, &Ctx { em: upm, quality });
+                let (cap, xh) = self.font_zones(spec, upm)?;
+                let mut geo = apply_type_mods(geo, &mods, &Ctx { em: upm, quality }, ch, cap, xh);
                 let (scale, extra, shift, _) = Self::spacing_of(&mods);
                 geo.transform(&Affine::translate(shift * upm, 0.0));
                 let advance = (adv * scale + extra + spec.tracking) * upm;
@@ -1320,25 +1342,89 @@ impl Engine {
         Ok(out)
     }
 
+    /// A vertical metric of the font being built, in units of `upm`: the
+    /// base font's, blended towards the morph target's.
+    fn font_metric(&self, spec: &FontSpec, upm: f64, fa: fn(&FontInfo) -> i16) -> Result<i16, String> {
+        let a = &self.font(&spec.font)?.info;
+        let mut v = fa(a) as f64 / a.units_per_em.max(1) as f64;
+        if let Some(m) = spec.morph.as_ref().filter(|m| m.t > 1e-6) {
+            let b = &self.font(&m.font)?.info;
+            let t = m.t.clamp(0.0, 1.0);
+            v = v * (1.0 - t) + fa(b) as f64 / b.units_per_em.max(1) as f64 * t;
+        }
+        Ok((v * upm).round() as i16)
+    }
+
+    /// Cap height and x-height of the font being built, in units of `upm`.
+    fn font_zones(&self, spec: &FontSpec, upm: f64) -> Result<(f64, f64), String> {
+        Ok((self.font_metric(spec, upm, |i| i.cap_height)? as f64, self.font_metric(spec, upm, |i| i.x_height)? as f64))
+    }
+
+    /// A font's kerning between `chars`, in em, measured once per font,
+    /// axes and character set.
+    fn kerning_of(&mut self, font: &str, axes: &BTreeMap<String, f32>, chars: &[char]) -> Result<Rc<Kerning>, String> {
+        let key = (font.to_string(), hash_of(&(axes_key(axes), chars)));
+        if let Some(k) = self.kerns.get(&key) {
+            return Ok(k.clone());
+        }
+        let f = self.font(font)?;
+        let face = f.face(&axes_vec(axes)).ok_or("The font couldn't be opened.")?;
+        let upm = f.info.units_per_em.max(1) as f64;
+        let k: HashMap<(char, char), f64> = pair_kerning(&face, chars).into_iter().map(|(p, v)| (p, v as f64 / upm)).collect();
+        let k = Rc::new(k);
+        self.kerns.insert(key, k.clone());
+        Ok(k)
+    }
+
+    /// Kerning for an exported font, in font units: the base font's pairs,
+    /// blended towards the morph target's and scaled with the glyphs' width.
+    /// Glyphs whose outline was redrawn or replaced keep no kerning.
+    fn font_kerning(&mut self, spec: &FontSpec, chars: &[char], upm: f64) -> Result<Vec<(u32, u32, i16)>, String> {
+        if spec.blank {
+            return Ok(Vec::new());
+        }
+        let redrawn = |c: char| {
+            spec.glyphs.iter().any(|g| g.ch.starts_with(c) && (g.d.as_deref().is_some_and(|d| !d.trim().is_empty()) || g.hide_base || g.parts.iter().any(|p| p.visible)))
+        };
+        let chars: Vec<char> = chars.iter().copied().filter(|&c| !c.is_whitespace() && !redrawn(c)).collect();
+        let ka = self.kerning_of(&spec.font, &spec.axes, &chars)?;
+        let morph = spec.morph.as_ref().filter(|m| m.t > 1e-6);
+        let (kb, in_b) = match morph {
+            Some(m) => {
+                let in_b: std::collections::HashSet<char> = {
+                    let f = self.font(&m.font)?;
+                    let face = f.face(&axes_vec(&m.axes)).ok_or("The font couldn't be opened.")?;
+                    chars.iter().copied().filter(|&c| face.glyph_index(c).is_some()).collect()
+                };
+                (Some(self.kerning_of(&m.font, &m.axes, &chars)?), in_b)
+            }
+            None => (None, Default::default()),
+        };
+        let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
+        let mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
+        let (scale, ..) = Self::spacing_of(&mods);
+        let mut pairs: Vec<(char, char)> = ka.keys().chain(kb.iter().flat_map(|k| k.keys())).copied().collect();
+        pairs.sort();
+        pairs.dedup();
+        let mut out = Vec::new();
+        for (l, r) in pairs {
+            let a = ka.get(&(l, r)).copied().unwrap_or(0.0);
+            // Characters the target lacks keep the base glyph, so its kerning too.
+            let b = match &kb {
+                Some(kb) if in_b.contains(&l) && in_b.contains(&r) => kb.get(&(l, r)).copied().unwrap_or(0.0),
+                _ => a,
+            };
+            let v = ((a * (1.0 - t) + b * t) * scale * upm).round();
+            if v.abs() >= 1.0 {
+                out.push((l as u32, r as u32, v.clamp(i16::MIN as f64, i16::MAX as f64) as i16));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn export_font(&mut self, spec: &FontSpec) -> Result<Vec<u8>, String> {
         let info_a = self.font(&spec.font)?.info.clone();
         let upm = info_a.units_per_em.max(16) as f64;
-        let morph = spec.morph.as_ref().filter(|m| m.t > 1e-6);
-        let info_b = match morph {
-            Some(m) => Some(self.font(&m.font)?.info.clone()),
-            None => None,
-        };
-        let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
-        let lerp_metric = |a: i16, ua: f64, b: Option<(i16, f64)>| -> i16 {
-            let va = a as f64 / ua;
-            let v = match b {
-                Some((b, ub)) => va * (1.0 - t) + (b as f64 / ub) * t,
-                None => va,
-            };
-            (v * upm).round() as i16
-        };
-        let ib = info_b.as_ref().map(|i| i.units_per_em.max(1) as f64);
-        let metric = |fa: fn(&FontInfo) -> i16| lerp_metric(fa(&info_a), info_a.units_per_em as f64, info_b.as_ref().map(|b| (fa(b), ib.unwrap_or(1.0))));
         let quality = spec.quality.unwrap_or(EXPORT_QUALITY).clamp(60.0, 1024.0);
         let mut out = Vec::new();
         for ch in Self::font_charset(spec) {
@@ -1352,6 +1438,8 @@ impl Engine {
         if out.iter().all(|g| g.contours.is_empty()) {
             return Err("None of the requested characters exist in this font.".into());
         }
+        let kern_chars: Vec<char> = out.iter().filter(|g| !g.contours.is_empty()).filter_map(|g| g.codepoint.and_then(char::from_u32)).collect();
+        let kerning = self.font_kerning(spec, &kern_chars, upm)?;
         let mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
         let (_, _, _, slant) = Self::spacing_of(&mods);
         let family = clean_name(&spec.family, "Morphotype");
@@ -1363,19 +1451,35 @@ impl Engine {
             });
             (w / 100.0).round().clamp(1.0, 9.0) as u16 * 100
         });
+        // Fonts derived from others keep their copyright notices and licence
+        // (the OFL requires both); the user's own notice comes first.
+        let mut sources = vec![info_a.clone()];
+        if let Some(m) = spec.morph.as_ref().filter(|m| m.t > 1e-6) {
+            let b = self.font(&m.font)?.info.clone();
+            if b.full_name != info_a.full_name {
+                sources.push(b);
+            }
+        }
+        let own = spec.copyright.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let copyright = join_unique(own.into_iter().chain(sources.iter().map(|i| i.copyright.as_str())), "\n");
+        let copyright = if copyright.is_empty() { format!("Derived from {} with Morphotype", info_a.full_name) } else { copyright };
         let meta = FontMeta {
             family,
             style,
-            version: "1.000".into(),
+            version: clean_version(spec.version.as_deref()),
             units_per_em: upm as u16,
-            ascender: metric(|i| i.ascender),
-            descender: metric(|i| i.descender),
-            line_gap: metric(|i| i.line_gap),
-            cap_height: metric(|i| i.cap_height),
-            x_height: metric(|i| i.x_height),
+            ascender: self.font_metric(spec, upm, |i| i.ascender)?,
+            descender: self.font_metric(spec, upm, |i| i.descender)?,
+            line_gap: self.font_metric(spec, upm, |i| i.line_gap)?,
+            cap_height: self.font_metric(spec, upm, |i| i.cap_height)?,
+            x_height: self.font_metric(spec, upm, |i| i.x_height)?,
             weight_class: weight,
             italic_angle: -slant,
-            copyright: spec.copyright.clone().unwrap_or_else(|| format!("Derived from {} with Morphotype", info_a.full_name)),
+            copyright,
+            description: format!("Derived from {} with Morphotype.", sources.iter().map(|i| i.full_name.as_str()).collect::<Vec<_>>().join(" and ")),
+            license: join_unique(sources.iter().map(|i| i.license.as_str()), "\n\n"),
+            license_url: sources.iter().map(|i| i.license_url.trim()).find(|u| !u.is_empty()).unwrap_or_default().to_string(),
+            kerning,
         };
         let ttf = write_ttf(&meta, &out);
         Ok(match spec.format.as_deref() {
@@ -1383,6 +1487,66 @@ impl Engine {
             _ => ttf,
         })
     }
+}
+
+/// Run a font's modifier stack on one glyph (font units, y-down), keeping
+/// the type's vertical metrics: Weight grows a shape on every side, so the
+/// baseline and the x-height (lowercase) or cap height (everything else) are
+/// pulled back onto their lines; Slant leans around half the x-height, so the
+/// sidebearings stay balanced as in a drawn italic.
+fn apply_type_mods(mut geo: Geo, mods: &[ModEntry], ctx: &Ctx, ch: char, cap: f64, xh: f64) -> Geo {
+    for e in mods.iter().filter(|e| e.on) {
+        geo = apply(geo, &e.m, ctx);
+        match e.m {
+            Modifier::Weight { amount } => {
+                let a = amount * ctx.em;
+                let top = if ch.is_lowercase() { xh } else { cap };
+                // Grown edges sit at +a (baseline) and -(top + a); map them back
+                // to 0 and -top, squeezing in between and shifting outside.
+                let k = top / (top + 2.0 * a);
+                if top > 0.0 && k.is_finite() && k > 0.0 {
+                    for c in &mut geo.poly.contours {
+                        for p in c.iter_mut() {
+                            p.y = if p.y >= a {
+                                p.y - a
+                            } else if p.y <= -top - a {
+                                p.y + a
+                            } else {
+                                (p.y - a) * k
+                            };
+                        }
+                    }
+                    geo.curves = None;
+                }
+            }
+            Modifier::Slant { angle } => {
+                let k = angle.clamp(-80.0, 80.0).to_radians().tan();
+                geo.transform(&Affine::translate(-k * xh * 0.5, 0.0));
+            }
+            _ => {}
+        }
+        if geo.poly.is_empty() {
+            break;
+        }
+    }
+    geo
+}
+
+/// Distinct non-empty strings, in order, joined with `sep`.
+fn join_unique<'a>(items: impl Iterator<Item = &'a str>, sep: &str) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for s in items.map(str::trim).filter(|s| !s.is_empty()) {
+        if !seen.contains(&s) {
+            seen.push(s);
+        }
+    }
+    seen.join(sep)
+}
+
+/// A version like "1.004": digits, one dot, three decimals.
+fn clean_version(v: Option<&str>) -> String {
+    let v: f64 = v.and_then(|v| v.trim().parse().ok()).filter(|v: &f64| v.is_finite() && *v >= 0.0).unwrap_or(1.0);
+    format!("{:.3}", v.min(32767.0))
 }
 
 fn clean_name(s: &str, fallback: &str) -> String {
@@ -1466,6 +1630,10 @@ pub struct FontSpec {
     /// "ttf" (default) or "woff".
     #[serde(default)]
     pub format: Option<String>,
+    /// Font version such as "1.004" (default "1.000"). Bump it on every
+    /// export so an installed copy is replaced rather than cached.
+    #[serde(default)]
+    pub version: Option<String>,
     /// Start from nothing: only drawn glyphs (and spaces) are included; the
     /// base font only lends its metrics.
     #[serde(default)]

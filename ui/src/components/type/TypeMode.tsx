@@ -619,7 +619,7 @@ function ExportTab({ t }: { t: TypeProject }) {
         <div className="export-grid">
           {desktop && (
             <button className="btn" onClick={() => void installOnMac()}>
-              <Icon name="check" size={14} /> Install on this Mac
+              <Icon name="check" size={14} /> Install on this {platform().isMac ? 'Mac' : 'computer'}
             </button>
           )}
           <button className="btn" onClick={() => void exportFontFile('ttf')}>

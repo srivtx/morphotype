@@ -103,7 +103,21 @@ export function specOf(t: TypeProject, opts: { quality?: number; format?: 'ttf' 
     quality: opts.quality,
     format: opts.format,
     blank: t.blank,
+    version: versionOf(t.revision),
   };
+}
+
+/** Font version for a revision: 1.000, 1.001, 1.002… */
+export const versionOf = (revision = 0) => (1 + revision / 1000).toFixed(3);
+
+/**
+ * Give the next file out a new version, so installing it replaces the
+ * previous one instead of macOS serving the cached copy. Not an undo step.
+ */
+function bumpVersion() {
+  const { project } = store.get();
+  if (!project.type) return;
+  store.set({ project: { ...project, type: { ...project.type, revision: (project.type.revision ?? 0) + 1 } } });
 }
 
 /** A plain block to start drawing from, sized to the font's lines. */
@@ -172,6 +186,7 @@ async function compile(format: 'ttf' | 'woff', quality?: number) {
 export async function exportFontFile(format: 'ttf' | 'woff') {
   const t = store.get().project.type!;
   try {
+    bumpVersion();
     const bytes = await compile(format);
     const name = `${fileBase(t)}.${format}`;
     if (await platform().save(name, bytes, { name: format === 'ttf' ? 'TrueType font' : 'Web font', extensions: [format] })) toast(`Exported ${name} (${(bytes.length / 1024).toFixed(0)} KB)`);
@@ -198,6 +213,7 @@ export function fontFaceCss(t: TypeProject, base: string) {
 export async function exportWebKit() {
   const t = store.get().project.type!;
   try {
+    bumpVersion();
     const [ttf, woff] = [await compile('ttf'), await compile('woff')];
     const base = fileBase(t);
     const css = fontFaceCss(t, base);
@@ -230,6 +246,7 @@ export async function installOnMac() {
   const p = platform();
   if (!p.installFont) return;
   try {
+    bumpVersion();
     const bytes = await compile('ttf');
     const where = await p.installFont(`${fileBase(t)}.ttf`, bytes);
     toast(`Installed ${t.family}. ${where}`);
@@ -263,12 +280,27 @@ export function fontChanges(t: TypeProject): string[] {
   return out;
 }
 
+/** Names an OFL font reserves in its copyright notice ("with Reserved Font Name 'X'"). */
+export function reservedNames(copyright = ''): string[] {
+  const out: string[] = [];
+  for (const m of copyright.matchAll(/Reserved Font Names?\s*:?\s*((?:["'“‘][^"'”’]+["'”’](?:\s*(?:,|and)\s*)?)+)/gi)) {
+    for (const n of m[1].matchAll(/["'“‘]([^"'”’]+)["'”’]/g)) out.push(n[1].trim());
+  }
+  return out;
+}
+
 /** Whether a family name is too close to the base font's (OFL fonts reserve their names). */
 export function nameClash(t: TypeProject, family = t.family): string | null {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const baseFamily = store.get().fonts.find((f) => f.id === t.base)?.info.family ?? '';
+  const fonts = store.get().fonts;
+  const base = fonts.find((f) => f.id === t.base)?.info;
+  const baseFamily = base?.family ?? '';
   if (!family.trim()) return 'Give the font a name.';
   if (baseFamily && !t.blank && norm(family).startsWith(norm(baseFamily)) && norm(baseFamily).length > 2) return `Pick a name that doesn't start with “${baseFamily}”. Modified fonts need their own name, and OFL fonts reserve theirs.`;
+  const sources = [base, t.morph ? fonts.find((f) => f.id === t.morph?.font)?.info : undefined];
+  const reserved = t.blank ? [] : sources.flatMap((i) => reservedNames(i?.copyright));
+  const hit = reserved.find((r) => norm(r).length > 2 && norm(family).includes(norm(r)));
+  if (hit) return `“${hit}” is a Reserved Font Name of the font you started from. Pick a name without it.`;
   return null;
 }
 

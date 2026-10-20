@@ -43,6 +43,47 @@ jobs:
           name: e2e-screenshots
           path: test-results/e2e
 
+  # Exports the audit fonts and checks them the way browsers and font
+  # libraries will: OTS (the sanitizer in Chrome and Firefox) must accept
+  # every file, and fontbakery's universal profile must report no FAIL.
+  fonts:
+    name: Exported font checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Export the audit fonts
+        run: |
+          # Absolute: cargo runs the test from crates/morpho-core, not the repo root.
+          FONT_AUDIT_OUT="$PWD/font-audit" cargo test -p morpho-core --test font_audit -- --nocapture | tee audit.txt
+          # A two-character fixture for the morph fallback, not a real font.
+          rm font-audit/morph-missing.ttf
+          { echo '### Font export audit'; echo '```'; sed -n '/^case/,/^$/p' audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install OTS and fontbakery
+        run: pip install opentype-sanitizer==9.2.0 fontbakery==1.1.0
+      - name: OTS
+        run: for f in font-audit/*.ttf; do python -m ots "$f"; done
+      - name: fontbakery
+        # contour_count: modifiers change outlines on purpose.
+        # STAT/ital_axis: a lone italic export has no Roman to pair with.
+        # HTML reports: 1.1.0's --ghmarkdown crashes on a font with no warnings.
+        run: |
+          status=0
+          for f in font-audit/*.ttf; do
+            fontbakery check-universal -x contour_count -x opentype/STAT/ital_axis \
+              --html "font-audit/$(basename "$f" .ttf)-fontbakery.html" "$f" || status=1
+          done
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: font-audit
+          path: font-audit
+
   mac:
     name: macOS app (.dmg)
     needs: check
@@ -69,12 +110,36 @@ jobs:
             target/universal-apple-darwin/release/bundle/dmg/*.dmg
             target/universal-apple-darwin/release/bundle/macos/*.app
 
+  windows:
+    name: Windows app (installer)
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build the app and installer
+        run: npx tauri build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Morphotype-Windows
+          path: target/release/bundle/nsis/*.exe
+
   # Publishes a release for the version in package.json the first time it
   # reaches main (or when a v* tag is pushed). Bump the version to ship.
   release:
     name: Publish GitHub release
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: mac
+    needs: [mac, windows, fonts]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -117,11 +182,17 @@ jobs:
         with:
           name: Morphotype-macOS
           path: mac
+      - uses: actions/download-artifact@v4
+        if: steps.tag.outputs.skip != 'true'
+        with:
+          name: Morphotype-Windows
+          path: windows
       - name: Collect release files
         if: steps.tag.outputs.skip != 'true'
         run: |
           mkdir -p release
           find mac -name '*.dmg' -exec cp {} release/ \;
+          find windows -name '*.exe' -exec cp {} release/ \;
           cp Morphotype-web.zip release/
           ls -la release
       - uses: softprops/action-gh-release@v2

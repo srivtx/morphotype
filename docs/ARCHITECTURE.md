@@ -17,6 +17,8 @@
 
 The engine runs as WebAssembly **inside the web view** rather than behind Tauri IPC. Every edit sends the whole document to the engine; sending it through `postMessage` to a worker is cheaper than serialising through IPC to another process, and it keeps the web build identical. The native side handles only what a browser can't do: reading system fonts, installing fonts, and native dialogs.
 
+Font export quality is measured by `crates/morpho-core/tests/font_audit.rs`: it exports a matrix of fonts (plain, Weight, Round, Slant, morph) and checks points, explicit extremes, baseline and cap/x-height drift, sidebearing balance, kerning and licence names against the sources (`cargo test -p morpho-core --test font_audit -- --nocapture` prints the table).
+
 ## Engine pipeline (`crates/morpho-core`)
 
 ```
@@ -58,12 +60,14 @@ Key algorithms:
 - **Colour tracing.** The picture is reduced to a few inks with k-means, then each ink is traced into its own smooth outline, normalised to the whole image so the layers line up. Masks are stacked: the largest ink first, and each mask also covers every ink above it, so no background shows through anti-aliased seams. Inks under 0.2 % of the picture are edge pixels and are skipped.
 - **Line symbols.** Globes, asterisks and line icons are many strokes that overlap. Instead of joining polygons (whose winding breaks where they cross), each segment stamps its distance into one grid and the zero level becomes the outline, so every overlap merges and line weight stays exact.
 - **Foam.** Bubble radii step down from the largest; at each size, random centres inside the shape (sampled from its signed distance) are kept if a spatial hash finds no bubble closer than the wall thickness, and an optional fade thins them toward one side. Kept bubbles are carved into the distance field by stamping only the cells they cover, so a letter full of foam builds in about 20 ms.
+- **Kerning carry-over.** A font's kerning is measured by shaping: for each left character, one run alternating it with every other character is shaped with `kern` on and off, and the difference is each pair's kerning, whatever GPOS or `kern` lookups produce it. It is measured once per font, axes and character set, blended towards the morph target's (characters the target lacks keep the base value), scaled with Stretch, and written as GPOS pair adjustments in Extension lookups. Redrawn glyphs keep no kerning.
+- **Type metrics under modifiers.** In a font, Weight grows each glyph on every side, so its points are pulled back onto the baseline and the x-height (lowercase) or cap height: shifted outside those lines, squeezed between them. Slant leans each glyph around half the x-height, so sidebearings stay balanced as in a drawn italic.
 - **Glyph layers.** A glyph is its base or redrawn outline plus parts: library shapes, paths, or other glyphs as components (resolved recursively, at most three deep). Parts add by concatenation and cut or mask through the same SDF boolean as layers, then the font look runs unless the glyph opts out. Finished glyphs are cached by their spec, character and quality, so editing one glyph, or recompiling the live tester, rebuilds only what changed.
 - **Morph correspondence.** Contours are paired solid-to-solid and hole-to-hole by minimum cost (exact search up to 7 contours, greedy above). Unpaired contours grow from or shrink to their own centroid. Pairs are aligned with a rigid start-point shift, then refined with banded dynamic time warping on position and tangent. Both contours are sampled at a shared parameter set that includes every original vertex of either contour, so t = 0 and t = 1 are exact.
 - **Curve fitting.** Schneider's algorithm, with corners detected on an RDP-simplified copy and nearly straight fits emitted as lines.
 - **Warp.** A bicubic Bezier patch over the input's bounding box. With evenly spaced control points it reproduces the identity, so a preset (Arch, Flag, Bulge…) is just a table of control-point offsets scaled by `bend`, and hand-dragged points add to it. The UI mirrors the same table to draw the net.
 - **Break apart.** Contours are grouped as solids with the holes they contain. Small pieces stacked above or below a larger one (the dot of an i, accents) stay with it, and the pieces come back in reading order.
-- **TrueType writer.** Writes glyf/loca, cmap formats 4 and 12, head, hhea, hmtx, maxp, name, OS/2 v4 and post v3, with correct checksums. Cubics are split into quadratics within 0.5 units. Output passes Chrome's OTS sanitizer. Glyph edits from Type mode (replacement outlines, widths, per-glyph modifiers, new code points) are applied per character, and WOFF 1.0 output wraps the same tables with zlib.
+- **TrueType writer.** Writes glyf/loca, cmap format 4 (plus format 12 when there are characters beyond the BMP), head, hhea, hmtx, maxp, name, OS/2 v4, post v2 (production glyph names), GPOS, STAT (wght and ital), and gasp and prep (smooth rendering with smart dropout control, since outlines aren't hinted), with correct checksums. Curves are split at their extremes so every extreme is an explicit point, cubics are split into quadratics within 0.5 units, and on-curve points TrueType can imply (midpoints of two off-curve points, not at an extreme) are left out. The name table keeps the source fonts' copyright notices and licence (name IDs 0, 13, 14, as the OFL requires); each export or install gets the next version (1.001, 1.002…) so an installed copy is replaced rather than cached. Output passes Chrome's OTS sanitizer. Glyph edits from Type mode (replacement outlines, widths, per-glyph modifiers, new code points) are applied per character, and WOFF 1.0 output wraps the same tables with zlib.
 
 ## Documents (`ui/src/state`)
 
@@ -112,7 +116,7 @@ Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI gen
 
 ## Roadmap
 
-1. **Kerning carry-over**: interpolate pair kerning from GPOS/kern of both sources; add a class-based kerning editor.
+1. **Kerning editor**: kerning now carries over from both sources; add a class-based editor and class-based (format 2) pair tables for smaller files.
 2. **Variable font export**: export the morph axis (and weight/round) as a real `fvar`/`gvar` variable font. The morph correspondence is already point-compatible, which is the hard part.
 3. **WOFF2 import** via a pure-Rust Brotli decoder.
 4. **More effects**: video loop export for animated chrome and neon; an ASCII material, now possible with the backdrop pass.

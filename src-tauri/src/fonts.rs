@@ -127,7 +127,8 @@ pub fn install_font(request: Request<'_>) -> Result<String, String> {
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("Expected raw font bytes.".into());
     };
-    FontData::load(bytes, 0).map_err(|e| format!("Not a valid font: {e}"))?;
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    let font = FontData::load(bytes, 0).map_err(|e| format!("Not a valid font: {e}"))?;
     let raw_name = request.headers().get("x-file-name").and_then(|v| v.to_str().ok()).unwrap_or("Morphotype.ttf");
     let decoded = percent_decode(raw_name);
     let stem: String = Path::new(&decoded)
@@ -141,9 +142,43 @@ pub fn install_font(request: Request<'_>) -> Result<String, String> {
     let stem = if stem.is_empty() { "Morphotype".to_string() } else { stem };
     let dir = user_font_dir().ok_or("Couldn't find your font folder.")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let dest = dir.join(format!("{stem}.ttf"));
-    std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
+    let mut dest = dir.join(format!("{stem}.ttf"));
+    if let Err(e) = std::fs::write(&dest, bytes) {
+        // Windows keeps fonts open while apps use them: install beside the old file.
+        if !cfg!(windows) {
+            return Err(e.to_string());
+        }
+        dest = (2..100).map(|n| dir.join(format!("{stem}-{n}.ttf"))).find(|p| std::fs::write(p, bytes).is_ok()).ok_or_else(|| e.to_string())?;
+    }
+    #[cfg(windows)]
+    register_windows_font(&dest, &font.info.full_name)?;
     Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Per-user fonts on Windows are listed in the registry (so they load at
+/// sign-in) and added to the session, then running apps are told.
+#[cfg(windows)]
+fn register_windows_font(path: &Path, name: &str) -> Result<(), String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Graphics::Gdi::AddFontResourceW;
+    use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_FONTCHANGE};
+    let wide = |s: &OsStr| s.encode_wide().chain([0]).collect::<Vec<u16>>();
+    let file = wide(path.as_os_str());
+    let key = wide(OsStr::new("Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"));
+    let value = wide(OsStr::new(&format!("{name} (TrueType)")));
+    // SAFETY: every pointer is a NUL-terminated UTF-16 buffer that outlives the call.
+    let status = unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), REG_SZ, file.as_ptr().cast(), (file.len() * 2) as u32) };
+    if status != 0 {
+        return Err(format!("Couldn't register the font with Windows (error {status})."));
+    }
+    // SAFETY: as above; the broadcast result isn't needed.
+    unsafe {
+        AddFontResourceW(file.as_ptr());
+        SendMessageTimeoutW(HWND_BROADCAST, WM_FONTCHANGE, 0, 0, SMTO_ABORTIFHUNG, 1000, std::ptr::null_mut());
+    }
+    Ok(())
 }
 
 fn percent_decode(s: &str) -> String {

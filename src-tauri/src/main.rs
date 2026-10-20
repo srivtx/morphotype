@@ -1,5 +1,5 @@
 // Morphotype desktop shell. The editor UI and the WebAssembly engine run in the
-// system web view (WKWebView on macOS); this process adds what a browser can't:
+// system web view (WKWebView on macOS, WebView2 on Windows); this process adds what a browser can't:
 // native file dialogs, the installed-font library and font installation.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

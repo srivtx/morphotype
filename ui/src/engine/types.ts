@@ -301,6 +301,10 @@ export interface FontInfo {
   glyphCount: number;
   axes: Axis[];
   faces: number;
+  /** Copyright notice, licence and licence URL (name IDs 0, 13, 14). */
+  copyright?: string;
+  license?: string;
+  licenseUrl?: string;
 }
 
 export interface TraceOptions {
@@ -335,6 +339,8 @@ export interface FontSpec {
   format?: 'ttf' | 'woff';
   /** Only drawn glyphs; the base font lends metrics. */
   blank?: boolean;
+  /** Font version, e.g. "1.004". */
+  version?: string;
 }
 
 export interface SvgOptions {
