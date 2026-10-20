@@ -6,6 +6,8 @@ export type Align = 'left' | 'center' | 'right';
 export type Modifier =
   | { kind: 'weight'; amount: number }
   | { kind: 'round'; radius: number }
+  | { kind: 'mirror'; axis: 'x' | 'y' | 'both'; flip: number; offset: number }
+  | { kind: 'scallop'; count: number; depth: number; width: number; inward: number }
   | { kind: 'outline'; width: number }
   | { kind: 'ink'; amount: number; scale: number; seed: number }
   | { kind: 'slant'; angle: number }
@@ -67,7 +69,7 @@ export type SymbolSpec =
   | { kind: 'catHead'; ears: number }
   | { kind: 'bubble'; tail: number; roundness: number }
   | { kind: 'spiral'; turns: number; weight: number; cap?: LineCap }
-  | { kind: 'flower'; petals: number; depth: number }
+  | { kind: 'flower'; petals: number; depth: number; petal?: 'wave' | 'round' | 'pill' | 'oval' | 'pointed'; hole?: number }
   | { kind: 'arrow'; head: number; shaft: number }
   | { kind: 'bolt' }
   | { kind: 'moon'; phase: number }

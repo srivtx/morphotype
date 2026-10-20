@@ -10,7 +10,7 @@ import type { Renderer } from '../render/renderer';
 import { parsePath, serializePath, type Node as GNode } from '../state/geometry';
 import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
-import { group, isGroup, lineLayer, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
+import { group, isGroup, lineLayer, newModifier, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
 import { iconGridLayers } from '../state/icon';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
 import { allLayers, ancestors, buildScene, childrenOf, find, findNode, layersOf, removeNodes, topmost, walk } from '../state/tree';
@@ -300,7 +300,8 @@ export function finishDrawing(pts: [number, number, number][]) {
  * it was closed, otherwise a line. Path data is stored in em units around the
  * path's centre so modifiers scale with its size.
  */
-export function finishPen(nodes: GNode[], closed: boolean) {
+/** Turn a pen path into a layer. With `mirrorAt` (an artboard x) it gets a Mirror modifier on that line, keeping the side it was drawn on. */
+export function finishPen(nodes: GNode[], closed: boolean, mirrorAt?: number) {
   if (nodes.length < 2) return;
   const s = store.get();
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
@@ -312,6 +313,8 @@ export function finishPen(nodes: GNode[], closed: boolean) {
   const d = serializePath([{ open: !closed, nodes: nodes.map((n) => ({ ...k(n), hin: n.hin && k(n.hin), hout: n.hout && k(n.hout) })) }]);
   const ink = s.settings.penColor;
   const l = closed ? pathLayer(d, size, 'Shape', { x: cx, y: cy, style: style('flat', { fill: ink }) }) : lineLayer(d, size, s.settings.penWidth, { x: cx, y: cy, style: style('flat', { fill: ink }) });
+  // Modifiers work in em around the layer's position: the line sits (mirrorAt − cx) / size em away.
+  if (mirrorAt !== undefined) l.modifiers = [newModifier('mirror', { offset: (mirrorAt - cx) / size, flip: cx > mirrorAt ? 1 : 0 })];
   addNode(l, drawTarget());
 }
 
@@ -416,11 +419,32 @@ function offsetNode(n: Node, dx: number, dy: number) {
   }
 }
 
+/** Where each copy of the last duplicate came from (copy id → its original's position). */
+let lastDuplicate: Map<string, { x: number; y: number }> | null = null;
+
+const positionOf = (n: Node) => {
+  const l = layersOf(n)[0];
+  return l ? { x: l.x, y: l.y } : null;
+};
+
+/**
+ * Duplicate the selection `offset` px down and right. Duplicate, move the
+ * copy, duplicate again: the new copy takes the same step (rows of circles,
+ * stacks of pills), like Illustrator's Transform Again.
+ */
 export function duplicateSelected(offset = 24) {
   const s = store.get();
   const ids = topmost(s.project.layers, s.selection);
   if (!ids.length) return;
+  let step = { x: offset, y: offset };
+  if (lastDuplicate && ids.length === lastDuplicate.size && ids.every((id) => lastDuplicate!.has(id))) {
+    const n = findNode(s.project.layers, ids[0]);
+    const now = n && positionOf(n);
+    const was = lastDuplicate.get(ids[0]);
+    if (now && was && (now.x !== was.x || now.y !== was.y)) step = { x: now.x - was.x, y: now.y - was.y };
+  }
   const made: string[] = [];
+  const sources = new Map<string, { x: number; y: number }>();
   edit((p) => {
     const map = new Map<string, string>();
     const copies: { at: Node[]; index: number; node: Node }[] = [];
@@ -428,7 +452,9 @@ export function duplicateSelected(offset = 24) {
       const f = find(p.layers, id);
       if (!f) continue;
       const c = cloneWithIds(f.node, map);
-      offsetNode(c, offset, offset);
+      const from = positionOf(f.node);
+      if (from) sources.set(c.id, from);
+      offsetNode(c, step.x, step.y);
       copies.push({ at: f.siblings, index: f.index, node: c });
     }
     remapMorphs(
@@ -442,6 +468,7 @@ export function duplicateSelected(offset = 24) {
       made.push(c.node.id);
     }
   });
+  lastDuplicate = sources;
   select(made);
 }
 
@@ -841,11 +868,16 @@ export async function breakApart(id: string) {
   }
 }
 
+/** Modifiers that leave a path's points in place, so they can stay on while editing them. */
+const POINT_SAFE = new Set(['mirror', 'round', 'weight', 'outline', 'scallop', 'fuse', 'repeat']);
+
 export async function editPoints(id: string) {
   const l = findNode(store.get().project.layers, id);
   if (!l || isGroup(l)) return;
-  // Pen lines edit as they are; anything else becomes an outline first.
-  const needs = !((l.content.type === 'path' || l.content.type === 'line') && l.modifiers.length === 0);
+  // Pen lines edit as they are, also under modifiers that keep the points
+  // where they are (a mirrored half stays mirrored); anything else becomes an outline first.
+  const keepsPoints = l.modifiers.every((m) => !m.on || POINT_SAFE.has(m.kind));
+  const needs = !((l.content.type === 'path' || l.content.type === 'line') && keepsPoints);
   if (needs) {
     const ok = await convertToOutline(id);
     if (!ok) return;

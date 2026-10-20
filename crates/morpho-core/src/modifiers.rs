@@ -5,7 +5,7 @@
 //! font export where the em is the font's units-per-em.
 
 use crate::field::{block_contours, extract, rasterize, signed_distance, Grid};
-use crate::geom::{densify, Affine, CurveShape, Pt, Rect, Shape};
+use crate::geom::{densify, perimeter, pt, resample, shape_winding, Affine, CurveShape, Pt, Rect, Shape};
 use crate::noise::fbm;
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +42,9 @@ fn half() -> f64 {
 fn full_turn() -> f64 {
     360.0
 }
+fn twelve() -> f64 {
+    12.0
+}
 fn echo_gap() -> f64 {
     0.06
 }
@@ -56,6 +59,34 @@ pub enum Modifier {
     Weight { #[serde(default)] amount: f64 },
     /// Round both convex and concave corners with `radius` em.
     Round { #[serde(default)] radius: f64 },
+    /// Make the shape symmetric: keep the half on one side of a line through
+    /// the layer's centre point (a group's: the artboard centre), moved
+    /// `offset` em, and reflect it onto the other side.
+    Mirror {
+        #[serde(default)]
+        axis: MirrorAxis,
+        /// 1 keeps the right (bottom) half instead of the left (top).
+        #[serde(default)]
+        flip: f64,
+        #[serde(default)]
+        offset: f64,
+    },
+    /// Round bumps, or bites, evenly spaced all along the outline: scalloped
+    /// badges, clouds, cookie-cutter edges.
+    Scallop {
+        /// Bumps around the longest contour; shorter ones keep its spacing.
+        #[serde(default = "twelve")]
+        count: f64,
+        /// Bump height over half its width: 1 = half circles, less = shallower arcs.
+        #[serde(default = "one")]
+        depth: f64,
+        /// Bump width as a multiple of the spacing (over 1 they overlap).
+        #[serde(default = "one")]
+        width: f64,
+        /// 1 bites into the shape instead.
+        #[serde(default)]
+        inward: f64,
+    },
     /// Replace the fill by an outline `width` em wide.
     Outline { #[serde(default)] width: f64 },
     /// Organic ink spread: noisy edges, `amount` em deep at `scale` em features.
@@ -222,6 +253,18 @@ pub enum IsoFace {
     Right,
 }
 
+/// Which way [`Modifier::Mirror`] reflects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MirrorAxis {
+    /// Left and right halves match.
+    #[default]
+    X,
+    /// Top and bottom halves match.
+    Y,
+    Both,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RepeatMode {
@@ -383,6 +426,19 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             let closed = offset(&offset(&opened, r, ctx), -r, ctx);
             Geo::poly_only(closed)
         }
+        Modifier::Mirror { axis, flip, offset } => {
+            let keep_high = flip > 0.5;
+            let at = offset * em;
+            let mut s = geo.poly;
+            if axis != MirrorAxis::Y {
+                s = mirror(&s, ctx, true, at, keep_high);
+            }
+            if axis != MirrorAxis::X {
+                s = mirror(&s, ctx, false, at, keep_high);
+            }
+            Geo::poly_only(s)
+        }
+        Modifier::Scallop { count, depth, width, inward } => Geo::poly_only(scallop(&geo.poly, ctx, count, depth, width, inward > 0.5)),
         Modifier::Outline { width } => {
             let w = (width.abs() * em * 0.5) as f32;
             if w < 1e-6 {
@@ -660,6 +716,89 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
 }
 
 #[inline]
+/// Reflect the half of `s` on one side of the line `x = at` (`vertical`) or
+/// `y = at` onto the other side, replacing what was there.
+fn mirror(s: &Shape, ctx: &Ctx, vertical: bool, at: f64, keep_high: bool) -> Shape {
+    if s.is_empty() {
+        return Shape::default();
+    }
+    let flip = |p: Pt| if vertical { pt(2.0 * at - p.x, p.y) } else { pt(p.x, 2.0 * at - p.y) };
+    // Reflecting turns contours around; reverse them to keep the winding.
+    let m = Shape::new(s.contours.iter().map(|c| c.iter().rev().map(|&p| flip(p)).collect()).collect());
+    let cell = ctx.cell();
+    let band = cell * 3.0;
+    let g = Grid::covering(s.bbox().union(&m.bbox()), band, cell);
+    let (vs, vm) = (signed_distance(s, &g, band), signed_distance(&m, &g, band));
+    let side = if keep_high { -1.0 } else { 1.0 };
+    let mut v = vec![0f32; g.len()];
+    for j in 0..g.h {
+        for i in 0..g.w {
+            let p = g.sample_pos(i, j);
+            // Negative on the kept side of the line.
+            let h = (side * if vertical { p.x - at } else { p.y - at }) as f32;
+            let k = j * g.w + i;
+            v[k] = vs[k].max(h).min(vm[k].max(-h));
+        }
+    }
+    extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 1.5)
+}
+
+/// Round bumps evenly spaced along every contour, added to the shape or cut
+/// out of it (`bite`). Each is a circular arc over `width` × the spacing,
+/// standing `depth` × half that chord off the outline (1 = half circles).
+/// Bumps never reach farther than that from the outline, so corners don't
+/// swell when shallower arcs need bigger circles.
+fn scallop(s: &Shape, ctx: &Ctx, count: f64, depth: f64, width: f64, bite: bool) -> Shape {
+    let longest = s.contours.iter().map(|c| perimeter(c)).fold(0.0, f64::max);
+    let (depth, width) = (depth.clamp(0.0, 1.0), width.clamp(0.3, 3.0));
+    if longest <= 0.0 || depth < 0.01 {
+        return s.clone();
+    }
+    let spacing = longest / count.round().clamp(3.0, 200.0);
+    // (circle centre, circle radius, point on the outline, bump height)
+    let mut bumps: Vec<(Pt, f64, Pt, f64)> = Vec::new();
+    for c in &s.contours {
+        let per = perimeter(c);
+        let k = (per / spacing).round() as usize;
+        if k < 3 || bumps.len() + k > 4000 {
+            continue;
+        }
+        let half = per / k as f64 * 0.5 * width;
+        let h = depth * half;
+        // Circle through both chord ends with sagitta h.
+        let r = (half * half + h * h) / (2.0 * h);
+        let pts = resample(c, k);
+        let normal = |i: usize| (pts[(i + 1) % k] - pts[(i + k - 1) % k]).normalized().perp();
+        // Which side of this contour is inside: ask the shape at each point.
+        let probe = half.min(spacing) * 0.2;
+        let votes: i32 = (0..k).map(|i| if shape_winding(s, pts[i] + normal(i) * probe) != 0 { 1 } else { -1 }).sum();
+        // Bumps sit inside the shape and bulge out; bites sit outside and dig in.
+        let toward = if (votes >= 0) != bite { 1.0 } else { -1.0 };
+        bumps.extend((0..k).map(|i| (pts[i] + normal(i) * (toward * (r - h)), r, pts[i], h)));
+    }
+    let Some(hmax) = bumps.iter().map(|b| b.3).reduce(f64::max) else { return s.clone() };
+    let cell = ctx.cell();
+    let band = hmax + cell * 3.0;
+    let g = Grid::covering(s.bbox(), band, cell);
+    let shape = signed_distance(s, &g, band);
+    let mut v = shape.clone();
+    for &(c, r, at, h) in &bumps {
+        // Only cells near this stretch of outline can change.
+        let reach = h.max(spacing * width) + cell * 2.0;
+        let lo = |v: f64, o: f64| ((v - reach - o) / g.cell).max(0.0) as usize;
+        let hi = |v: f64, o: f64, n: usize| (((v + reach - o) / g.cell + 1.0).max(0.0) as usize).min(n);
+        for j in lo(at.y, g.origin.y)..hi(at.y, g.origin.y, g.h) {
+            for i in lo(at.x, g.origin.x)..hi(at.x, g.origin.x, g.w) {
+                let k = j * g.w + i;
+                let d = (g.sample_pos(i, j).dist(c) - r) as f32;
+                // The disc, clipped to within h of the outline on its side.
+                v[k] = if bite { v[k].max(-d.max(-(shape[k] + h as f32))) } else { v[k].min(d.max(shape[k] - h as f32)) };
+            }
+        }
+    }
+    extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 1.5)
+}
+
 fn cell_hash(i: i64, j: i64, seed: u32) -> f64 {
     let mut h = (i as u32).wrapping_mul(0x8da6_b343) ^ (j as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f).wrapping_add(0x9e37_79b9);
     h ^= h >> 15;
@@ -991,6 +1130,56 @@ mod tests {
     }
 
     const CTX: Ctx = Ctx { em: 100.0, quality: 200.0 };
+
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Shape {
+        Shape::new(vec![vec![pt(x0, y0), pt(x1, y0), pt(x1, y1), pt(x0, y1)]])
+    }
+
+    #[test]
+    fn mirror_keeps_one_half() {
+        // A bar from x = -20 to 60: the left half is 20 wide, the right 60.
+        let bar = || Geo::poly_only(rect(-20.0, 0.0, 60.0, 10.0));
+        let m = |axis, flip, offset| apply(bar(), &Modifier::Mirror { axis, flip, offset }, &CTX).poly;
+        let left = m(MirrorAxis::X, 0.0, 0.0);
+        let b = left.bbox();
+        assert!((b.x0 + 20.0).abs() < 1.0 && (b.x1 - 20.0).abs() < 1.0, "{b:?}");
+        assert!((left.area() - 400.0).abs() < 15.0, "{}", left.area());
+        let right = m(MirrorAxis::X, 1.0, 0.0);
+        assert!((right.bbox().x0 + 60.0).abs() < 1.0 && (right.area() - 1200.0).abs() < 30.0, "{:?} {}", right.bbox(), right.area());
+        // The line moves with `offset` (em = 100): x = 10 keeps 30 and doubles it.
+        let moved = m(MirrorAxis::X, 0.0, 0.1);
+        assert!((moved.bbox().x1 - 40.0).abs() < 1.0 && (moved.area() - 600.0).abs() < 20.0, "{:?}", moved.bbox());
+        // Top/bottom: the bar sits below y = 0, so keeping the top leaves nothing.
+        assert!(m(MirrorAxis::Y, 0.0, 0.0).area() < 1.0);
+        let both = apply(Geo::poly_only(rect(-10.0, -30.0, 50.0, 5.0)), &Modifier::Mirror { axis: MirrorAxis::Both, flip: 0.0, offset: 0.0 }, &CTX).poly;
+        let b = both.bbox();
+        assert!((b.x0 + 10.0).abs() < 1.0 && (b.x1 - 10.0).abs() < 1.0 && (b.y0 + 30.0).abs() < 1.0 && (b.y1 - 30.0).abs() < 1.0, "{b:?}");
+    }
+
+    #[test]
+    fn scallops_add_or_bite_half_discs() {
+        let sc = |depth, inward| apply(Geo::poly_only(square(100.0)), &Modifier::Scallop { count: 12.0, depth, width: 1.0, inward }, &CTX).poly;
+        // 12 discs of radius 400/24, three per side starting at a corner. Along
+        // an edge half of each disc is outside the square; on a corner three
+        // quarters stand out and only a quarter bites in.
+        let disc = std::f64::consts::PI * (400.0f64 / 24.0).powi(2);
+        let (bumps, bites) = (8.0 * disc / 2.0 + 4.0 * disc * 0.75, 8.0 * disc / 2.0 + 4.0 * disc * 0.25);
+        let grown = sc(1.0, 0.0).area() - 10000.0;
+        assert!((grown / bumps - 1.0).abs() < 0.05, "{grown} vs {bumps}");
+        let bitten = 10000.0 - sc(1.0, 1.0).area();
+        assert!((bitten / bites - 1.0).abs() < 0.05, "{bitten} vs {bites}");
+        assert_eq!(sc(0.0, 0.0).area(), 10000.0);
+        // Shallow arcs use bigger circles, but nothing, corners included,
+        // stands more than the bump height (0.3 × 400/24) off the square.
+        let b = sc(0.3, 0.0).bbox();
+        let h = 0.3 * 400.0 / 24.0;
+        assert!(b.x0 > -h - 0.6 && b.x1 < 100.0 + h + 0.6 && b.x0 < -h + 0.6, "{b:?} h {h}");
+        // A ring: bumps go outward on the outside and into the hole on the inside.
+        let ring = Shape::new(vec![vec![pt(0.0, 0.0), pt(100.0, 0.0), pt(100.0, 100.0), pt(0.0, 100.0)], vec![pt(30.0, 30.0), pt(30.0, 70.0), pt(70.0, 70.0), pt(70.0, 30.0)]]);
+        let g = apply(Geo::poly_only(ring.clone()), &Modifier::Scallop { count: 12.0, depth: 1.0, width: 1.0, inward: 0.0 }, &CTX).poly;
+        assert!(g.bbox().width() > 120.0 && g.area() > ring.area(), "{:?} {}", g.bbox(), g.area());
+        assert!(crate::geom::shape_winding(&g, pt(50.0, 50.0)) == 0, "the hole stays open");
+    }
 
     #[test]
     fn weight_grows_area() {

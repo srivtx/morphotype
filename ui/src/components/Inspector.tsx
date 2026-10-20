@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { compareWithReference, fitWithFeedback, referenceLayer, tunables, type CompareResult } from '../app/compare';
 import { addIconGrid, alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
+import { addCentreDot, addFace, variationsOf, type Variant } from '../app/assists';
 import { run, shortcutOf } from '../app/commands';
 import type { Content, Dash, ModEntry, ModifierKind, Squiggle, SquiggleKind, SymbolKind } from '../engine/types';
 import { backgroundCss, fillCss } from '../render/background';
@@ -488,7 +489,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
     case 'text':
       return <TextEditor c={c} setC={setC} />;
     case 'symbol':
-      return <SymbolEditor c={c} setC={setC} />;
+      return <SymbolEditor c={c} setC={setC} layer={layer} />;
     case 'path':
       return (
         <Section title="Outline" id="path">
@@ -534,6 +535,11 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
   }
 }
 
+/** A choice field: buttons for up to three options, a menu for more. */
+export function Choice({ value, options, onChange }: { value: string; options: { value: string; label: string; title?: string }[]; onChange: (v: string) => void }) {
+  return options.length <= 3 ? <Segmented size="sm" value={value} options={options} onChange={onChange} /> : <Select value={value} options={options} onChange={onChange} />;
+}
+
 function SymbolThumbSmall({ spec }: { spec: Of<'symbol'>['symbol'] }) {
   const shape = useShape(`symp:${JSON.stringify(spec)}`, () => ({
     layers: [{ id: 's', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1, sx: 1, sy: 1, modifiers: [], content: { type: 'symbol', symbol: spec, size: 100 } }],
@@ -545,7 +551,67 @@ function SymbolThumbSmall({ spec }: { spec: Of<'symbol'>['symbol'] }) {
   );
 }
 
-function SymbolEditor({ c, setC }: { c: Of<'symbol'>; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
+function VariantThumb({ v }: { v: Variant }) {
+  const shape = useShape(`var:${JSON.stringify(v)}`, () => ({
+    layers: [{ id: 's', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1, sx: 1, sy: 1, modifiers: v.modifiers, content: { type: 'symbol', symbol: v.symbol, size: 100 } }],
+  }));
+  return (
+    <svg viewBox={shape ? viewBoxOf(shape.box, 0.12) : '-50 -50 100 100'} className="thumb-svg" aria-hidden>
+      {shape && <path d={shape.d} />}
+    </svg>
+  );
+}
+
+/** One-click helpers under a shape's controls: variations, a centre dot, a face. */
+function ShapeAssists({ layer }: { layer: ShapeLayer }) {
+  const [variants, setVariants] = useState<Variant[] | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  if (layer.content.type !== 'symbol') return null;
+  const c = layer.content;
+  const roll = () => setVariants(variationsOf(c.symbol, layer.modifiers));
+  const pick = (v: Variant) =>
+    updateNode(layer.id, (n) => {
+      if (isGroup(n) || n.content.type !== 'symbol') return;
+      n.content.symbol = structuredClone(v.symbol);
+      n.modifiers = structuredClone(v.modifiers);
+    });
+  return (
+    <>
+      <div className="button-row">
+        <button ref={btn} className="btn small" onClick={roll} data-tip="New takes on this shape to pick from">
+          <Icon name="wand" size={13} /> Variations
+        </button>
+        <button className="btn small" onClick={() => addCentreDot(layer.id)} data-tip="A dot in a contrasting colour, in the middle">
+          <Icon name="plus" size={13} /> Centre dot
+        </button>
+        <button className="btn small" onClick={() => addFace(layer.id)} data-tip="Eyes and a smile, sized to the shape">
+          <Icon name="sparkle" size={13} /> Face
+        </button>
+      </div>
+      {variants && (
+        <Popover anchor={btn.current} onClose={() => setVariants(null)} width={300} placement="left-start">
+          <div className="picker">
+            <div className="picker-label">Pick one · each is one undo step</div>
+            <div className="picker-grid">
+              {variants.map((v, i) => (
+                <button key={i} className="pick" onClick={() => pick(v)} aria-label={`Variation ${i + 1}`}>
+                  <VariantThumb v={v} />
+                </button>
+              ))}
+            </div>
+            <div className="button-row">
+              <button className="btn small" onClick={roll}>
+                <Icon name="reset" size={13} /> More
+              </button>
+            </div>
+          </div>
+        </Popover>
+      )}
+    </>
+  );
+}
+
+function SymbolEditor({ c, setC, layer }: { c: Of<'symbol'>; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void; layer: ShapeLayer }) {
   const advanced = useStore((s) => s.settings.advanced);
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -578,7 +644,7 @@ function SymbolEditor({ c, setC }: { c: Of<'symbol'>; setC: <T extends Content['
             <div className="field" key={f.key}>
               <span>{f.label}</span>
               {/* Files from before a choice existed have no value: the engine's default is the first option. */}
-              <Segmented size="sm" value={String((c.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, string>)[f.key] = v))} />
+              <Choice value={String((c.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, string>)[f.key] = v))} />
             </div>
           ) : (
             <Slider
@@ -593,6 +659,7 @@ function SymbolEditor({ c, setC }: { c: Of<'symbol'>; setC: <T extends Content['
             />
           ),
         )}
+      <ShapeAssists layer={layer} />
     </Section>
   );
 }

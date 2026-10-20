@@ -8,7 +8,7 @@ import { isChoice, SYMBOL_DEFAULTS, SYMBOL_UI, type TypeProject } from '../../st
 import { beginGesture, commitEdit, store, useStore } from '../../state/store';
 import { useShape } from '../../render/thumbs';
 import { Icon } from '../icons';
-import { Modifiers } from '../Inspector';
+import { Choice, Modifiers } from '../Inspector';
 import { ShapePicker } from '../pickers';
 import { NumberBox, Popover, Section, Segmented, Slider, Toggle } from '../ui';
 
@@ -213,7 +213,7 @@ export function GlyphPartPanel({ glyph, part }: { glyph: string; part: GlyphPart
             isChoice(f) ? (
               <div className="field" key={f.key}>
                 <span>{f.label}</span>
-                <Segmented size="sm" value={String((part.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => set((p) => ((p.symbol as unknown as Record<string, string>)[f.key] = v))} />
+                <Choice value={String((part.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => set((p) => ((p.symbol as unknown as Record<string, string>)[f.key] = v))} />
               </div>
             ) : (
               <Slider
