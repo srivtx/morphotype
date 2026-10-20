@@ -66,12 +66,12 @@ export type SymbolSpec =
   | { kind: 'plus'; thickness: number }
   | { kind: 'catHead'; ears: number }
   | { kind: 'bubble'; tail: number; roundness: number }
-  | { kind: 'spiral'; turns: number; weight: number }
+  | { kind: 'spiral'; turns: number; weight: number; cap?: LineCap }
   | { kind: 'flower'; petals: number; depth: number }
   | { kind: 'arrow'; head: number; shaft: number }
   | { kind: 'bolt' }
   | { kind: 'moon'; phase: number }
-  | { kind: 'smile'; curve: number; weight: number }
+  | { kind: 'smile'; curve: number; weight: number; cap?: LineCap }
   | { kind: 'rays'; rays: number; short: number; inner: number; jitter: number; seed: number }
   | { kind: 'quarter' }
   | { kind: 'half' }

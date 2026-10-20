@@ -236,9 +236,16 @@ export interface NumberField {
 export interface ChoiceField {
   key: string;
   label: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; title?: string }[];
   show?: Record<string, string>;
 }
+
+/** How an open stroke ends: pen lines, smiles and spirals. */
+export const CAP_OPTIONS: { value: LineCap; label: string; title: string }[] = [
+  { value: 'round', label: 'Round', title: 'Round ends, like a marker' },
+  { value: 'butt', label: 'Flat', title: 'Cut square at the last point' },
+  { value: 'square', label: 'Square', title: 'Square, half the width past the last point' },
+];
 
 /** Whether a field applies given the modifier's current values. */
 export function fieldShown(f: Field, values: Record<string, unknown>): boolean {
@@ -475,14 +482,14 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   bolt: { kind: 'bolt' },
   arrow: { kind: 'arrow', head: 0.45, shaft: 0.3 },
   plus: { kind: 'plus', thickness: 0.3 },
-  spiral: { kind: 'spiral', turns: 2.5, weight: 0.55 },
+  spiral: { kind: 'spiral', turns: 2.5, weight: 0.55, cap: 'round' },
   pin: { kind: 'pin', corner: 3 },
   cursor: { kind: 'cursor' },
   bubble: { kind: 'bubble', tail: 0.3, roundness: 2.6 },
   blob: { kind: 'blob', lobes: 8, depth: 0.08, seed: 0, wobble: 0 },
   eyes: { kind: 'eyes', gap: 0.34, width: 0.14, height: 0.26 },
   catHead: { kind: 'catHead', ears: 0.3 },
-  smile: { kind: 'smile', curve: 0.5, weight: 0.35 },
+  smile: { kind: 'smile', curve: 0.5, weight: 0.35, cap: 'round' },
   rays: { kind: 'rays', rays: 12, short: 0.55, inner: 0.18, jitter: 0, seed: 0 },
   pill: { kind: 'pill', aspect: 3 },
   quarter: { kind: 'quarter' },
@@ -496,7 +503,7 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   asterisk: { kind: 'asterisk', arms: 8, weight: 0.12, inner: 0 },
 };
 
-export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Badge' | 'Mascot'; fields: NumberField[] }> = {
+export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Badge' | 'Mascot'; fields: Field[] }> = {
   circle: { label: 'Circle', group: 'Basic', fields: [] },
   ring: { label: 'Ring', group: 'Basic', fields: [{ key: 'thickness', label: 'Thickness', min: 0.01, max: 0.49, step: 0.005 }] },
   squircle: {
@@ -618,6 +625,7 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
     fields: [
       { key: 'turns', label: 'Turns', min: 0.5, max: 6, step: 0.05 },
       { key: 'weight', label: 'Weight', min: 0.1, max: 0.95, step: 0.01 },
+      { key: 'cap', label: 'Ends', options: CAP_OPTIONS },
     ],
   },
   pin: { label: 'Pin', group: 'Mascot', fields: [{ key: 'corner', label: 'Corner', min: 0, max: 5, step: 0.05 }] },
@@ -656,6 +664,7 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
     fields: [
       { key: 'curve', label: 'Curve', min: -1, max: 1, step: 0.01 },
       { key: 'weight', label: 'Thickness', min: 0.05, max: 1, step: 0.01 },
+      { key: 'cap', label: 'Ends', options: CAP_OPTIONS },
     ],
   },
   rays: {
