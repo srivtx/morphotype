@@ -558,7 +558,7 @@ try {
       m.clock.pause({ duration: 2, loop: true });
       // The Motion section opens with the selection (it remembers being closed).
       localStorage.setItem('mt.section.motion', '1');
-      m.store.set({ project: { ...p, layers: [], background: { ...p.background, fill: { kind: 'solid', colors: ['#ffffff'], angle: 0 } }, timeline: { duration: 2, loop: true } }, selection: [], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+      m.store.set({ project: { ...p, layers: [], background: { fill: { kind: 'solid', colors: ['#ffffff'], angle: 0 }, grain: 0, tile: null, pattern: null }, timeline: { duration: 2, loop: true } }, selection: [], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
     });
     await settle(400);
     await page.keyboard.press('t');

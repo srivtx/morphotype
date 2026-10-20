@@ -37,7 +37,8 @@ export type Track =
   | (Clip & { kind: 'leave' })
   | { kind: 'loop'; owner: string; motion: Motion; period: number; label: string }
   | { kind: 'param'; owner: string; scope: 'style' | 'geo'; key: string; anim: ParamAnim; period: number; label: string; color: boolean; from: number | string; range: { min: number; max: number; step: number } }
-  | { kind: 'flow'; owner: string; speed: number; label: string };
+  /** A material that moves by itself (a pattern's or chrome's Speed, a neon's Flicker). */
+  | { kind: 'flow'; owner: string; key: string; value: number; title: string; label: string; range: { min: number; max: number; step: number } };
 
 export interface Row {
   node: Node;
@@ -120,8 +121,11 @@ export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: 
   }
   const fx = effectById(n.style.effect);
   if (fx.animated?.(n.style.params)) {
-    const speed = Number(n.style.params.speed ?? 0);
-    out.push({ kind: 'flow', owner: n.id, speed, label: `${fx.name} · Speed ${+speed.toFixed(2)}` });
+    const p = fx.params.find((q) => q.key === 'speed') ?? fx.params.find((q) => q.key === 'flicker');
+    if (p?.type === 'number') {
+      const value = Number(n.style.params[p.key] ?? p.default);
+      out.push({ kind: 'flow', owner: n.id, key: p.key, value, title: fx.id === 'pattern' ? 'Pattern' : 'Material', label: `${fx.name} · ${p.label} ${+value.toFixed(2)}`, range: { min: p.min, max: p.max, step: p.step } });
+    }
   }
   return out;
 }

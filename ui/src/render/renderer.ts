@@ -148,6 +148,9 @@ export class Renderer {
   private objs: Obj[] = [];
   private seeds: { a: Target; b: Target; w: number; h: number } | null = null;
   private maskCanvas = document.createElement('canvas');
+  private maskCtx: CanvasRenderingContext2D | null = null;
+  /** GL limits are asked once: a query can wait on the GPU. */
+  private maxTexture = 0;
   private art = { w: 1200, h: 1200 };
   private bg: Background | null = null;
   private resolution = 1024;
@@ -178,6 +181,7 @@ export class Renderer {
       throw new GLError('This GPU cannot render to float textures (EXT_color_buffer_float).');
     }
     this.gl = gl;
+    this.maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
     this.progs = {
       seed: program(gl, FULLSCREEN_VS, SEED_FS),
       jfa: program(gl, FULLSCREEN_VS, JFA_FS),
@@ -260,7 +264,7 @@ export class Renderer {
 
   /** Texture resolution used for previews (longest artboard side, in texels). */
   setPreviewResolution(px: number) {
-    const r = Math.max(256, Math.min(Math.round(px), 3072, this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number));
+    const r = Math.max(256, Math.min(Math.round(px), 3072, this.maxTexture));
     if (Math.abs(r - this.resolution) / this.resolution < 0.2) return;
     this.resolution = r;
     this.invalidate();
@@ -394,7 +398,7 @@ export class Renderer {
     if (!src || src.length < 8) return null;
     if (o.spine && o.spine.src === src) return o.spine;
     const gl = this.gl;
-    const n = Math.min(src.length >> 2, Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number, 4096));
+    const n = Math.min(src.length >> 2, Math.min(this.maxTexture, 4096));
     if (o.spine) gl.deleteTexture(o.spine.tex);
     const tex = texture(gl, n, 1, formats(gl).rgba32f);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, 1, gl.RGBA, gl.FLOAT, new Float32Array(src.slice(0, n * 4)));
@@ -454,7 +458,7 @@ export class Renderer {
       this.freeField(o);
       return;
     }
-    const max = Math.min(this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number, 8192);
+    const max = Math.min(this.maxTexture, 8192);
     k = Math.min(k, max / Math.max(region.w, region.h));
     const key = `${k.toFixed(5)}:${region.x},${region.y},${region.w},${region.h}`;
     if (o.field && o.fieldKey === key) return;
@@ -472,7 +476,7 @@ export class Renderer {
       c.width = w;
       c.height = h;
     }
-    const ctx = c.getContext('2d', { willReadFrequently: false });
+    const ctx = (this.maskCtx ??= c.getContext('2d', { willReadFrequently: false }));
     if (!ctx) throw new GLError('2D canvas unavailable');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, w, h);
@@ -748,7 +752,7 @@ export class Renderer {
    */
   exportFrames(scale: number, transparent: boolean) {
     const gl = this.gl;
-    const max = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number, 8192);
+    const max = Math.min(this.maxTexture, 8192);
     const W = Math.max(1, Math.min(Math.round(this.art.w * scale), max));
     const Hh = Math.max(1, Math.min(Math.round(this.art.h * scale), max));
     const k = W / this.art.w;

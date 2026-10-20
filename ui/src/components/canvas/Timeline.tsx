@@ -417,7 +417,7 @@ const Rows = memo(function Rows({ rows, tl, laneW, selection, folded, onFold, on
   );
 });
 
-const trackName = (k: Track) => (k.kind === 'enter' ? 'Comes in' : k.kind === 'leave' ? 'Then' : k.kind === 'loop' ? 'Loop' : k.kind === 'flow' ? 'Pattern' : k.label);
+const trackName = (k: Track) => (k.kind === 'enter' ? 'Comes in' : k.kind === 'leave' ? 'Then' : k.kind === 'loop' ? 'Loop' : k.kind === 'flow' ? k.title : k.label);
 
 /** A layer's tracks summed up on its own row: where each one is busy. */
 function Overview({ tracks, tl }: { tracks: Track[]; tl: Timeline }) {
@@ -574,7 +574,7 @@ function TrackView({ row, track: k, ctx }: { row: Node; track: Track; ctx: LaneC
   if (k.kind === 'enter' || k.kind === 'leave') return <EnterClip k={k} ctx={ctx} open={open} snap={snap} />;
   if (k.kind === 'flow')
     return (
-      <div className="tl-clip tl-flow" onPointerDown={dragger(ctx, open, () => {})} data-tip="A pattern with Speed: it moves the whole time, a whole number of times round each loop">
+      <div className="tl-clip tl-flow" onPointerDown={dragger(ctx, open, () => {})} data-tip={k.key === 'speed' ? 'It moves by itself the whole time, a whole number of times round each loop' : 'It flickers by itself the whole time'}>
         <span className="tl-clip-label">{k.label}</span>
       </div>
     );
@@ -881,15 +881,15 @@ function ClipEditor({ row, track: k, step, onDone }: { row: Node; track: Track; 
     );
   }
   if (k.kind === 'flow') {
-    const speed = Number(row.style.params.speed ?? 0);
+    const value = Number(row.style.params[k.key] ?? k.value);
     return (
       <div className="tl-edit">
         <header>
-          <b>Pattern</b>
+          <b>{k.title}</b>
           <span>{row.name}</span>
         </header>
-        <Slider label="Speed" value={speed} min={-4} max={4} step={0.05} reset={0} onChange={(v) => editNode(row.id, (n) => (n.style.params.speed = v), `tl:${row.id}:speed`)} />
-        <p className="hint">Moves a whole number of times round each loop, so it never jumps.</p>
+        <Slider label={k.key === 'speed' ? 'Speed' : 'Flicker'} value={value} min={k.range.min} max={k.range.max} step={k.range.step} reset={0} onChange={(v) => editNode(row.id, (n) => (n.style.params[k.key] = v), `tl:${row.id}:${k.key}`)} />
+        <p className="hint">{k.key === 'speed' ? 'Moves a whole number of times round each loop, so it never jumps.' : 'Flickers at random; 0 holds it steady.'}</p>
       </div>
     );
   }
