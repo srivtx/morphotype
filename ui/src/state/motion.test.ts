@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { animatedValue, applyMat, bezierAt, DEFAULT_TRANSITION, loopPeriod, motionReach, newMotion, placement, poseAt, poseMatrix, progressAt, settleTime, springAt, springOf } from './motion';
+import { animatedValue, applyMat, bezierAt, DEFAULT_TRANSITION, FEELS, feelOf, lastSlot, loopPeriod, motionEnd, motionReach, newMotion, placement, poseAt, poseMatrix, progressAt, settleTime, springAt, springOf, staggerSlot } from './motion';
 
 describe('transitions', () => {
   it('eases like CSS cubic-bezier', () => {
@@ -95,5 +95,56 @@ describe('animated settings', () => {
     expect(animatedValue(0, fl, 0.3)).toBe(animatedValue(0, fl, 0.3));
     const mid = parseInt(String(animatedValue('#000000', { ...a, to: '#ffffff' }, 0.5)).slice(1, 3), 16);
     expect(Math.abs(mid - 127.5)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('moves, Then, slides and stagger order', () => {
+  const smooth = { ...DEFAULT_TRANSITION, type: 'easing' as const, duration: 1, ease: [0, 0, 1, 1] as [number, number, number, number] };
+
+  it('moves in from where it starts to its place, without fading', () => {
+    const m = newMotion({ enter: 'move', fromX: -200, fromY: 50, transition: smooth });
+    expect(poseAt(m, 0)).toMatchObject({ x: -200, y: 50, opacity: 1 });
+    expect(poseAt(m, 0.5)).toMatchObject({ x: -100, y: 25 });
+    expect(poseAt(m, 1)).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it('then moves on to where it goes and stays', () => {
+    const m = newMotion({ leave: 'move', toX: 300, leaveAt: 2, transition: smooth });
+    expect(poseAt(m, 1.9).x).toBe(0);
+    expect(poseAt(m, 2.5).x).toBeCloseTo(150);
+    expect(poseAt(m, 5)).toMatchObject({ x: 300, opacity: 1 });
+    // Fades leave fading.
+    expect(poseAt(newMotion({ leave: 'rise', leaveDistance: 40, leaveAt: 0, transition: smooth }), 1)).toMatchObject({ y: -40, opacity: 0 });
+    expect(motionEnd(m)).toBe(3);
+  });
+
+  it('slides one way in any direction, or there and back', () => {
+    const one = newMotion({ loop: 'slide', amount: 100, period: 2, dir: 'left', oneWay: true });
+    expect(poseAt(one, 0).x).toBeCloseTo(0);
+    expect(poseAt(one, 1).x).toBeCloseTo(-50);
+    expect(poseAt(one, 1.99).x).toBeCloseTo(-99.5);
+    expect(poseAt(one, 2).x).toBeCloseTo(0);
+    const up = newMotion({ loop: 'slide', amount: 100, period: 2, dir: 'up', oneWay: true });
+    expect(poseAt(up, 1)).toMatchObject({ x: 0, y: -50 });
+    // Files from before directions: a sine along x.
+    const old = newMotion({ loop: 'slide', amount: 100, period: 2 });
+    expect(poseAt(old, 0.5).x).toBeCloseTo(100);
+    expect(poseAt(old, 1.5).x).toBeCloseTo(-100);
+  });
+
+  it('orders a stagger first to last, reversed, from the centre or shuffled', () => {
+    expect([0, 1, 2, 3, 4].map((i) => staggerSlot('first', i, 5))).toEqual([0, 1, 2, 3, 4]);
+    expect([0, 1, 2, 3, 4].map((i) => staggerSlot('last', i, 5))).toEqual([4, 3, 2, 1, 0]);
+    expect([0, 1, 2, 3, 4].map((i) => staggerSlot('centre', i, 5))).toEqual([2, 1, 0, 1, 2]);
+    const shuffled = [0, 1, 2, 3, 4].map((i) => staggerSlot('random', i, 5, 42));
+    expect([...shuffled].sort()).toEqual([0, 1, 2, 3, 4]);
+    expect([0, 1, 2, 3, 4].map((i) => staggerSlot('random', i, 5, 42))).toEqual(shuffled);
+    expect(lastSlot('centre', 5)).toBe(2);
+  });
+
+  it('names the feel of a transition', () => {
+    expect(feelOf(DEFAULT_TRANSITION)).toBe('Smooth');
+    for (const f of FEELS) expect(feelOf(f.value)).toBe(f.label);
+    expect(feelOf({ ...DEFAULT_TRANSITION, type: 'physics' })).toBeNull();
   });
 });

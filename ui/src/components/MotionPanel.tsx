@@ -1,15 +1,15 @@
 // Motion controls: a layer's loop and entrance, the transition editor
 // (easing, time spring, physics spring) with its curve, after DialKit's
 // (MIT, Josh Puckett).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { selectedNodes, updateSelected } from '../app/actions';
 import { clock, timelineOf } from '../state/clock';
 import { isGroup, type Node } from '../state/model';
-import { EASES, ENTER_OPTIONS, ENTER_UI, isStill, LOOP_OPTIONS, LOOP_UI, newMotion, progressAt, settleTime, type Bezier, type EnterKind, type LoopKind, type Motion, type Transition, type TransitionType } from '../state/motion';
-import { edit, store } from '../state/store';
+import { EASES, ENTER_OPTIONS, ENTER_UI, entersFading, entranceEnd, FEELS, feelOf, isStill, lastSlot, LEAVE_OPTIONS, LEAVE_UI, leaveEnd, leavesFading, loopPeriod, LOOP_OPTIONS, LOOP_UI, newMotion, progressAt, settleTime, STAGGER_ORDERS, type Bezier, type EnterKind, type LeaveKind, type LoopKind, type Motion, type SlideDir, type StaggerOrder, type Transition, type TransitionType } from '../state/motion';
+import { edit, store, useStore } from '../state/store';
 import { allLayers, findNode } from '../state/tree';
-import { Icon } from './icons';
-import { Section, Segmented, Select, Slider } from './ui';
+import { Icon, type IconName } from './icons';
+import { NumberBox, Section, Segmented, Select, Slider, Toggle } from './ui';
 
 const W = 256;
 const H = 150;
@@ -197,33 +197,205 @@ export function staggerSelection(order: 'ripple' | 'shuffle' = 'ripple', step = 
 /** Any selected layer (or one inside a selected group) that moves or has animated settings. */
 const anyMoving = (nodes: Node[]) => nodes.some((n) => !isStill(n.motion) || Object.keys(n.animate ?? {}).length > 0 || (isGroup(n) ? allLayers(n.children) : [n]).some((l) => Object.keys(l.style.animate ?? {}).length > 0 || Object.keys(l.animate ?? {}).length > 0));
 
-/** Loop and entrance for the selection (shown for the last one picked). */
-export function MotionSection({ nodes }: { nodes: Node[] }) {
-  const primary = nodes.at(-1)!;
-  const m = primary.motion ?? newMotion();
-  const group = isGroup(primary) && !primary.merge;
-  const set = (fn: (m: Motion) => void, key = '') =>
-    updateSelected((n) => {
-      n.motion = n.motion ?? newMotion();
-      fn(n.motion);
-      if (isStill(n.motion)) delete n.motion;
-    }, key && `motion.${key}`);
-  const replay = () => clock.replay(timelineOf(store.get().project));
-  const loop = m.loop !== 'none' ? LOOP_UI[m.loop] : null;
-  const enter = m.enter !== 'none' && m.enter !== 'fade' ? ENTER_UI[m.enter] : null;
+// ---------- Simple / Advanced ----------
+// Simple shows what most motion needs: what it does, how far, when, and a
+// named feel. Advanced adds curves and springs, offsets, fades and order.
+// The choice is remembered per viewer and shared by every motion control.
+
+const ADV = 'morphotype.motionAdvanced';
+let advanced = (() => {
+  try {
+    return localStorage.getItem(ADV) === '1';
+  } catch {
+    return false;
+  }
+})();
+const advSubs = new Set<() => void>();
+export function setMotionAdvanced(v: boolean) {
+  advanced = v;
+  try {
+    localStorage.setItem(ADV, v ? '1' : '0');
+  } catch {
+    // Not remembered, still works.
+  }
+  advSubs.forEach((f) => f());
+}
+export const useMotionAdvanced = () =>
+  useSyncExternalStore(
+    (f) => {
+      advSubs.add(f);
+      return () => void advSubs.delete(f);
+    },
+    () => advanced,
+  );
+
+/** The Simple / Advanced switch. */
+export function AdvancedSwitch() {
+  const adv = useMotionAdvanced();
   return (
-    <Section
-      title="Motion"
-      id="motion"
-      defaultOpen={!isStill(primary.motion)}
-      actions={
-        !isStill(primary.motion) && (
-          <button className="icon-btn" aria-label="Play from the start" data-tip="Play from the start" onClick={replay}>
-            <Icon name="replay" size={14} />
-          </button>
-        )
-      }
-    >
+    <button className={`adv-chip ${adv ? 'on' : ''}`} aria-pressed={adv} onClick={() => setMotionAdvanced(!adv)} data-tip={adv ? 'Hide curves, springs, offsets and order' : 'Show curves, springs, offsets and order'}>
+      Advanced
+    </button>
+  );
+}
+
+/**
+ * A cycle length. On a looping timeline only whole numbers of cycles fit, so
+ * the slider steps through those (6 s loop: 6, 3, 2, 1.5 s…) and shows the
+ * cycle that really plays: every move changes what you see.
+ */
+export function CycleSlider({ value, onChange, label = 'Cycle', max = 12, reset = 2 }: { value: number; onChange: (v: number) => void; label?: string; max?: number; reset?: number }) {
+  const tl = useStore((s) => timelineOf(s.project));
+  const L = tl.loop ? tl.duration : undefined;
+  const fit = (v: number) => Math.round(loopPeriod(v, L) * 1000) / 1000;
+  return <Slider label={label} value={fit(value)} min={0.2} max={L ? Math.min(max, L) : max} step={0.01} suffix="s" reset={fit(reset)} onChange={(v) => onChange(fit(v))} />;
+}
+
+/** Simple timing: a named feel and how long it takes. */
+export function FeelPicker({ value, onChange }: { value: Transition; onChange: (t: Transition, key: string) => void }) {
+  const feel = feelOf(value);
+  return (
+    <>
+      <div className="dial-row">
+        <span>Feel</span>
+        <Segmented<string>
+          size="sm"
+          value={feel ?? ''}
+          options={FEELS.map((f) => ({ value: f.label, label: f.label, title: f.title }))}
+          onChange={(label) => {
+            const f = FEELS.find((x) => x.label === label)!;
+            onChange({ ...f.value }, '');
+          }}
+        />
+      </div>
+      {!feel && <p className="hint">A custom curve: switch on Advanced to edit it.</p>}
+      {value.type !== 'physics' && <Slider label="Takes" value={value.duration} min={0.05} max={3} step={0.05} suffix="s" reset={0.6} onChange={(duration) => onChange({ ...value, duration }, 'duration')} />}
+    </>
+  );
+}
+
+type SetMotion = (fn: (m: Motion) => void, key?: string) => void;
+
+/** Seconds and frame: "1.20 s · f36". */
+const at = (t: number) => `${t.toFixed(2)} s · frame ${Math.round(t * 30)}`;
+
+/** Entrance: what it does, from where, when and how. */
+export function EnterControls({ m, set, onPick }: { m: Motion; set: SetMotion; onPick?: () => void }) {
+  const adv = useMotionAdvanced();
+  const ui = m.enter !== 'none' && m.enter !== 'fade' && m.enter !== 'move' ? ENTER_UI[m.enter] : null;
+  return (
+    <>
+      <div className="dial-row">
+        <span>Enter</span>
+        <Select<EnterKind>
+          value={m.enter}
+          options={ENTER_OPTIONS}
+          onChange={(v) => {
+            set((x) => {
+              x.enter = v;
+              if (v !== 'none' && v !== 'fade' && v !== 'move') x.distance = ENTER_UI[v].default;
+              // Move: start a little to the left, so there's something to see and drag.
+              if (v === 'move' && !x.fromX && !x.fromY) x.fromX = -200;
+            });
+            if (v !== 'none') onPick?.();
+          }}
+        />
+      </div>
+      {m.enter === 'move' && (
+        <>
+          <div className="xy-row">
+            <span>From</span>
+            <NumberBox label="X" value={m.fromX ?? 0} onChange={(v) => set((x) => (x.fromX = v), 'fromX')} title="Where it starts, across from its place (px)" />
+            <NumberBox label="Y" value={m.fromY ?? 0} onChange={(v) => set((x) => (x.fromY = v), 'fromY')} title="Where it starts, down from its place (px)" />
+          </div>
+          <p className="hint">It ends where it is in the design. Drag the dashed copy on the canvas to set where it starts.</p>
+        </>
+      )}
+      {ui && <Slider label={ui.label} value={m.distance} min={ui.min} max={ui.max} step={ui.step} suffix={ui.unit === 'px' ? '' : ui.unit} reset={ui.default} onChange={(v) => set((x) => (x.distance = v), 'distance')} />}
+      {m.enter !== 'none' && (
+        <>
+          <Slider label="Starts at" value={m.delay} min={0} max={10} step={0.05} suffix="s" reset={0} onChange={(v) => set((x) => (x.delay = v), 'delay')} />
+          {adv ? <TransitionEditor value={m.transition} onChange={(t, key) => set((x) => (x.transition = t), key && `tr.${key}`)} /> : <FeelPicker value={m.transition} onChange={(t, key) => set((x) => (x.transition = t), key && `tr.${key}`)} />}
+          {adv && m.enter !== 'fade' && <Toggle label="Fade in too" checked={entersFading(m)} onChange={(v) => set((x) => (x.fade = v))} />}
+          <p className="hint">In place by {at(entranceEnd(m))}.</p>
+        </>
+      )}
+    </>
+  );
+}
+
+/** Then: after arriving, it moves on or leaves. */
+export function ThenControls({ m, set, onPick }: { m: Motion; set: SetMotion; onPick?: () => void }) {
+  const adv = useMotionAdvanced();
+  const kind = m.leave ?? 'none';
+  const ui = kind !== 'none' && kind !== 'fade' && kind !== 'move' ? LEAVE_UI[kind] : null;
+  const own = !!m.leaveTransition;
+  const tr = m.leaveTransition ?? m.transition;
+  const setTr = (t: Transition, key: string) => set((x) => (own || x.enter === 'none' ? (own ? (x.leaveTransition = t) : (x.transition = t)) : (x.leaveTransition = t)), key && `then.${key}`);
+  return (
+    <>
+      <div className="dial-row">
+        <span>Then</span>
+        <Select<LeaveKind>
+          value={kind}
+          options={LEAVE_OPTIONS}
+          onChange={(v) => {
+            set((x) => {
+              x.leave = v;
+              if (v !== 'none' && v !== 'fade' && v !== 'move') x.leaveDistance = LEAVE_UI[v].default;
+              if (v === 'move' && !x.toX && !x.toY) x.toX = 200;
+              // A beat after it has arrived.
+              if (v !== 'none' && x.leaveAt === undefined) x.leaveAt = Math.round((entranceEnd(x) + 1) * 20) / 20;
+            });
+            if (v !== 'none') onPick?.();
+          }}
+        />
+      </div>
+      {kind === 'move' && (
+        <>
+          <div className="xy-row">
+            <span>To</span>
+            <NumberBox label="X" value={m.toX ?? 0} onChange={(v) => set((x) => (x.toX = v), 'toX')} title="Where it goes, across from its place (px)" />
+            <NumberBox label="Y" value={m.toY ?? 0} onChange={(v) => set((x) => (x.toY = v), 'toY')} title="Where it goes, down from its place (px)" />
+          </div>
+          <p className="hint">It stays there. Drag the dashed copy on the canvas to move where it goes.</p>
+        </>
+      )}
+      {ui && <Slider label={ui.label} value={m.leaveDistance ?? ui.default} min={ui.min} max={ui.max} step={ui.step} suffix={ui.unit === 'px' ? '' : ui.unit} reset={ui.default} onChange={(v) => set((x) => (x.leaveDistance = v), 'leaveDistance')} />}
+      {kind !== 'none' && (
+        <>
+          <Slider label="At" value={m.leaveAt ?? 0} min={0} max={20} step={0.05} suffix="s" reset={Math.round((entranceEnd(m) + 1) * 20) / 20} onChange={(v) => set((x) => (x.leaveAt = v), 'leaveAt')} />
+          {/* Simple: Then shares the entrance's feel unless there's no entrance. */}
+          {adv ? (
+            <>
+              {m.enter !== 'none' && <Toggle label="Its own curve" checked={own} onChange={(v) => set((x) => (v ? (x.leaveTransition = { ...x.transition }) : delete x.leaveTransition))} hint="Off: it moves with the entrance's curve" />}
+              {(own || m.enter === 'none') && <TransitionEditor value={tr} onChange={setTr} />}
+              {kind !== 'fade' && <Toggle label="Fade out too" checked={leavesFading(m)} onChange={(v) => set((x) => (x.leaveFade = v))} />}
+            </>
+          ) : (
+            m.enter === 'none' && <FeelPicker value={tr} onChange={setTr} />
+          )}
+          <p className="hint">Done by {at(leaveEnd(m))}.</p>
+        </>
+      )}
+    </>
+  );
+}
+
+const DIRS: { value: SlideDir; label?: string; icon: IconName; title: string }[] = [
+  { value: 'left', icon: 'arrowLeft', title: 'To the left' },
+  { value: 'right', icon: 'arrowRight', title: 'To the right' },
+  { value: 'up', icon: 'arrowUp', title: 'Up' },
+  { value: 'down', icon: 'arrowDown', title: 'Down' },
+];
+
+/** Loop: what it does, how much and how often. */
+export function LoopControls({ m, set }: { m: Motion; set: SetMotion }) {
+  const adv = useMotionAdvanced();
+  const ui = m.loop !== 'none' ? LOOP_UI[m.loop] : null;
+  const slide = m.loop === 'slide';
+  return (
+    <>
       <div className="dial-row">
         <span>Loop</span>
         <Select<LoopKind>
@@ -233,51 +405,138 @@ export function MotionSection({ nodes }: { nodes: Node[] }) {
             set((x) => {
               x.loop = v;
               if (v !== 'none') x.amount = LOOP_UI[v].default;
+              // A new slide goes one way, left: a conveyor (Back and forth is one click away).
+              if (v === 'slide' && x.dir === undefined) {
+                x.dir = 'left';
+                x.oneWay = true;
+              }
             })
           }
         />
       </div>
-      {loop && (
+      {slide && (
         <>
-          <Slider label={loop.label} value={m.amount} min={loop.min} max={loop.max} step={loop.step} suffix={loop.unit === 'px' ? '' : loop.unit} reset={loop.default} onChange={(v) => set((x) => (x.amount = v), 'amount')} />
-          <Slider label="Cycle" value={m.period} min={0.2} max={12} step={0.1} suffix="s" reset={2} onChange={(v) => set((x) => (x.period = v), 'period')} />
-          <Slider label="Offset" value={m.phase} min={0} max={1} step={0.01} reset={0} onChange={(v) => set((x) => (x.phase = v), 'phase')} />
+          <div className="dial-row">
+            <span>Way</span>
+            <Segmented<SlideDir> size="sm" value={m.dir ?? 'right'} options={DIRS} onChange={(dir) => set((x) => (x.dir = dir))} />
+          </div>
+          <div className="dial-row">
+            <span>Style</span>
+            <Segmented<'one' | 'both'>
+              size="sm"
+              value={m.oneWay ? 'one' : 'both'}
+              options={[
+                { value: 'one', label: 'One way', title: 'Goes Distance along, then starts again from its place: a conveyor, a ticker' },
+                { value: 'both', label: 'Back & forth', title: 'There and back again, easing at each end' },
+              ]}
+              onChange={(v) => set((x) => (x.oneWay = v === 'one'))}
+            />
+          </div>
         </>
       )}
+      {ui && <Slider label={ui.label} value={slide ? Math.abs(m.amount) : m.amount} min={slide ? 0 : ui.min} max={ui.max} step={ui.step} suffix={ui.unit === 'px' ? '' : ui.unit} reset={ui.default} onChange={(v) => set((x) => {
+        // Older slides used a negative distance for the other way: turn that into a direction.
+        if (slide && x.amount < 0) x.dir = x.dir === 'left' ? 'right' : x.dir === 'up' ? 'down' : x.dir === 'down' ? 'up' : 'left';
+        x.amount = v;
+      }, 'amount')} />}
+      {ui && <CycleSlider value={m.period} onChange={(v) => set((x) => (x.period = v), 'period')} />}
+      {slide && m.oneWay && <p className="hint">For a seamless conveyor, set Distance to the gap between repeating items.</p>}
+      {ui && adv && <Slider label="Offset" value={m.phase} min={0} max={1} step={0.01} reset={0} onChange={(v) => set((x) => (x.phase = v), 'phase')} />}
+      {slide && m.oneWay && adv && <Toggle label="Ease each pass" checked={!!m.easePass} onChange={(v) => set((x) => (x.easePass = v))} hint="Off: a steady glide" />}
+    </>
+  );
+}
+
+/** Groups: move as one, or each child in turn. */
+export function ChildrenControls({ m, set, count }: { m: Motion; set: SetMotion; count: number }) {
+  const adv = useMotionAdvanced();
+  const turn = m.stagger > 0;
+  return (
+    <>
       <div className="dial-row">
-        <span>Enter</span>
-        <Select<EnterKind>
-          value={m.enter}
-          options={ENTER_OPTIONS}
-          onChange={(v) => {
-            set((x) => {
-              x.enter = v;
-              if (v !== 'none' && v !== 'fade') x.distance = ENTER_UI[v].default;
-            });
-            if (v !== 'none') replay();
-          }}
+        <span>Children</span>
+        <Segmented<'one' | 'turn'>
+          size="sm"
+          value={turn ? 'turn' : 'one'}
+          options={[
+            { value: 'one', label: 'Together', title: 'The group moves as one' },
+            { value: 'turn', label: 'One by one', title: 'Each child moves on its own, a little after the one before: a deal of cards, a wave across bars' },
+          ]}
+          onChange={(v) => set((x) => (x.stagger = v === 'turn' ? x.stagger || 0.1 : 0), 'stagger')}
         />
       </div>
-      {m.enter !== 'none' && (
+      {turn && (
         <>
-          {enter && <Slider label={enter.label} value={m.distance} min={enter.min} max={enter.max} step={enter.step} suffix={enter.unit === 'px' ? '' : enter.unit} reset={enter.default} onChange={(v) => set((x) => (x.distance = v), 'distance')} />}
-          <Slider label="Delay" value={m.delay} min={0} max={10} step={0.05} suffix="s" reset={0} onChange={(v) => set((x) => (x.delay = v), 'delay')} />
-          <TransitionEditor value={m.transition} onChange={(t, key) => set((x) => (x.transition = t), key && `tr.${key}`)} />
+          <Slider label="Gap" value={m.stagger} min={0.01} max={1} step={0.01} suffix="s" reset={0.1} onChange={(v) => set((x) => (x.stagger = v), 'stagger')} />
+          {adv && (
+            <div className="dial-row">
+              <span>Order</span>
+              <Segmented<StaggerOrder> size="sm" value={m.order ?? 'first'} options={STAGGER_ORDERS} onChange={(order) => set((x) => (x.order = order))} />
+            </div>
+          )}
+          <p className="hint">
+            {count} children, {m.stagger.toFixed(2)} s apart: the last starts {(m.stagger * lastSlot(m.order, count)).toFixed(2)} s after the first.
+          </p>
         </>
       )}
-      {group && !isStill(primary.motion) && <Slider label="Stagger" value={m.stagger} min={0} max={1} step={0.01} suffix="s" reset={0} onChange={(v) => set((x) => (x.stagger = v), 'stagger')} />}
-      {group && !isStill(primary.motion) && <p className="hint">{m.stagger > 0 ? 'Each child moves on its own, one after another: a wave across rows of bars, a deal of cards.' : 'The group moves as one. Stagger moves each child in turn.'}</p>}
-      {nodes.length > 1 && anyMoving(nodes) && (
-        <div className="button-row">
-          <button className="btn" onClick={() => staggerSelection('ripple')} data-tip="Start each selected layer a little later than the one before: a ripple across them">
-            <Icon name="wave" /> Ripple
-          </button>
-          <button className="btn" onClick={() => staggerSelection('shuffle')} data-tip="Put each selected layer out of step at random: a flicker across a grid of tiles">
-            <Icon name="dots" /> Shuffle
-          </button>
-        </div>
+    </>
+  );
+}
+
+/** Loop, entrance, Then and (for groups) children, for the selection (shown for the last one picked). */
+export function MotionSection({ nodes }: { nodes: Node[] }) {
+  const primary = nodes.at(-1)!;
+  const m = primary.motion ?? newMotion();
+  const group = isGroup(primary) && !primary.merge;
+  const set: SetMotion = (fn, key = '') =>
+    updateSelected((n) => {
+      n.motion = n.motion ?? newMotion();
+      fn(n.motion);
+      if (isStill(n.motion)) delete n.motion;
+    }, key && `motion.${key}`);
+  const replay = () => clock.replay(timelineOf(store.get().project));
+  return (
+    <Section
+      title="Motion"
+      id="motion"
+      defaultOpen={!isStill(primary.motion)}
+      actions={
+        <>
+          <AdvancedSwitch />
+          {!isStill(primary.motion) && (
+            <button className="icon-btn" aria-label="Play from the start" data-tip="Play from the start" onClick={replay}>
+              <Icon name="replay" size={14} />
+            </button>
+          )}
+        </>
+      }
+    >
+      <h4 className="motion-step">Comes in</h4>
+      <EnterControls m={m} set={set} onPick={replay} />
+      <h4 className="motion-step">Then</h4>
+      <ThenControls m={m} set={set} onPick={replay} />
+      <h4 className="motion-step">Keeps moving</h4>
+      <LoopControls m={m} set={set} />
+      {group && !isStill(primary.motion) && (
+        <>
+          <h4 className="motion-step">Children</h4>
+          <ChildrenControls m={m} set={set} count={primary.children.length} />
+        </>
       )}
-      {isStill(primary.motion) && <p className="hint">A loop repeats for as long as the timeline plays; an entrance plays once each time round.</p>}
+      {nodes.length > 1 && anyMoving(nodes) && (
+        <>
+          <h4 className="motion-step">Out of step</h4>
+          <div className="button-row">
+            <button className="btn" onClick={() => staggerSelection('ripple')} data-tip="Start each selected layer a little later than the one before: a ripple across them">
+              <Icon name="wave" /> One by one
+            </button>
+            <button className="btn" onClick={() => staggerSelection('shuffle')} data-tip="Put each selected layer out of step at random: a flicker across a grid of tiles">
+              <Icon name="dots" /> Random
+            </button>
+          </div>
+        </>
+      )}
+      {isStill(primary.motion) && <p className="hint">Comes in and Then play once each time round; a loop repeats as long as the timeline plays. Group layers to move them one by one.</p>}
     </Section>
   );
 }

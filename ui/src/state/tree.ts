@@ -1,6 +1,6 @@
 import type { EngineDocument, EngineLayer, Member, Op, RenderSpec } from '../engine/types';
 import { isGroup, type Group, type Node, type Project, type ShapeLayer, type Style } from './model';
-import { isStill, type MotionLink } from './motion';
+import { isStill, seedOf, staggerSlot, type MotionLink } from './motion';
 
 export interface Found {
   node: Node;
@@ -131,7 +131,7 @@ function ownLink(n: Node): MotionLink | null {
   return n.motion && !isStill(n.motion) && !(isGroup(n) && !n.merge && n.motion.stagger > 0) ? { motion: n.motion, at: n.id, offset: 0 } : null;
 }
 function childLink(g: Group, child: Node, index: number): MotionLink | null {
-  return g.motion && !isStill(g.motion) && g.motion.stagger > 0 ? { motion: g.motion, at: child.id, offset: index * g.motion.stagger } : null;
+  return g.motion && !isStill(g.motion) && g.motion.stagger > 0 ? { motion: g.motion, at: child.id, offset: staggerSlot(g.motion.order, index, g.children.length, seedOf(g.id)) * g.motion.stagger } : null;
 }
 const withLink = (l: MotionLink | null, outer: MotionLink[]) => (l ? [l, ...outer] : outer);
 

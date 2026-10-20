@@ -12,6 +12,7 @@ import { isGroup, type Node, type ShapeLayer } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, toast, useStore } from '../../state/store';
 import { allLayers, ancestors, buildScene, find, findNode, isLocked, isVisible, layersOf, topmost } from '../../state/tree';
 import { boxesIntersect, hitLayer, resolveTarget, unionOf } from './hit';
+import { MoveGhosts } from './MoveGhosts';
 import { Overlay, type Guide, type Handle } from './Overlay';
 import { TextEditor } from './TextEditor';
 import { Toolbar } from './Toolbar';
@@ -831,6 +832,7 @@ export function Viewport() {
         <path ref={previewRef} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
       </svg>
       {r && <Overlay renderer={r} tick={tick} guides={guides} marquee={marquee} editing={editing} onHandle={beginHandle} onCursor={setCursor} measure={altHeld && !drag.current} />}
+      {r && !editing && <MoveGhosts renderer={r} tick={tick} />}
       {hint && (
         <div className="drag-hint" style={{ left: hint.x + 16, top: hint.y + 18 }}>
           {hint.text}
