@@ -1,5 +1,7 @@
 import type { Content, EngineLayer, GlyphPart, LineCap, ModEntry, Modifier, ModifierKind, Op, SymbolKind, SymbolSpec, TextMorph } from '../engine/types';
 import { defaultParams, effectById, type ParamValues } from '../render/effects';
+import type { Motion, ParamAnim } from './motion';
+import type { Timeline } from './clock';
 
 export interface ProjectFont {
   id: string;
@@ -48,6 +50,8 @@ export interface Style {
   depth?: Depth | null;
   /** Soft edges, in artboard px: a blur of the outline (cheap, from the distance field). */
   soften?: number;
+  /** Settings that change over time on the scene clock, by param key. */
+  animate?: Record<string, ParamAnim>;
 }
 
 export function stroke(width = 6, color = '#0a0a0a', align: StrokeAlign = 'outside'): Stroke {
@@ -61,6 +65,8 @@ export interface ShapeLayer extends EngineLayer {
   style: Style;
   /** A reference to trace over: shown while designing, left out of every export. */
   guide?: boolean;
+  /** Loop and entrance, played on the scene clock. */
+  motion?: Motion;
 }
 
 /**
@@ -83,6 +89,8 @@ export interface Group {
   style: Style;
   modifiers: ModEntry[];
   children: Node[];
+  /** Moves the whole group, or each child in turn (see Motion.stagger). */
+  motion?: Motion;
 }
 
 export type Node = ShapeLayer | Group;
@@ -185,6 +193,8 @@ export interface Project {
   /** Pictures used by Photo materials; only present in saved files (see assets.ts). */
   images?: { id: string; data: string; w: number; h: number; name?: string }[];
   type?: TypeProject;
+  /** Length and looping of the scene clock (animated materials and motion). */
+  timeline?: Timeline;
 }
 
 let counter = 0;

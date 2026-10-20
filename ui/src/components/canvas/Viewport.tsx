@@ -4,6 +4,8 @@ import { sizeTargets, snapPoint, spacingTargets, type SnapTargets, type SpacingT
 import { duplicateSelected, editPoints, editText, endTextEdit, finishDrawing, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
 import type { Box } from '../../engine/types';
 import { Renderer, sceneItem, type SceneItem } from '../../render/renderer';
+import { clock, timelineOf } from '../../state/clock';
+import { motionReach } from '../../state/motion';
 import { apply, invert, type Pt, type Xform } from '../../state/geometry';
 import { isGroup, type Node, type ShapeLayer } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, toast, useStore } from '../../state/store';
@@ -31,10 +33,32 @@ export function syncScene(r: Renderer) {
   const { objects } = buildScene(s.project);
   const renders = new Map((s.build?.renders ?? []).map((x) => [x.id, x]));
   const items: SceneItem[] = [];
+  const tl = timelineOf(s.project);
+  const loopLength = tl.loop ? tl.duration : undefined;
+  const reachSpan = tl.duration;
+  // Motion turns and scales about each moving node's rest centre.
+  const pivots = new Map<string, [number, number]>();
+  const pivot = (id: string): [number, number] => {
+    let c = pivots.get(id);
+    if (!c) {
+      const n = findNode(s.project.layers, id);
+      const b = n && nodeBox(n);
+      c = b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
+      pivots.set(id, c);
+    }
+    return c;
+  };
   for (const o of objects) {
     const out = renders.get(o.id);
-    if (out) items.push(sceneItem(o.id, out, o.style, o.guide, o.clip ? renders.get(o.clip)?.d : null));
+    if (!out) continue;
+    const item = sceneItem(o.id, out, o.style, o.guide, o.clip ? renders.get(o.clip)?.d : null);
+    if (o.motion) {
+      item.motion = o.motion.map((l) => ({ motion: l.motion, pivot: pivot(l.at), offset: l.offset }));
+      if (item.clipD && out.bbox) item.motionReach = motionReach(item.motion, out.bbox, Array.from({ length: 97 }, (_, i) => (i / 96) * reachSpan), loopLength);
+    }
+    items.push(item);
   }
+  r.timeline = tl;
   r.setScene(items);
   r.setBackground(s.project.background);
 }
@@ -138,7 +162,10 @@ export function Viewport() {
   useEffect(() => {
     const r = rendererRef.current;
     if (r) syncScene(r);
-  }, [build, project.layers, project.background]);
+  }, [build, project.layers, project.background, project.timeline]);
+
+  // Play, pause and scrubbing redraw.
+  useEffect(() => clock.subscribe(() => rendererRef.current?.invalidate()), []);
 
   useEffect(() => {
     const r = rendererRef.current;

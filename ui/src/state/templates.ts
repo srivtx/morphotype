@@ -4,6 +4,7 @@ import { brushById } from './brushes';
 import { LAB_TEMPLATES } from './templatesLab';
 import { STUDIO_TEMPLATES } from './templatesStudio';
 import { GRAPHIC_TEMPLATES } from './templatesGraphic';
+import { MOTION_TEMPLATES } from './templatesMotion';
 import { background, fill, group, MODIFIER_UI, mods, pattern, strokeLayer, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer } from './model';
 
 /**
@@ -821,9 +822,10 @@ const ALL: Template[] = [
 
 /** Newest, most current looks first. */
 const FEATURED = [
+  ...MOTION_TEMPLATES.map((t) => t.name),
   ...GRAPHIC_TEMPLATES.map((t) => t.name),
   ...LAB_TEMPLATES.map((t) => t.name),
   ...STUDIO_TEMPLATES.map((t) => t.name),
   'Printed shapes', 'Night notes', 'Echo rings', 'Sun stamp', 'Ring seal', 'Voxel cursor', 'Dot type', 'Folder sticker', 'Pixel wordmark', 'Pixel poster', 'Dither signal', 'Fused band', 'Pixel garden'];
-const EVERY = [...ALL, ...LAB_TEMPLATES, ...STUDIO_TEMPLATES, ...GRAPHIC_TEMPLATES];
+const EVERY = [...ALL, ...LAB_TEMPLATES, ...STUDIO_TEMPLATES, ...GRAPHIC_TEMPLATES, ...MOTION_TEMPLATES];
 export const TEMPLATES: Template[] = [...FEATURED.map((n) => EVERY.find((t) => t.name === n)!).filter(Boolean), ...EVERY.filter((t) => !FEATURED.includes(t.name))];

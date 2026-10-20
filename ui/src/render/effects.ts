@@ -1380,12 +1380,12 @@ vec4 effect(vec2 uv) {
 };
 
 
-export const PATTERN_KINDS = ['Stripes', 'Dots', 'Grid', 'Checker', 'Sunburst', 'Rings', 'Waves', 'Chevron', 'Truchet', 'Scales', 'Houndstooth', 'Op-art bulge', 'Spiral', 'Crosses', 'Triangles', 'Diamonds', 'Honeycomb', 'Squiggles', 'Crosshatch', 'Gingham'];
+export const PATTERN_KINDS = ['Stripes', 'Dots', 'Grid', 'Checker', 'Sunburst', 'Rings', 'Waves', 'Chevron', 'Truchet', 'Scales', 'Houndstooth', 'Op-art bulge', 'Spiral', 'Crosses', 'Triangles', 'Diamonds', 'Honeycomb', 'Squiggles', 'Crosshatch', 'Gingham', 'Bars', 'Mosaic', 'Barcode', 'Flow lines'];
 
 const patternFx: EffectDef = {
   id: 'pattern',
   name: 'Pattern',
-  description: 'Fills the shape with a crisp repeating pattern drawn on the GPU: stripes, dots, sunbursts, Truchet arcs, houndstooth, op-art and more.',
+  description: 'Fills the shape with a crisp repeating pattern drawn on the GPU: stripes, dots, sunbursts, Truchet arcs, houndstooth, op-art, riding bars, a flickering mosaic, barcode rows, flowing lines and more. Speed sets it moving.',
   params: [
     choice('kind', 'Pattern', PATTERN_KINDS, 0),
     col('ink', 'Ink', '#111111'),
@@ -1402,12 +1402,23 @@ const patternFx: EffectDef = {
     num('phaseX', 'Shift X', -1, 1, 0.001, 0, true),
     num('phaseY', 'Shift Y', -1, 1, 0.001, 0, true),
     num('seed', 'Shuffle', 0, 100, 1, 3, true),
+    num('speed', 'Speed', -4, 4, 0.05, 0),
   ],
+  animated: (p) => n(p, 'speed') !== 0,
   reach: () => 2,
   glsl: /* glsl */ `
 uniform vec3 u_ink, u_paper;
-uniform float u_kind, u_paperAlpha, u_scale, u_weight, u_angle, u_rays, u_amount, u_stagger, u_cx, u_cy, u_phaseX, u_phaseY, u_seed;
+uniform float u_kind, u_paperAlpha, u_scale, u_weight, u_angle, u_rays, u_amount, u_stagger, u_cx, u_cy, u_phaseX, u_phaseY, u_seed, u_speed, u_loopLength;
 const float TAU = 6.2831853;
+/** Cycles run so far (Speed per second); on a looping timeline a whole number per loop, so the end meets the start. */
+float T;
+/** Half the shape's height, in cells (bars grow from its bottom). */
+float HALF_H;
+float cycles() {
+  float r = u_speed;
+  if (u_loopLength > 0.0 && r != 0.0) r = sign(r) * max(1.0, floor(abs(r) * u_loopLength + 0.5)) / u_loopLength;
+  return r * u_time;
+}
 float band(float t, float w) { return abs(fract(t) - 0.5) - w * 0.5; }
 float hexDist(vec2 p) { p = abs(p); return max(dot(p, vec2(0.5, 0.8660254)), p.x); }
 /** Signed distance (in cells; negative = ink) of the pattern at q (cells) and pixel offset px from the centre. */
@@ -1428,10 +1439,10 @@ float pattern(vec2 q, vec2 px) {
   }
   if (k == 4) {
     float r = length(px) / u_scale;
-    float t = (atan(px.y, px.x) / TAU) * u_rays;
+    float t = (atan(px.y, px.x) / TAU) * u_rays + T;
     return band(t, w) * (TAU * max(r, 1e-3) / u_rays);
   }
-  if (k == 5) return band(length(px) / u_scale, w);
+  if (k == 5) return band(length(px) / u_scale - T, w);
   if (k == 6) {
     float y = q.y + u_amount * sin(q.x * TAU);
     float slope = u_amount * TAU * cos(q.x * TAU);
@@ -1476,7 +1487,7 @@ float pattern(vec2 q, vec2 px) {
     float r = length(px) / u_scale;
     float a = atan(px.y, px.x) / TAU;
     // Arms one cell apart: each turn moves out by the number of arms.
-    return band(r - a * max(floor(u_rays), 1.0), w);
+    return band(r - a * max(floor(u_rays), 1.0) - T, w);
   }
   if (k == 13) {
     vec2 a = abs(f);
@@ -1523,6 +1534,40 @@ float pattern(vec2 q, vec2 px) {
     return best;
   }
   if (k == 18) return min(band((q.x + q.y) * 0.7071068, w), band((q.x - q.y) * 0.7071068, w));
+  if (k == 20) {
+    // Riding bars: one line per cell, a segment (Wave = its share of the
+    // height) whose centre rides a wave Rays bars long from edge to edge, so
+    // segments run off the top and bottom; Stagger keeps every other line full.
+    float c = floor(q.x);
+    float across = abs(fract(q.x) - 0.5) - w * 0.5;
+    if (u_stagger > 0.5 && mod(c, 2.0) < 0.5) return across;
+    float seg = clamp(u_amount, 0.05, 1.0) * HALF_H;
+    float mid = HALF_H * sin(TAU * (c / max(u_rays, 1.0) - T));
+    return max(across, abs(q.y - mid) - seg);
+  }
+  if (k == 21) return max(abs(f.x), abs(f.y)) - w * 0.5;
+  if (k == 22) {
+    // Barcode rows: solid ink split into blocks one to a few units wide by thin
+    // gaps; each row slides its own way at a whole-number speed.
+    float row = floor(q.y);
+    float dir = mod(row, 2.0) < 0.5 ? 1.0 : -1.0;
+    float x = (q.x + dir * (1.0 + floor(hash12(vec2(row, u_seed + 3.0)) * 3.0)) * T) * 4.0;
+    float b = floor(x), fx = fract(x);
+    // Mostly single bars, now and then a wider block.
+    bool cutL = hash12(vec2(b, row) + u_seed) > 0.22, cutR = hash12(vec2(b + 1.0, row) + u_seed) > 0.22;
+    float gap = min(cutL ? fx : 9.0, cutR ? 1.0 - fx : 9.0);
+    return max((0.16 - gap) * 0.25, abs(fract(q.y) - 0.5) - w * 0.5);
+  }
+  if (k == 23) {
+    // Flow lines: one line per cell bending in a long wave (Rays cells long),
+    // swelling and pinching row by row, thicker toward the bottom.
+    float swell = 0.55 + 0.45 * sin(q.y * 0.37 + u_seed);
+    float ph = TAU * (q.x / max(u_rays, 1.0) - T) + q.y * 0.18;
+    float y = q.y + u_amount * swell * sin(ph);
+    float slope = u_amount * swell * TAU / max(u_rays, 1.0) * cos(ph);
+    float down = clamp((q.y + HALF_H) / max(2.0 * HALF_H, 1e-3), 0.0, 1.0);
+    return band(y, w * (0.45 + 1.1 * down)) / sqrt(1.0 + slope * slope);
+  }
   // Gingham: crossing bands; the shader mixes half ink where one band runs.
   return min(band(q.x, w), band(q.y, w));
 }
@@ -1535,12 +1580,25 @@ vec4 effect(vec2 uv) {
   float an = radians(u_angle);
   px = mat2(cos(an), sin(an), -sin(an), cos(an)) * px;
   vec2 q = px / u_scale + vec2(u_phaseX, u_phaseY);
-  float d = pattern(q, px);
   int k = int(u_kind + 0.5);
+  T = cycles();
+  HALF_H = (hi.y - lo.y) * 0.5 / u_scale;
+  // Moving patterns slide one cell per cycle along their own grain; radial ones turn or ripple.
+  if (k == 0 || k == 7 || k == 11 || k == 15) q.y -= T;
+  else if (k != 4 && k != 5 && k != 12 && k < 20) q.x -= T;
+  float d = pattern(q, px);
   // Distance in cells → screen pixels for a one-pixel anti-aliased edge.
   float aa = max(length(fwidth(q)), 1e-4) * 0.75;
   float ink = clamp(0.5 - d / aa, 0.0, 1.0);
   if (k == 19) ink = (clamp(0.5 - band(q.x, u_weight) / aa, 0.0, 1.0) + clamp(0.5 - band(q.y, u_weight) / aa, 0.0, 1.0)) * 0.5;
+  if (k == 21) {
+    // Mosaic: four greys, each tile changing at its own moments.
+    vec2 g = floor(q);
+    float h = hash12(g + u_seed * 5.0);
+    float v = hash12(g * 1.37 + floor(T * 4.0 + h * 4.0) * 0.731 + u_seed);
+    // Even the palest tile shows; now and then one is missing.
+    ink *= (0.25 + 0.75 * floor(v * 4.0) / 3.0) * step(0.035, hash12(g + u_seed * 9.0 + 0.5));
+  }
   vec4 paper = vec4(u_paper, 1.0) * u_paperAlpha;
   vec4 c = mix(paper, vec4(u_ink, 1.0), ink);
   return c * cov;

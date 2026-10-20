@@ -22,6 +22,7 @@ export const BUNDLED: { id: string; file: string }[] = [
   { id: 'bungee', file: 'Bungee-Regular.woff' },
   { id: 'dela-gothic', file: 'DelaGothicOne-Regular.woff' },
   { id: 'young-serif', file: 'YoungSerif-Regular.woff' },
+  { id: 'eb-garamond', file: 'EBGaramond-Regular.woff' },
   { id: 'bricolage', file: 'BricolageGrotesque-Variable.woff' },
   { id: 'caveat', file: 'Caveat-Variable.woff' },
   { id: 'caveat-brush', file: 'CaveatBrush-Regular.woff' },

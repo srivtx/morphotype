@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { compareWithReference, fitWithFeedback, referenceLayer, tunables, type CompareResult } from '../app/compare';
 import { addIconGrid, alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
 import { addCentreDot, addFace, variationsOf, type Variant } from '../app/assists';
+import { arrange, DEFAULT_LAYOUT, type Layout, type LayoutKind } from '../app/layout';
 import { run, shortcutOf } from '../app/commands';
 import type { Content, Dash, ModEntry, ModifierKind, Squiggle, SquiggleKind, SymbolKind } from '../engine/types';
 import { backgroundCss, fillCss } from '../render/background';
@@ -15,6 +16,7 @@ import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../s
 import { allLayers, findNode } from '../state/tree';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
+import { MotionSection } from './MotionPanel';
 import { Icon } from './icons';
 import { EffectThumb } from './StylePanel';
 import { ModifierPicker, ShapePicker } from './pickers';
@@ -35,6 +37,8 @@ export function Inspector() {
       <Appearance nodes={nodes} />
       <TransformSection nodes={nodes} />
       {nodes.length === 1 && <NodeEditor node={primary} />}
+      {(nodes.length > 1 || (isGroup(primary) && primary.children.length > 1)) && <LayoutSection />}
+      <MotionSection nodes={nodes} />
       <CompareSection layer={nodes.length === 1 && !isGroup(primary) ? primary : undefined} />
       {nodes.length > 1 && (
         <Section title="Selection" id="multi">
@@ -50,6 +54,39 @@ export function Inspector() {
         </Section>
       )}
     </div>
+  );
+}
+
+/** Row, column, grid or fan for the selection (or a group's children), live. */
+function LayoutSection() {
+  const [L, setL] = useState<Layout>(DEFAULT_LAYOUT);
+  const change = (patch: Partial<Layout>) => {
+    const next = { ...L, ...patch };
+    setL(next);
+    if (!arrange(next)) toast('Select two or more shapes to lay out', 'info');
+  };
+  return (
+    <Section title="Layout" id="layout" defaultOpen={false}>
+      <Segmented<LayoutKind>
+        value={L.kind}
+        onChange={(kind) => change({ kind })}
+        options={[
+          { value: 'row', label: 'Row' },
+          { value: 'column', label: 'Column' },
+          { value: 'grid', label: 'Grid' },
+          { value: 'fan', label: 'Fan', title: 'A hand of cards: turned and spread on an arc' },
+        ]}
+      />
+      <Slider label="Gap" value={L.gap} min={-400} max={400} step={1} reset={DEFAULT_LAYOUT.gap} onChange={(gap) => change({ gap })} />
+      {L.kind === 'grid' && <Slider label="Columns" value={L.cols} min={1} max={12} step={1} reset={3} onChange={(cols) => change({ cols })} />}
+      {L.kind === 'fan' && (
+        <>
+          <Slider label="Spread" value={L.spread} min={0} max={180} step={1} suffix="°" reset={30} onChange={(spread) => change({ spread })} />
+          <Slider label="Curve" value={L.curve} min={0} max={1} step={0.01} reset={0.5} onChange={(curve) => change({ curve })} />
+        </>
+      )}
+      <p className="hint">Changes lay them out again from where they started, so you can try settings freely. Pair Fan with a staggered entrance for a deal of cards.</p>
+    </Section>
   );
 }
 

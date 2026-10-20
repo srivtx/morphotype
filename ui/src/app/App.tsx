@@ -12,6 +12,7 @@ import { Tooltips } from '../components/ui';
 import { BrushBar } from '../components/canvas/BrushBar';
 import { PenOverlay } from '../components/canvas/PenTool';
 import { Viewport } from '../components/canvas/Viewport';
+import { TimelineBar } from '../components/canvas/Timeline';
 import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
 import { buildScene } from '../state/tree';
@@ -238,6 +239,7 @@ function DesignMode() {
       </aside>
       <section className="center">
         <Viewport />
+        <TimelineBar />
         {empty && tool === 'select' && !editing && <EmptyStart />}
         {tool === 'text' && !editing && (
           <div className="edit-pill" role="status">
