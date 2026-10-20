@@ -3848,6 +3848,18 @@ button.home-new:hover,
   color: var(--dim);
   white-space: nowrap;
 }
+.pen-axis {
+  stroke: #ff4fa3;
+  stroke-width: 1;
+  stroke-dasharray: 6 4;
+}
+.pen-mirrored {
+  stroke-dasharray: 2 6;
+}
+.pen-bar .btn.on {
+  background: var(--accent);
+  color: #fff;
+}
 .appearance-adds {
   display: flex;
   flex-wrap: wrap;

@@ -8,6 +8,7 @@ import { PRESETS } from '../render/effects';
 import { CANVAS_PRESETS, isGroup, newModifier, SYMBOL_UI, symbolLayer } from '../state/model';
 import { edit, redo, select, setSettings, store, toast, undo } from '../state/store';
 import { ancestors } from '../state/tree';
+import { addCentreDot, addFace, tileSheet } from './assists';
 import { goHome } from './projects';
 import {
   addEmptyLayer,
@@ -133,6 +134,9 @@ export function commands(): Command[] {
     ...(Object.keys(SYMBOL_UI) as SymbolKind[]).map(
       (k): Command => ({ id: `add-${k}`, title: `Add ${SYMBOL_UI[k].label.toLowerCase()}`, group: 'Add', icon: 'shapes', keywords: `shape symbol ${SYMBOL_UI[k].group}`, run: () => addShape(symbolLayer(k)) }),
     ),
+    { id: 'add-face', title: 'Add a face (eyes and a smile) to the selection', group: 'Add', icon: 'sparkle', keywords: 'eyes smile mascot character cute emoji', when: hasSel, run: () => primaryNode() && addFace(primaryNode()!.id) },
+    { id: 'add-centre-dot', title: 'Add a centre dot to the selection', group: 'Add', icon: 'plus', keywords: 'flower middle center dot boss badge', when: hasSel, run: () => primaryNode() && addCentreDot(primaryNode()!.id) },
+    { id: 'tile-sheet', title: 'Arrange as a sheet of coloured tiles', group: 'Arrange', icon: 'grid', keywords: 'grid tiles sticker sheet layout colour blocks', run: tileSheet },
     // Object
     { id: 'new-layer', title: 'New empty layer', group: 'Arrange', icon: 'plus', keys: ['shift+mod+n'], keywords: 'blank transparent layer folder draw into', when: () => store.get().mode === 'design', run: addEmptyLayer },
     { id: 'group', title: 'Group', group: 'Arrange', icon: 'group', keys: ['mod+g'], when: hasSel, run: () => groupSelected(false) },

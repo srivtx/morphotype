@@ -4,6 +4,7 @@ import type { Renderer } from '../../render/renderer';
 import { apply, invert, nearestOnSegment, parsePath, serializePath, splitSegment, toggleSmooth, type Contour, type Pt, type Xform } from '../../state/geometry';
 import type { ShapeLayer } from '../../state/model';
 import { beginGesture, commitEdit, store } from '../../state/store';
+import { snapPoint, type SnapGuide } from '../../state/snap';
 
 type Key = `${number}:${number}`;
 type Part = 'node' | 'hin' | 'hout';
@@ -28,6 +29,11 @@ export function PointEditor({ layer, toScreen, renderer }: { layer: ShapeLayer; 
         }}
         onChange={(d, key) => updateLayer(layer.id, (l) => (l.content.type === 'path' || l.content.type === 'line') && (l.content.d = d), key)}
         onExit={() => store.set({ editing: null })}
+        // The layer's centre lines, and a Mirror modifier's line, guide points too.
+        axes={{
+          xs: [0, ...layer.modifiers.flatMap((m) => (m.on && m.kind === 'mirror' && m.axis !== 'y' ? [m.offset * c.size] : []))],
+          ys: [0, ...layer.modifiers.flatMap((m) => (m.on && m.kind === 'mirror' && m.axis !== 'x' ? [m.offset * c.size] : []))],
+        }}
         viewKey={`${renderer.view.zoom},${renderer.view.panX},${renderer.view.panY},${t.x},${t.y},${t.rotation},${t.scale},${t.sx},${t.sy}`}
       />
     </g>
@@ -47,6 +53,7 @@ export function PathPointEditor({
   toLocal,
   onChange,
   onExit,
+  axes = { xs: [], ys: [] },
   viewKey,
 }: {
   d: string;
@@ -58,12 +65,15 @@ export function PathPointEditor({
   toLocal: (e: { clientX: number; clientY: number }) => Pt;
   onChange: (d: string, key: string) => void;
   onExit: () => void;
+  /** Lines (in the editor's space) that points snap onto, besides each other. */
+  axes?: { xs: number[]; ys: number[] };
   viewKey: string;
 }) {
   const parse = (d: string) => scaled(parsePath(d), size).map((c) => (lines ? c : { ...c, open: false }));
   const [contours, setContours] = useState<Contour[]>(() => parse(source));
   const [sel, setSel] = useState<Set<Key>>(new Set());
   const dragging = useRef<null | { part: Part; key: Key; start: Pt; base: Contour[]; moved: boolean }>(null);
+  const [guides, setGuides] = useState<SnapGuide[]>([]);
   const svgRef = useRef<SVGGElement>(null);
 
   // Pick up outside changes (undo, inspector edits) when not dragging.
@@ -100,12 +110,28 @@ export function PathPointEditor({
     const d = dragging.current;
     if (!d) return;
     const p = toLocal(e);
-    const dx = p.x - d.start.x;
-    const dy = p.y - d.start.y;
+    let dx = p.x - d.start.x;
+    let dy = p.y - d.start.y;
     if (!d.moved && Math.hypot(dx, dy) * pxPerUnit < 2) return;
     d.moved = true;
     const next = structuredClone(d.base);
     const [ci, ni] = d.key.split(':').map(Number);
+    // Snap what's under the pointer (⌘ skips): a node onto the points that
+    // aren't moving and lines through them; a handle also level with its node.
+    const grabbed = d.base[ci]?.nodes[ni];
+    const held = d.part === 'node' ? grabbed : grabbed?.[d.part];
+    if (held && grabbed && store.get().settings.snap && !e.metaKey && !e.ctrlKey) {
+      const moving = d.part === 'node' ? (sel.has(d.key) ? sel : new Set([d.key])) : new Set<Key>();
+      const points = d.base.flatMap((cc, a) => cc.nodes.filter((_, b) => !moving.has(`${a}:${b}`)).map((n) => ({ x: n.x, y: n.y })));
+      const xs = [...axes.xs, ...(d.part === 'node' ? [] : [grabbed.x])];
+      const ys = [...axes.ys, ...(d.part === 'node' ? [] : [grabbed.y])];
+      // A handle doesn't land on its own node, only level with it.
+      const targets = { xs, ys, points: d.part === 'node' ? points : points.filter((q) => q.x !== grabbed.x || q.y !== grabbed.y) };
+      const res = snapPoint({ x: held.x + dx, y: held.y + dy }, targets, 6 / Math.max(1e-6, pxPerUnit));
+      dx = res.p.x - held.x;
+      dy = res.p.y - held.y;
+      setGuides(res.guides);
+    } else setGuides([]);
     if (d.part === 'node') {
       const keys = sel.has(d.key) ? sel : new Set([d.key]);
       for (const k of keys) {
@@ -140,6 +166,7 @@ export function PathPointEditor({
 
   const end = () => {
     dragging.current = null;
+    setGuides([]);
     commitEdit();
   };
 
@@ -233,6 +260,13 @@ export function PathPointEditor({
 
   return (
     <g ref={svgRef} className="point-editor" onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+      {guides.map((g, i) => {
+        // Long enough to read as a guide at any zoom.
+        const far = 4000 / Math.max(1e-6, pxPerUnit);
+        const a = S(g.axis === 'x' ? { x: g.at, y: -far } : { x: -far, y: g.at });
+        const b = S(g.axis === 'x' ? { x: g.at, y: far } : { x: far, y: g.at });
+        return <line key={i} className="guide" x1={a.x} y1={a.y} x2={b.x} y2={b.y} />;
+      })}
       {paths.map((d, ci) => (
         <path key={ci} className="pe-path" d={d} onDoubleClick={(e) => insertAt(e, ci)} onPointerDown={(e) => (e.stopPropagation(), setSel(new Set()))} />
       ))}

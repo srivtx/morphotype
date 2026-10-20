@@ -196,6 +196,8 @@ export function uid(prefix = 'l'): string {
 export const MODIFIER_DEFAULTS: Record<ModifierKind, Modifier> = {
   weight: { kind: 'weight', amount: 0.03 },
   round: { kind: 'round', radius: 0.03 },
+  mirror: { kind: 'mirror', axis: 'x', flip: 0, offset: 0 },
+  scallop: { kind: 'scallop', count: 12, depth: 1, width: 1, inward: 0 },
   outline: { kind: 'outline', width: 0.04 },
   ink: { kind: 'ink', amount: 0.015, scale: 0.5, seed: 1 },
   slant: { kind: 'slant', angle: 12 },
@@ -282,6 +284,35 @@ export const WARP_STYLES: { value: string; label: string }[] = [
 export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
   weight: { label: 'Weight', blurb: 'Bolder or thinner strokes', group: 'Shape', fields: [{ key: 'amount', label: 'Amount', min: -0.1, max: 0.2, step: 0.001 }] },
   round: { label: 'Round corners', blurb: 'Soft, friendly corners', group: 'Shape', fields: [{ key: 'radius', label: 'Radius', min: 0, max: 0.2, step: 0.001 }] },
+  mirror: {
+    label: 'Mirror',
+    blurb: 'Symmetric halves: draw one side, get both',
+    group: 'Shape',
+    fields: [
+      {
+        key: 'axis',
+        label: 'Halves',
+        options: [
+          { value: 'x', label: 'Left · right' },
+          { value: 'y', label: 'Top · bottom' },
+          { value: 'both', label: 'Both' },
+        ],
+      },
+      { key: 'flip', label: 'Keep the other half', min: 0, max: 1, step: 1, toggle: true },
+      { key: 'offset', label: 'Move the line', min: -1, max: 1, step: 0.001 },
+    ],
+  },
+  scallop: {
+    label: 'Scallops',
+    blurb: 'Round bumps or bites all along the edge',
+    group: 'Shape',
+    fields: [
+      { key: 'count', label: 'Bumps', min: 3, max: 64, step: 1, integer: true },
+      { key: 'depth', label: 'Depth', min: 0, max: 1, step: 0.01 },
+      { key: 'width', label: 'Width', min: 0.5, max: 2, step: 0.01 },
+      { key: 'inward', label: 'Bite in', min: 0, max: 1, step: 1, toggle: true },
+    ],
+  },
   outline: { label: 'Outline', blurb: 'Hollow, inline strokes', group: 'Shape', fields: [{ key: 'width', label: 'Width', min: 0.002, max: 0.2, step: 0.001 }] },
   pixelate: {
     label: 'Pixels',
@@ -473,7 +504,7 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   polygon: { kind: 'polygon', sides: 6, rounding: 0.1 },
   star: { kind: 'star', points: 5, inner: 0.45, rounding: 0.1 },
   sparkle: { kind: 'sparkle', pinch: 0.3 },
-  flower: { kind: 'flower', petals: 4, depth: 0.35 },
+  flower: { kind: 'flower', petals: 4, depth: 0.35, petal: 'wave', hole: 0 },
   burst: { kind: 'burst', rays: 12, ring: 0.12, ray_width: 0.1, inner: 0.26 },
   heart: { kind: 'heart' },
   moon: { kind: 'moon', phase: 0.4 },
@@ -570,8 +601,20 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
     label: 'Flower',
     group: 'Badge',
     fields: [
+      {
+        key: 'petal',
+        label: 'Petal',
+        options: [
+          { value: 'wave', label: 'Wavy' },
+          { value: 'round', label: 'Round' },
+          { value: 'pill', label: 'Pill' },
+          { value: 'oval', label: 'Oval' },
+          { value: 'pointed', label: 'Pointed' },
+        ],
+      },
       { key: 'petals', label: 'Petals', min: 2, max: 16, step: 1, integer: true },
-      { key: 'depth', label: 'Depth', min: 0, max: 0.8, step: 0.005 },
+      { key: 'depth', label: 'Gaps', min: 0, max: 0.8, step: 0.005 },
+      { key: 'hole', label: 'Centre hole', min: 0, max: 0.8, step: 0.005 },
     ],
   },
   burst: {
