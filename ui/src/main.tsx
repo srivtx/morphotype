@@ -5,6 +5,7 @@ import { compareWithReference, fitToReference, tunables } from './app/compare';
 import { App } from './app/App';
 import { engine } from './engine/client';
 import { store } from './state/store';
+import { clock } from './state/clock';
 import { TEMPLATES } from './state/templates';
 import './styles.css';
 
@@ -13,6 +14,7 @@ import './styles.css';
   store,
   engine,
   templates: TEMPLATES,
+  clock,
   tools: { placeReference, compareWithReference, fitToReference, tunables },
   get renderer() {
     return getRenderer();

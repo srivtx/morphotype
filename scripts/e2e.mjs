@@ -114,6 +114,10 @@ try {
   };
 
   // ---- every template renders ----
+  await page.evaluate(() => {
+    window.morphotype.clock.pause({ duration: 6, loop: true });
+    window.morphotype.clock.seek(5);
+  });
   await page.keyboard.press(`${mod}+n`);
   const names = (await page.locator('.template strong').allTextContents()).filter((n) => n !== 'Blank canvas');
   await page.keyboard.press('Escape');
@@ -131,6 +135,11 @@ try {
       p2.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
       await p2.goto(`http://127.0.0.1:${port}/?editor`);
       await p2.waitForFunction(() => window.morphotype?.renderer, null, { timeout: 30_000 });
+      // Hold motion still, after every entrance, so screenshots are stable and software GL isn't redrawing every frame.
+      await p2.evaluate(() => {
+        window.morphotype.clock.pause({ duration: 6, loop: true });
+        window.morphotype.clock.seek(5);
+      });
       for (let i = lane; i < names.length; i += lanes) {
         const name = names[i];
         const result = await p2.evaluate(async (name) => {

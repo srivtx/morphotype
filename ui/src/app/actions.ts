@@ -10,6 +10,7 @@ import type { Renderer } from '../render/renderer';
 import { parsePath, serializePath, type Node as GNode } from '../state/geometry';
 import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
+import { timelineOf } from '../state/clock';
 import { group, isGroup, lineLayer, newModifier, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
 import { iconGridLayers } from '../state/icon';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
@@ -1127,6 +1128,67 @@ export async function exportPNG(scale = store.get().settings.pngScale, transpare
     if (await platform().save(`${slug(p.name)}@${scale}x.png`, bytes, { name: 'PNG image', extensions: ['png'] })) toast('PNG exported');
   } catch (e) {
     toast(`PNG export failed: ${errorText(e)}`, 'error');
+  }
+}
+
+/** First recording format this browser can write: MP4 where supported (Safari, the Mac app), else WebM. */
+export function videoFormat(): { mime: string; ext: 'mp4' | 'webm' } | null {
+  if (typeof MediaRecorder === 'undefined') return null;
+  for (const mime of ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) if (MediaRecorder.isTypeSupported(mime)) return { mime, ext: mime.startsWith('video/mp4') ? 'mp4' : 'webm' };
+  return null;
+}
+
+let recording = false;
+
+/**
+ * One pass of the timeline as a video. Fields are built once at export size
+ * and each frame is drawn at its own time on the clock, so the motion is
+ * exact; frames are handed to the recorder in real time (a 6 s timeline takes
+ * about 6 s).
+ */
+export async function exportVideo(fps = 30, scale = 1) {
+  const fmt = videoFormat();
+  if (!fmt) return toast('This browser can’t record video. Try the Mac app, Chrome or Safari.', 'error');
+  if (recording) return;
+  recording = true;
+  let frames: ReturnType<Renderer['exportFrames']> | null = null;
+  try {
+    const r = await freshRender();
+    const p = store.get().project;
+    const tl = timelineOf(p);
+    frames = r.exportFrames(scale, false);
+    // Encoders want even sizes.
+    const c = document.createElement('canvas');
+    c.width = frames.width - (frames.width % 2);
+    c.height = frames.height - (frames.height % 2);
+    const ctx = c.getContext('2d');
+    if (!ctx) throw new Error('2D canvas unavailable');
+    const stream = c.captureStream(0);
+    const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+    const rec = new MediaRecorder(stream, { mimeType: fmt.mime, videoBitsPerSecond: Math.round(c.width * c.height * fps * 0.25) });
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    const stopped = new Promise((res) => (rec.onstop = res));
+    const n = Math.max(1, Math.round(tl.duration * fps));
+    toast(`Recording ${tl.duration.toFixed(1)} s of video…`, 'info');
+    rec.start();
+    const t0 = performance.now();
+    for (let i = 0; i <= n; i++) {
+      const img = frames.frame(Math.min(i / fps, tl.duration));
+      ctx.putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
+      track.requestFrame?.();
+      const wait = t0 + ((i + 1) * 1000) / fps - performance.now();
+      if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+    }
+    rec.stop();
+    await stopped;
+    const bytes = new Uint8Array(await new Blob(chunks, { type: fmt.mime }).arrayBuffer());
+    if (await platform().save(`${slug(p.name)}.${fmt.ext}`, bytes, { name: fmt.ext === 'mp4' ? 'MP4 video' : 'WebM video', extensions: [fmt.ext] })) toast(`${fmt.ext.toUpperCase()} exported`);
+  } catch (e) {
+    toast(`Video export failed: ${errorText(e)}`, 'error');
+  } finally {
+    frames?.close();
+    recording = false;
   }
 }
 

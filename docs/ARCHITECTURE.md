@@ -100,6 +100,15 @@ Every effect shader is wrapped with the same epilogue: an optional stroke from t
 
 Effects are data: a GLSL body plus a parameter schema (`effects.ts`). The UI generates its controls from the schema, and a unit test checks that every parameter is consumed by either the shader or the height pass.
 
+### Motion
+
+Motion never touches geometry. One scene clock (`state/clock.ts`) gives every frame its time: playing, paused at a scrub position, or pinned by an export. The timeline's length and looping are saved with the project; on a looping timeline every loop period and pattern speed is rounded to a whole number of cycles, so the end meets the start.
+
+- **Layer motion** (`state/motion.ts`): a node's `motion` is a loop (float, slide, sway, spin, pulse, blink, wiggle, orbit…) plus an entrance (fade, rise, drop, slide in, grow, spin in) with a transition: a cubic Bézier, a time spring (duration + bounce, Motion's mapping) or a physics spring (stiffness, damping, mass), solved in closed form. `buildScene` hands each object the motions above it, innermost first; a group with Stagger hands its motion to each child, offset in time and turning about the child's own centre. At draw time the renderer composes the poses about their rest centres into one affine map and moves the object's quad in the vertex shader (`MOVED_RECT_VS`), so the field, height map and material are untouched. The fragment also gets where it would sit at rest, so a clip frame stays put while what's inside it moves; a clipped object's field is grown by how far its motion carries it (sampled over the timeline). The canvas scissors objects to the artboard, as exports are.
+- **Animated settings**: a style's `animate` maps a material param to a second value, a cycle and a mode (swing, ramp, flicker). The renderer blends the uniform each frame (colours in RGB), so any material can pulse, shift or flicker without new shader code.
+- **Moving patterns**: the Pattern material's Speed slides patterns along their grain, turns sunbursts and spirals, ripples rings, and drives the kinds made to move (riding bars, mosaic, barcode rows, flow lines).
+- **Video** (`exportVideo`): fields are built once at export size, then each frame is drawn at its own time and handed to a `MediaRecorder` on a 2D canvas, paced in real time. Stills (PNG, JPG, SVG, thumbnails) show the design at rest.
+
 ## UI (`ui/src`)
 
 - A small external store (`useSyncExternalStore`) holds the project. Undo history stores immutable snapshots. Edits that share a key merge into one undo step: within a pointer gesture always, otherwise within 700 ms, so one drag or slider move is one step.

@@ -18,11 +18,13 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 - **Draw.** Press B for marker, pencil or highlighter strokes, with pen pressure and tapered ends. Drawings stay editable vector layers.
 - **Photos.** Drop in a picture and place it inside any shape or text (zoom, pan, duotone, grain), trace it into an outline, or turn it into pixel art with a few inks and optional dithering.
 - **Direct editing.** Click to select, drag to move, and use the handles to resize, stretch or rotate (⇧ keeps proportions, as in Figma). Smart guides snap to the artboard and other layers, to equal spacing between neighbours, and while resizing to other layers' edges and sizes; ⌘ skips snapping. ⌘D after moving a copy repeats the step, for rows of circles or stacks of pills. Hold ⌥ to measure distances, and drags show live readouts. Also marquee selection, multi-select, align and distribute, flip, lock, hide, groups and right-click menus.
-- **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed (with rubber-stamp grain), Letterpress, Halftone (with 3D light and misregistration), Risograph, Dither, Photo, Thermal, Prism light, Colour dots, Plush, Pattern (twenty GPU patterns, from sunbursts and Truchet arcs to houndstooth and op-art), Ribbon (colour that flows along a line) and Flat with linear or radial gradients, print texture and hard shadows. **Frosted glass** and **Lens glass** see what's behind them: they blur, bend, magnify and split it into colour. There are over 70 presets with GPU-rendered previews, and the Design tab recolours any material from a single colour. Every layer can also have a stroke (outside, centre or inside), solid 3D **depth**, opacity and a Multiply or Screen blend.
+- **A material per layer.** Liquid chrome, Glow glass, Puffy, Sticker, Aura gradient, Holographic, Retro 3D, Neon, Glossy glyph, Distressed (with rubber-stamp grain), Letterpress, Halftone (with 3D light and misregistration), Risograph, Dither, Photo, Thermal, Prism light, Colour dots, Plush, Pattern (twenty-four GPU patterns, from sunbursts and Truchet arcs to houndstooth, op-art, riding bars, a flickering mosaic, barcode rows and flowing lines), Ribbon (colour that flows along a line) and Flat with linear or radial gradients, print texture and hard shadows. **Frosted glass** and **Lens glass** see what's behind them: they blur, bend, magnify and split it into colour. There are over 70 presets with GPU-rendered previews, and the Design tab recolours any material from a single colour. Every layer can also have a stroke (outside, centre or inside), solid 3D **depth**, opacity and a Multiply or Screen blend.
 - **Shapes that work like a logo tool.** Cut and Mask clip into the layer directly below, Merge fuses layers into one outline with one material, and Break apart splits text or traced images into one layer per letter.
 - **Reshape anything.** Quick looks (Bitmap, Sun rays, Blob dots, Echo stack, Fused band, All the way round…) apply a whole modifier stack in one click. Warp gives Photoshop-style envelope presets plus 16 draggable points. Edit points gives real bezier editing. The modifiers are Weight, Round, Mirror (left/right, top/bottom or both), Scallops (round bumps or bites all along any edge), Outline, Pixels (blocks, dots, soft tiles, crosses, pluses, diamonds, dissolve), Slice, Fuse, Foam, Repeat (around, grid, trail), Echo lines, Slant, Stretch, Warp, Fit in circle, Isometric, Arc (up to a full circle), Wave, Perspective, Wobble, Melt and Ink bleed.
 - **Construction sheets.** Draw construction turns a logo into a presentation drawing: tinted outline, anchor markers and guides at its edges and the font's metric lines.
 - **Shapes.** Circles to squircles, stars, sparkles, bursts, wavy and scalloped badges, flowers (wavy, round, pill, oval or pointed petals, with a centre hole), globes, asterisks, lenses, clouds, folders, quarter and half circles, mascot bodies, eyes and smiles, all parametric. Smiles and spirals end round, flat or square.
+- **Motion.** Any layer or group can move on one scene clock. **Loops** float, bounce, slide, sway, spin, pulse, blink, wiggle or orbit; **entrances** fade, rise, drop, slide in, grow or spin in after a delay. Transitions are an easing curve, a spring set by time (duration and bounce) or a physics spring (stiffness, damping, mass), edited on a live curve, after [DialKit](https://www.dialkit.dev/). A group's **Stagger** moves each child in turn (a wave across rows of bars, a deal of cards), and **Ripple** or **Shuffle** puts any selection out of step. Every number and colour of a material has a keyframe button to **swing**, **ramp** or **flicker** it between two values. Pattern fills move with **Speed**. Motion is applied when drawing, so nothing rebuilds, and clip frames stay still while their contents move. The **timeline** above the dock plays, pauses (K), scrubs, sets the length and looping (loops are fitted so the end meets the start), and **exports video** (MP4 where the browser can, otherwise WebM).
+- **Layout.** Lay a selection, or a group's children, out as a row, a column, a grid or a fanned hand of cards, live from sliders.
 - **Smart assists.** Variations shows eight new takes on a shape to pick from; Centre dot and Face add a contrasting dot or eyes and a smile sized to the shape; Arrange as tiles lays shapes out on a sheet of coloured tiles, keeping faces and dots with their shape.
 - **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, patterns (grid paper, dot grid, lines, stripes, checks, doodles), and an app-icon tile with gloss, shadow and a holographic rim, set up for macOS (rounded tile in the artwork) or iOS and Android (full square, with a preview of the system mask), plus an app-icon grid as an overlay or as layers. The background is the bottom row in Layers and a chip in the dock. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons, business cards, ID badges and more.
 - **Fonts.** TTF, OTF, TTC and WOFF, shaped with a HarfBuzz port, with variable axes. Text can morph into another font glyph by glyph.
@@ -95,6 +97,17 @@ npm install
 
 CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-macOS* artifact). The first build of a new version (the `version` in `package.json`) on `main` also publishes a GitHub Release with the `.dmg` and the web build attached.
 
+### Moving cards from basic shapes
+
+The **Moving cards** and **Course cards** templates are built only from the tools below; open one and take it apart, or start blank:
+
+1. **Card.** Add a Rounded rect, set its size and corner, and give it a flat colour. Titles are text in EB Garamond, aligned left.
+2. **Lines that ride a wave.** Draw one vertical line with the pen, then ⌘D and move it, and ⌘D again to repeat the step into a row (or use Layout → Row). Group the lines, then group that with a rect underneath and turn on **Clip to the bottom layer**, so they're cut at the panel. In Motion, give the group of lines a **Float** loop and some **Stagger**: each line rises and falls a little after its neighbour. (The Pattern material's **Bars** with Speed draws the same thing in one layer.)
+3. **Flickering mosaic.** Make one small square, ⌘D it into a row, select the row, ⌘D it into rows (or Layout → Grid). Select every tile, press the keyframe button next to the Fill colour, pick a darker To and **Flicker**, then **Shuffle** in Motion so each tile flickers on its own. (Or Pattern → **Mosaic**.)
+4. **Wireframe carousel.** Rounded rects with the **Outline** modifier make the frames. Put a row of small outlined cards in a group over a rect set to 0% opacity, clip it to that rect, and give the row a **Slide** loop.
+5. **The deck.** Group the cards and use Layout → **Fan**, or turn each a few degrees by hand. Give the group a **Rise** entrance with a bouncy **Time** spring and a Stagger of about 0.1 s: the cards are dealt in one after another.
+6. Press K to play, scrub the timeline, and export a video from its film button.
+
 ### Shortcuts
 
 | | |
@@ -115,6 +128,7 @@ CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-
 | ⌘0, ⇧0, ⇧2 | Fit, 100%, zoom to selection |
 | ⌘' / ⇧⌘' | Show grid / snap to grid |
 | Arrows (⇧ for 10 px), Tab | Nudge, cycle layers |
+| K / ⇧K | Play or pause motion / play from the start |
 | ? / ⌘, | Help and all shortcuts / settings |
 
 Drag fonts, images or `.morpho` files onto the window to open them.
@@ -134,7 +148,7 @@ scripts              WASM build and end-to-end test
 
 ## Fonts and licences
 
-The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk, Playfair Display, Rubik Mono One, Pacifico, Silkscreen, Unbounded, Bungee, Dela Gothic One, Young Serif, Bricolage Grotesque, Caveat, Caveat Brush) are under the SIL Open Font License; see `ui/public/fonts/OFL.txt`. A font you make from an OFL font is a derivative: give it a new family name and keep it under the OFL.
+The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk, Playfair Display, Rubik Mono One, Pacifico, Silkscreen, Unbounded, Bungee, Dela Gothic One, Young Serif, EB Garamond, Bricolage Grotesque, Caveat, Caveat Brush) are under the SIL Open Font License; see `ui/public/fonts/OFL.txt`. A font you make from an OFL font is a derivative: give it a new family name and keep it under the OFL.
 
 ## Known limitations
 

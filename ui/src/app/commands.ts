@@ -8,6 +8,7 @@ import { PRESETS } from '../render/effects';
 import { CANVAS_PRESETS, isGroup, newModifier, SYMBOL_UI, symbolLayer } from '../state/model';
 import { edit, redo, select, setSettings, store, toast, undo } from '../state/store';
 import { ancestors } from '../state/tree';
+import { clock, timelineOf } from '../state/clock';
 import { addCentreDot, addFace, tileSheet } from './assists';
 import { goHome } from './projects';
 import {
@@ -29,6 +30,7 @@ import {
   editText,
   endTextEdit,
   exportJPG,
+  exportVideo,
   exportPNG,
   exportSVG,
   flipSelected,
@@ -90,6 +92,9 @@ export function commands(): Command[] {
     { id: 'export-jpg', title: 'Export JPG (for social posts)', group: 'Export', icon: 'export', keywords: 'instagram thumbnail jpeg', run: () => void exportJPG() },
     { id: 'export-svg', title: 'Export SVG', group: 'Export', icon: 'export', keys: ['shift+mod+e'], keywords: 'vector logo', run: () => void exportSVG() },
     { id: 'copy-png', title: 'Copy as image', group: 'Export', icon: 'copy', keys: ['shift+mod+c'], keywords: 'clipboard png', run: () => void copyPNG() },
+    { id: 'export-video', title: 'Export video (one pass of the timeline)', group: 'Export', icon: 'film', keywords: 'mp4 webm animation motion movie record', run: () => void exportVideo() },
+    { id: 'play-pause', title: 'Play or pause motion', group: 'View', icon: 'play', keys: ['k'], keywords: 'animation timeline motion stop', when: design, run: () => clock.toggle(timelineOf(store.get().project)) },
+    { id: 'replay', title: 'Play motion from the start', group: 'View', icon: 'replay', keys: ['shift+k'], keywords: 'animation timeline restart entrance', when: design, run: () => clock.replay(timelineOf(store.get().project)) },
     { id: 'export-font', title: 'Export as font…', group: 'Export', icon: 'font', keywords: 'ttf woff install', run: () => store.set({ dialog: { kind: 'font' } }) },
     // Edit
     { id: 'undo', title: 'Undo', group: 'Edit', icon: 'undo', keys: ['mod+z'], run: undo },

@@ -19,6 +19,23 @@ void main() {
   gl_Position = vec4(mix(u_rect.xy, u_rect.zw, a), 0.0, 1.0);
 }`;
 
+// The same quad moved by an object's motion: u_xf (a 2×2, columns) and u_xfT map clip space to clip space.
+export const MOVED_RECT_VS = /* glsl */ `#version 300 es
+uniform vec4 u_rect, u_xf;
+uniform vec2 u_xfT;
+out vec2 v_uv;
+/** Where the moved pixel falls in the resting quad: clipping frames stay put while their contents move. */
+out vec2 v_clipUv;
+const vec2 C[6] = vec2[6](vec2(0, 0), vec2(1, 0), vec2(1, 1), vec2(0, 0), vec2(1, 1), vec2(0, 1));
+void main() {
+  vec2 a = C[gl_VertexID];
+  v_uv = vec2(a.x, 1.0 - a.y);
+  vec2 p = mat2(u_xf.xy, u_xf.zw) * mix(u_rect.xy, u_rect.zw, a) + u_xfT;
+  vec2 r = (p - u_rect.xy) / (u_rect.zw - u_rect.xy);
+  v_clipUv = vec2(r.x, 1.0 - r.y);
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
 // Seeds: pixels straddling the outline, with a sub-pixel estimate of where the
 // 50% coverage edge lies (from the anti-aliased mask and its gradient).
 export const SEED_FS = /* glsl */ `#version 300 es
