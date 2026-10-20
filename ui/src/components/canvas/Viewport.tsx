@@ -4,6 +4,7 @@ import { sizeTargets, snapPoint, spacingTargets, type SnapTargets, type SpacingT
 import { duplicateSelected, editPoints, editText, endTextEdit, finishDrawing, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
 import type { Box } from '../../engine/types';
 import { Renderer, sceneItem, type SceneItem } from '../../render/renderer';
+import { liveOutlines, onLiveOutlines } from '../../app/geoMotion';
 import { clock, timelineOf } from '../../state/clock';
 import { motionReach } from '../../state/motion';
 import { apply, invert, type Pt, type Xform } from '../../state/geometry';
@@ -32,6 +33,9 @@ export function syncScene(r: Renderer) {
   const s = store.get();
   const { objects } = buildScene(s.project);
   const renders = new Map((s.build?.renders ?? []).map((x) => [x.id, x]));
+  // Layers with moving geometry: their outlines at the clock's time.
+  const live = liveOutlines();
+  for (const [id, out] of live ?? []) renders.set(id, out);
   const items: SceneItem[] = [];
   const tl = timelineOf(s.project);
   const loopLength = tl.loop ? tl.duration : undefined;
@@ -52,6 +56,7 @@ export function syncScene(r: Renderer) {
     const out = renders.get(o.id);
     if (!out) continue;
     const item = sceneItem(o.id, out, o.style, o.guide, o.clip ? renders.get(o.clip)?.d : null);
+    if (live?.has(o.id)) item.live = true;
     if (o.motion) {
       item.motion = o.motion.map((l) => ({ motion: l.motion, pivot: pivot(l.at), offset: l.offset }));
       if (item.clipD && out.bbox) item.motionReach = motionReach(item.motion, out.bbox, Array.from({ length: 97 }, (_, i) => (i / 96) * reachSpan), loopLength);
@@ -166,6 +171,16 @@ export function Viewport() {
 
   // Play, pause and scrubbing redraw.
   useEffect(() => clock.subscribe(() => rendererRef.current?.invalidate()), []);
+
+  // Moving geometry: new outlines many times a second.
+  useEffect(
+    () =>
+      onLiveOutlines(() => {
+        const r = rendererRef.current;
+        if (r) syncScene(r);
+      }),
+    [],
+  );
 
   useEffect(() => {
     const r = rendererRef.current;

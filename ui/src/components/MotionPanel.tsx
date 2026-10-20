@@ -173,7 +173,7 @@ export function TransitionEditor({ value, onChange }: { value: Transition; onCha
 
 /**
  * Put the selection out of step: each layer's motion and animated material
- * settings start a little after the one before (in order, a ripple), or at
+ * and shape settings start a little after the one before (in order, a ripple), or at
  * random (shuffle: a flicker across a grid of tiles).
  */
 export function staggerSelection(order: 'ripple' | 'shuffle' = 'ripple', step = 0.08) {
@@ -189,13 +189,13 @@ export function staggerSelection(order: 'ripple' | 'shuffle' = 'ripple', step = 
         n.motion.phase = r2(f);
       }
       const targets = isGroup(n) && !n.merge ? allLayers(n.children) : [n];
-      for (const t of targets) for (const a of Object.values(t.style.animate ?? {})) a.phase = r2(f);
+      for (const t of targets) for (const a of [...Object.values(t.style.animate ?? {}), ...Object.values(t.animate ?? {})]) a.phase = r2(f);
     });
   });
 }
 
 /** Any selected layer (or one inside a selected group) that moves or has animated settings. */
-const anyMoving = (nodes: Node[]) => nodes.some((n) => !isStill(n.motion) || (isGroup(n) ? allLayers(n.children) : [n]).some((l) => Object.keys(l.style.animate ?? {}).length > 0));
+const anyMoving = (nodes: Node[]) => nodes.some((n) => !isStill(n.motion) || Object.keys(n.animate ?? {}).length > 0 || (isGroup(n) ? allLayers(n.children) : [n]).some((l) => Object.keys(l.style.animate ?? {}).length > 0 || Object.keys(l.animate ?? {}).length > 0));
 
 /** Loop and entrance for the selection (shown for the last one picked). */
 export function MotionSection({ nodes }: { nodes: Node[] }) {

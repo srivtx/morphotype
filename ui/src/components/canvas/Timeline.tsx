@@ -9,9 +9,9 @@ import { isGroup, type Node, type Project } from '../../state/model';
 import { edit, useStore } from '../../state/store';
 import { Icon } from '../icons';
 
-/** Anything on the clock: motion on a node, or a moving material. */
+/** Anything on the clock: motion on a node, a moving material or moving geometry. */
 export function sceneMoves(p: Project): boolean {
-  const any = (ns: Node[]): boolean => ns.some((n) => !isStill(n.motion) || Object.keys(n.style.animate ?? {}).length > 0 || !!effectById(n.style.effect).animated?.(n.style.params) || (isGroup(n) && any(n.children)));
+  const any = (ns: Node[]): boolean => ns.some((n) => !isStill(n.motion) || Object.keys(n.style.animate ?? {}).length > 0 || Object.keys(n.animate ?? {}).length > 0 || !!effectById(n.style.effect).animated?.(n.style.params) || (isGroup(n) && any(n.children)));
   return any(p.layers);
 }
 

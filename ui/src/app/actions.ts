@@ -11,6 +11,8 @@ import { parsePath, serializePath, type Node as GNode } from '../state/geometry'
 import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
 import { timelineOf } from '../state/clock';
+import { anyGeoAnim } from '../state/geoMotion';
+import { geometryFrames, holdLiveGeometry } from './geoMotion';
 import { group, isGroup, lineLayer, newModifier, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
 import { iconGridLayers } from '../state/icon';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
@@ -1123,7 +1125,7 @@ async function freshRender() {
 export async function exportPNG(scale = store.get().settings.pngScale, transparent = store.get().settings.exportTransparent) {
   try {
     const r = await freshRender();
-    const bytes = await r.exportPNG(scale, transparent);
+    const bytes = await holdLiveGeometry(() => r.exportPNG(scale, transparent));
     const p = store.get().project;
     if (await platform().save(`${slug(p.name)}@${scale}x.png`, bytes, { name: 'PNG image', extensions: ['png'] })) toast('PNG exported');
   } catch (e) {
@@ -1144,50 +1146,60 @@ let recording = false;
  * One pass of the timeline as a video. Fields are built once at export size
  * and each frame is drawn at its own time on the clock, so the motion is
  * exact; frames are handed to the recorder in real time (a 6 s timeline takes
- * about 6 s).
+ * about 6 s). Moving geometry is built for every frame first, so recording
+ * only swaps outlines and rebuilds those layers' fields.
  */
 export async function exportVideo(fps = 30, scale = 1) {
   const fmt = videoFormat();
   if (!fmt) return toast('This browser can’t record video. Try the Mac app, Chrome or Safari.', 'error');
   if (recording) return;
   recording = true;
-  let frames: ReturnType<Renderer['exportFrames']> | null = null;
   try {
     const r = await freshRender();
     const p = store.get().project;
     const tl = timelineOf(p);
-    frames = r.exportFrames(scale, false);
-    // Encoders want even sizes.
-    const c = document.createElement('canvas');
-    c.width = frames.width - (frames.width % 2);
-    c.height = frames.height - (frames.height % 2);
-    const ctx = c.getContext('2d');
-    if (!ctx) throw new Error('2D canvas unavailable');
-    const stream = c.captureStream(0);
-    const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
-    const rec = new MediaRecorder(stream, { mimeType: fmt.mime, videoBitsPerSecond: Math.round(c.width * c.height * fps * 0.25) });
-    const chunks: Blob[] = [];
-    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    const stopped = new Promise((res) => (rec.onstop = res));
     const n = Math.max(1, Math.round(tl.duration * fps));
-    toast(`Recording ${tl.duration.toFixed(1)} s of video…`, 'info');
-    rec.start();
-    const t0 = performance.now();
-    for (let i = 0; i <= n; i++) {
-      const img = frames.frame(Math.min(i / fps, tl.duration));
-      ctx.putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
-      track.requestFrame?.();
-      const wait = t0 + ((i + 1) * 1000) / fps - performance.now();
-      if (wait > 0) await new Promise((res) => setTimeout(res, wait));
-    }
-    rec.stop();
-    await stopped;
-    const bytes = new Uint8Array(await new Blob(chunks, { type: fmt.mime }).arrayBuffer());
-    if (await platform().save(`${slug(p.name)}.${fmt.ext}`, bytes, { name: fmt.ext === 'mp4' ? 'MP4 video' : 'WebM video', extensions: [fmt.ext] })) toast(`${fmt.ext.toUpperCase()} exported`);
+    const times = Array.from({ length: n + 1 }, (_, i) => Math.min(i / fps, tl.duration));
+    if (anyGeoAnim(p.layers)) toast('Building moving shapes for each frame…', 'info');
+    const geometry = await geometryFrames(p, times, EXPORT_QUALITY);
+    await holdLiveGeometry(async (show) => {
+      let frames: ReturnType<Renderer['exportFrames']> | null = null;
+      try {
+        frames = r.exportFrames(scale, false);
+        // Encoders want even sizes.
+        const c = document.createElement('canvas');
+        c.width = frames.width - (frames.width % 2);
+        c.height = frames.height - (frames.height % 2);
+        const ctx = c.getContext('2d');
+        if (!ctx) throw new Error('2D canvas unavailable');
+        const stream = c.captureStream(0);
+        const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+        const rec = new MediaRecorder(stream, { mimeType: fmt.mime, videoBitsPerSecond: Math.round(c.width * c.height * fps * 0.25) });
+        const chunks: Blob[] = [];
+        rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+        const stopped = new Promise((res) => (rec.onstop = res));
+        toast(`Recording ${tl.duration.toFixed(1)} s of video…`, 'info');
+        rec.start();
+        const t0 = performance.now();
+        for (const [i, t] of times.entries()) {
+          if (geometry) show(geometry[i]);
+          const img = frames.frame(t);
+          ctx.putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
+          track.requestFrame?.();
+          const wait = t0 + ((i + 1) * 1000) / fps - performance.now();
+          if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+        }
+        rec.stop();
+        await stopped;
+        const bytes = new Uint8Array(await new Blob(chunks, { type: fmt.mime }).arrayBuffer());
+        if (await platform().save(`${slug(p.name)}.${fmt.ext}`, bytes, { name: fmt.ext === 'mp4' ? 'MP4 video' : 'WebM video', extensions: [fmt.ext] })) toast(`${fmt.ext.toUpperCase()} exported`);
+      } finally {
+        frames?.close();
+      }
+    });
   } catch (e) {
     toast(`Video export failed: ${errorText(e)}`, 'error');
   } finally {
-    frames?.close();
     recording = false;
   }
 }
@@ -1195,7 +1207,7 @@ export async function exportVideo(fps = 30, scale = 1) {
 export async function exportJPG(scale = 2) {
   try {
     const r = await freshRender();
-    const blob = await r.toBlob(scale, false, 'image/jpeg');
+    const blob = await holdLiveGeometry(() => r.toBlob(scale, false, 'image/jpeg'));
     const p = store.get().project;
     if (await platform().save(`${slug(p.name)}@${scale}x.jpg`, new Uint8Array(await blob.arrayBuffer()), { name: 'JPEG image', extensions: ['jpg'] })) toast('JPG exported');
   } catch (e) {
@@ -1206,7 +1218,7 @@ export async function exportJPG(scale = 2) {
 export async function copyPNG() {
   try {
     const r = await freshRender();
-    const blob = await r.toBlob(2, store.get().settings.exportTransparent);
+    const blob = await holdLiveGeometry(() => r.toBlob(2, store.get().settings.exportTransparent));
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
     toast('Copied image to the clipboard');
   } catch (e) {
