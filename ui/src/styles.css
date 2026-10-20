@@ -3864,3 +3864,22 @@ button.home-new:hover,
 /* Page choice for new designs (Home and the empty-artboard start panel). */
 .home-page { display: inline-flex; align-items: center; margin-right: 4px; }
 .empty-start-page { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; }
+
+/* Compare with reference */
+.compare-score {
+  margin: 8px 0 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.compare-score strong {
+  font-size: 15px;
+  color: var(--text);
+  margin-right: 2px;
+}
+.compare-heat {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+  background: #000;
+  margin-bottom: 8px;
+}

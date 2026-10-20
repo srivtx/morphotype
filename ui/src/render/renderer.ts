@@ -135,6 +135,8 @@ export class Renderer {
   private art = { w: 1200, h: 1200 };
   private bg: Background | null = null;
   private resolution = 1024;
+  /** Field density for exports, in texels per output px (1 = quick drafts). */
+  exportSupersample = 2;
   private start = performance.now();
   private raf = 0;
   view: View = { zoom: 0.5, panX: 0, panY: 0 };
@@ -661,7 +663,7 @@ export class Renderer {
     try {
       // Fields at up to 2 texels per artboard px: at 1:1 thin bars and hairlines
       // pick up half-pixel steps from the distance transform.
-      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false }, Math.max(k, Math.min(2 * k, 2)));
+      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false }, Math.max(k, Math.min(this.exportSupersample * k, this.exportSupersample)));
       gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
       gl.viewport(0, 0, W, Hh);
       gl.clearColor(0, 0, 0, 0);

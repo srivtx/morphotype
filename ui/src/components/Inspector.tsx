@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { compareWithReference, fitWithFeedback, referenceLayer, tunables, type CompareResult } from '../app/compare';
 import { addIconGrid, alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
 import { run, shortcutOf } from '../app/commands';
 import type { Content, Dash, ModEntry, ModifierKind, Squiggle, SquiggleKind, SymbolKind } from '../engine/types';
@@ -33,6 +34,7 @@ export function Inspector() {
       <Appearance nodes={nodes} />
       <TransformSection nodes={nodes} />
       {nodes.length === 1 && <NodeEditor node={primary} />}
+      <CompareSection layer={nodes.length === 1 && !isGroup(primary) ? primary : undefined} />
       {nodes.length > 1 && (
         <Section title="Selection" id="multi">
           <p className="hint">{nodes.length} layers selected. Styles from the Style tab apply to all of them.</p>
@@ -997,6 +999,72 @@ function tileToLayer() {
   toast('The tile is now a layer at the bottom', 'info', { label: 'Undo', run: undo });
 }
 
+/**
+ * Compare the artwork with the design's reference picture: a match score and a
+ * heat map of where they differ, live if wanted; and Fit, which tunes one
+ * setting of the selected layer until it lines up with the reference.
+ */
+function CompareSection({ layer }: { layer?: ShapeLayer }) {
+  const project = useStore((s) => s.project);
+  const build = useStore((s) => s.build);
+  const [res, setRes] = useState<CompareResult | null>(null);
+  const [live, setLive] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState('x');
+  const ref = referenceLayer();
+  const has = !!ref;
+  useEffect(() => {
+    if (!live || !has || busy) return;
+    const t = setTimeout(() => void compareWithReference(0.5).then(setRes), 350);
+    return () => clearTimeout(t);
+  }, [live, has, busy, build, project]);
+  if (!ref) return null;
+  const tun = layer && !layer.guide ? tunables(layer) : [];
+  const chosen = tun.find((t) => t.key === pick) ?? tun[0];
+  const compare = async () => setRes(await compareWithReference(0.5));
+  return (
+    <Section title="Compare with reference" id="compare">
+      <div className="button-row">
+        <button className="btn" onClick={() => void compare()} disabled={busy}>
+          <Icon name="eye" /> Compare
+        </button>
+        <Toggle label="Live" checked={live} onChange={setLive} hint="Re-measure after every change" />
+      </div>
+      {res && (
+        <>
+          <p className="compare-score">
+            <strong>{res.match.toFixed(1)}%</strong> matching · colour difference {res.diff.toFixed(1)}
+          </p>
+          <img className="compare-heat" src={res.heat} alt="Where the artwork differs from the reference (red)" />
+        </>
+      )}
+      {chosen && (
+        <div className="field">
+          <span>Fit</span>
+          <Select value={chosen.key} label="Setting to fit" options={tun.map((t) => ({ value: t.key, label: t.label }))} onChange={setPick} />
+          <button
+            className="btn"
+            disabled={busy}
+            data-tip="Nudge this setting until the layer lines up with the reference"
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await fitWithFeedback(layer!.id, chosen);
+                await compare();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? 'Fitting…' : 'Fit'}
+          </button>
+        </div>
+      )}
+      <p className="hint">Compares against the layer marked Reference only. {chosen ? 'Fit tries values around the current one and keeps the closest match; undo puts it back.' : 'Select a layer to fit its settings to the reference.'}</p>
+    </Section>
+  );
+}
+
 function CanvasPanel() {
   const p = useStore((s) => s.project);
   const settings = useStore((s) => s.settings);
@@ -1088,6 +1156,7 @@ function CanvasPanel() {
         )}
       </Section>
       <p className="hint pad">Select a layer to edit it, or press ⌘K to search every command.</p>
+      <CompareSection />
     </div>
   );
 }

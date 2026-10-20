@@ -118,18 +118,36 @@ try {
   const names = (await page.locator('.template strong').allTextContents()).filter((n) => n !== 'Blank canvas');
   await page.keyboard.press('Escape');
   check(names.length >= 15, `${names.length} templates listed`);
-  for (const [i, name] of names.entries()) {
-    await openTemplate(name);
-    const file = `${String(i + 1).padStart(2, '0')}-${name.toLowerCase().replace(/\W+/g, '-')}.png`;
-    await page.screenshot({ path: path.join(out, file) });
-    await page.mouse.click(vb.x + 6, vb.y + 6);
-    const hide = await page.addStyleTag({ content: '.dock,.overlay,.stat,.edit-pill{display:none!important}' });
-    await vp.screenshot({ path: path.join(out, `art-${file}`) });
-    await hide.evaluate((el) => el.remove());
-    const s = await state();
-    const errs = (s.build?.layers ?? []).filter((l) => l.error);
-    if (errs.length) errors.push(`${name}: ${errs.map((e) => e.error).join('; ')}`);
-  }
+  // The dialog itself is exercised once; the rest render in parallel pages that
+  // load each template straight into the store and wait for its build (CPU
+  // rendering here is the slow part, so three pages share the cores).
+  await openTemplate(names[0]);
+  await page.screenshot({ path: path.join(out, `01-${names[0].toLowerCase().replace(/\W+/g, '-')}.png`) });
+  const lanes = 3;
+  await Promise.all(
+    Array.from({ length: lanes }, async (_, lane) => {
+      const p2 = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+      p2.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      p2.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
+      await p2.goto(`http://127.0.0.1:${port}/?editor`);
+      await p2.waitForFunction(() => window.morphotype?.renderer, null, { timeout: 30_000 });
+      for (let i = lane; i < names.length; i += lanes) {
+        const name = names[i];
+        const result = await p2.evaluate(async (name) => {
+          const m = window.morphotype;
+          const before = m.store.get().build;
+          m.store.set({ project: m.templates.find((t) => t.name === name).make(), selection: [], dialog: null, screen: 'editor' });
+          for (let k = 0; k < 1500 && m.store.get().build === before; k++) await new Promise((r) => setTimeout(r, 20));
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          return (m.store.get().build?.layers ?? []).filter((l) => l.error).map((l) => l.error);
+        }, name);
+        if (result.length) errors.push(`${name}: ${result.join('; ')}`);
+        const file = `${String(i + 1).padStart(2, '0')}-${name.toLowerCase().replace(/\W+/g, '-')}.png`;
+        await p2.locator('.viewport').screenshot({ path: path.join(out, `art-${file}`) });
+      }
+      await p2.close();
+    }),
+  );
   check(true, 'templates rendered');
 
   // ---- per-layer styles: styling the eyes must not restyle the body ----
@@ -417,6 +435,30 @@ try {
   await settle(800);
   await page.getByRole('button', { name: 'Add as layer' }).click();
   check(await until((st) => st.project.layers.some((n) => n.type === 'group' && n.name === 'Flat logo vector' && n.children.length === 2)), 'colour trace makes one vector layer per ink');
+  // Shading in a traced picture becomes a fitted gradient on its layer.
+  await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 300;
+    c.height = 300;
+    const x = c.getContext('2d');
+    x.fillStyle = '#ffffff';
+    x.fillRect(0, 0, 300, 300);
+    const g = x.createLinearGradient(0, 40, 0, 260);
+    g.addColorStop(0, '#ff3d00');
+    g.addColorStop(1, '#ffc400');
+    x.fillStyle = g;
+    x.fillRect(40, 40, 220, 220);
+    window.morphotype.store.set({ dialog: { kind: 'trace', image: x.getImageData(0, 0, 300, 300), name: 'Shaded', target: 'layer' } });
+  });
+  await page.getByRole('radio', { name: 'Trace' }).click();
+  await inks.fill('2');
+  await inks.press('Enter');
+  await settle(800);
+  await page.getByRole('button', { name: 'Add as layer' }).click();
+  check(
+    await until((st) => st.project.layers.some((n) => n.type === 'group' && n.name === 'Shaded vector' && n.children.some((l) => l.style?.params?.fill2))),
+    'colour trace keeps shading as a fitted gradient',
+  );
   await page.evaluate(() => {
     const c = document.createElement('canvas');
     c.width = 200;
@@ -430,6 +472,12 @@ try {
   await page.getByRole('button', { name: 'Trace over it' }).click();
   s = await state();
   check(s.project.layers[0]?.guide === true && s.project.layers[0].locked && s.tool === 'pen', 'a reference goes under everything, locked, with the pen on');
+  await settle(900);
+  const cmp = await page.evaluate(async () => {
+    const r = await window.morphotype.tools.compareWithReference(0.3);
+    return r && { match: r.match, diff: r.diff, heat: r.heat.startsWith('data:image/png') };
+  });
+  check(!!cmp && cmp.heat && cmp.match >= 0 && cmp.match <= 100, `compare with reference measures the match (${cmp?.match?.toFixed(1)}%, Δ ${cmp?.diff?.toFixed(1)})`);
   await page.keyboard.press('Escape');
   const images = (b) => (b.toString().match(/<image /g) ?? []).length;
   const withRef = images(await download(async () => {}, () => page.keyboard.press(`Shift+${mod}+e`)));

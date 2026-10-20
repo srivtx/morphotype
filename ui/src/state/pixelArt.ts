@@ -211,6 +211,8 @@ export interface Quantized {
   /** Palette index per pixel. */
   index: Uint8Array;
   counts: number[];
+  /** The picture's own colour per pixel (RGB, over white), for fitting gradients. */
+  rgb: Uint8ClampedArray;
 }
 
 /** Reduce a picture to `k` inks (k-means), at most `max` px on the long side. */
@@ -222,6 +224,7 @@ export function quantize(img: ImageData, k: number, max = 1000): Quantized {
   const rows = Math.max(1, Math.round((cols * h) / w));
   const pal = kmeans(sample(img, cols, rows), Math.max(2, Math.min(8, k)));
   const index = new Uint8Array(w * h);
+  const rgb = new Uint8ClampedArray(w * h * 3);
   const counts = pal.map(() => 0);
   const d = img.data;
   for (let y = 0; y < h; y++) {
@@ -237,10 +240,11 @@ export function quantize(img: ImageData, k: number, max = 1000): Quantized {
         if (dd < bd) (bd = dd), (bi = c);
       }
       index[y * w + x] = bi;
+      rgb.set(p, (y * w + x) * 3);
       counts[bi]++;
     }
   }
-  return { w, h, palette: pal.map(hex), index, counts };
+  return { w, h, palette: pal.map(hex), index, counts, rgb };
 }
 
 /**
@@ -284,4 +288,92 @@ export function drawQuantized(c: HTMLCanvasElement, q: Quantized, skip: number |
     img.data[p * 4 + 3] = k === skip ? 40 : 255;
   }
   ctx.putImageData(img, 0, 0);
+}
+
+/** A linear gradient in Flat-material terms (over the shape's bounding box). */
+export interface FittedGradient {
+  fill: string;
+  fill2: string;
+  angle: number;
+  gradStart: number;
+  gradEnd: number;
+}
+
+/**
+ * Fit a linear gradient to the picture's pixels of ink `ci` (least squares):
+ * the direction is where brightness changes fastest, the colours are the fit
+ * at the 2nd and 98th percentile along it, and the ramp spans just that part
+ * of the box. `box` is the traced shape's bounds in quantized pixels. Returns
+ * null when the ink is flat (the ends differ by less than ~5 levels).
+ */
+export function fitGradient(q: Quantized, ci: number, box: { x0: number; y0: number; x1: number; y1: number }): FittedGradient | null {
+  const bw = Math.max(1, box.x1 - box.x0);
+  const bh = Math.max(1, box.y1 - box.y0);
+  const us: number[] = [];
+  const vs: number[] = [];
+  const cs: number[][] = [];
+  for (let p = 0; p < q.index.length; p++) {
+    if (q.index[p] !== ci) continue;
+    const x = p % q.w;
+    const y = (p - x) / q.w;
+    us.push((x + 0.5 - box.x0) / bw - 0.5);
+    vs.push((y + 0.5 - box.y0) / bh - 0.5);
+    cs.push([q.rgb[p * 3], q.rgb[p * 3 + 1], q.rgb[p * 3 + 2]]);
+  }
+  const n = us.length;
+  if (n < 20) return null;
+  // Brightness ≈ a·u + b·v + c, by the normal equations.
+  let su = 0, sv = 0, suu = 0, svv = 0, suv = 0, sl = 0, sul = 0, svl = 0;
+  for (let i = 0; i < n; i++) {
+    const l = cs[i][0] * 0.299 + cs[i][1] * 0.587 + cs[i][2] * 0.114;
+    su += us[i]; sv += vs[i]; suu += us[i] * us[i]; svv += vs[i] * vs[i]; suv += us[i] * vs[i];
+    sl += l; sul += us[i] * l; svl += vs[i] * l;
+  }
+  const mu = su / n, mv = sv / n, ml = sl / n;
+  const cuu = suu / n - mu * mu, cvv = svv / n - mv * mv, cuv = suv / n - mu * mv;
+  const cul = sul / n - mu * ml, cvl = svl / n - mv * ml;
+  const det = cuu * cvv - cuv * cuv;
+  if (Math.abs(det) < 1e-9) return null;
+  const a = (cul * cvv - cvl * cuv) / det;
+  const b = (cvl * cuu - cul * cuv) / det;
+  const len = Math.hypot(a, b);
+  if (len < 1e-6) return null;
+  const du = a / len, dv = b / len;
+  // Position along the gradient (0…1 across the box, as the Flat material measures it).
+  const g = us.map((u, i) => u * du + vs[i] * dv + 0.5);
+  // Each channel ≈ k·g + m.
+  let sg = 0, sgg = 0;
+  for (const x of g) (sg += x), (sgg += x * x);
+  const mg = sg / n, vg = sgg / n - mg * mg;
+  if (vg < 1e-9) return null;
+  const k = [0, 0, 0], m0 = [0, 0, 0];
+  for (let ch = 0; ch < 3; ch++) {
+    let sc = 0, sgc = 0;
+    for (let i = 0; i < n; i++) (sc += cs[i][ch]), (sgc += g[i] * cs[i][ch]);
+    const mc = sc / n;
+    k[ch] = (sgc / n - mg * mc) / vg;
+    m0[ch] = mc - k[ch] * mg;
+  }
+  const sorted = [...g].sort((x, y) => x - y);
+  const gs = sorted[Math.floor(n * 0.02)], ge = sorted[Math.min(n - 1, Math.floor(n * 0.98))];
+  const at = (t: number) => k.map((kk, ch) => Math.max(0, Math.min(255, kk * t + m0[ch])));
+  const c0 = at(gs), c1 = at(ge);
+  if (Math.max(...c0.map((v, ch) => Math.abs(v - c1[ch]))) < 5) return null;
+  const toHex = (c: number[]) => '#' + c.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+  return {
+    fill: toHex(c0),
+    fill2: toHex(c1),
+    angle: Math.round(((Math.atan2(du, -dv) * 180) / Math.PI + 360) % 360),
+    gradStart: Math.max(0, Math.min(1, gs)),
+    gradEnd: Math.max(0, Math.min(1, ge)),
+  };
+}
+
+/** Bounds of the inked pixels of an RGBA mask (ink is dark), in pixels. */
+export function maskBounds(m: Uint8Array, w: number, h: number) {
+  let x0 = w, y0 = h, x1 = 0, y1 = 0;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (m[(y * w + x) * 4] < 128) (x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x + 1)), (y1 = Math.max(y1, y + 1));
+  return { x0, y0, x1, y1 };
 }

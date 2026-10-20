@@ -4,7 +4,7 @@ import { engine } from '../engine/client';
 import type { TraceOptions, TraceOut } from '../engine/types';
 import { parsePath, serializePath } from '../state/geometry';
 import { group, pathLayer, style } from '../state/model';
-import { colorPath, drawPixelArt, drawQuantized, PALETTES, pixelArt, quantize, stackedMasks, type PixelArtOptions } from '../state/pixelArt';
+import { colorPath, drawPixelArt, drawQuantized, fitGradient, maskBounds, PALETTES, pixelArt, quantize, stackedMasks, type PixelArtOptions } from '../state/pixelArt';
 import { edit, store, toast } from '../state/store';
 import { Dialog, Segmented, Select, Slider, Toggle } from './ui';
 
@@ -46,6 +46,7 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
   // Colour tracing: more than one ink makes one vector layer per colour.
   const [inks, setInks] = useState(1);
   const [inkBg, setInkBg] = useState(true);
+  const [gradients, setGradients] = useState(true);
   const quant = useMemo(() => (mode === 'outline' && inks > 1 ? quantize(image, inks) : null), [image, inks, mode]);
   const quantBg = quant ? quant.counts.indexOf(Math.max(...quant.counts)) : null;
   const quantRef = useRef<HTMLCanvasElement>(null);
@@ -141,7 +142,9 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
         const r = await engine.trace(mask, quant.w, quant.h, { ...opts, threshold: 0.5, invert: false, frame: true, maxSize: 1400 }).catch(() => null);
         if (!r) continue;
         const c = quant.palette[ci];
-        layers.push(pathLayer(r.d, size, `Colour ${c}`, { style: style('flat', { fill: c }) }));
+        // Shading in the picture becomes a fitted linear gradient on the layer.
+        const gr = gradients ? fitGradient(quant, ci, maskBounds(mask, quant.w, quant.h)) : null;
+        layers.push(pathLayer(r.d, size, `Colour ${c}`, { style: style('flat', gr ? { fill: gr.fill, fill2: gr.fill2, gradient: 1, angle: gr.angle, gradStart: gr.gradStart, gradEnd: gr.gradEnd } : { fill: c }) }));
       }
       if (!layers.length) return toast('Nothing to trace in those colours.', 'error');
       if (skip !== null) setBackground((b) => (b.fill = { kind: 'solid', colors: [quant.palette[skip]], angle: 180 }));
@@ -298,6 +301,7 @@ export function TraceDialog({ image, name, target }: { image: ImageData; name: s
               {inks > 1 ? (
                 <>
                   <Toggle label="Use the most common colour as the background" checked={inkBg} onChange={setInkBg} />
+                  <Toggle label="Keep shading as gradients" checked={gradients} onChange={setGradients} hint="Fit a linear gradient to each colour region from the picture (flat colours stay flat)" />
                   <p className="hint">Each colour becomes its own smooth vector layer, stacked largest first so no gaps show between them. Best for flat logos, icons and stickers.</p>
                 </>
               ) : (

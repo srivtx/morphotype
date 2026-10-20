@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { getRenderer } from './app/actions';
+import { getRenderer, placeReference } from './app/actions';
+import { compareWithReference, fitToReference, tunables } from './app/compare';
 import { App } from './app/App';
 import { engine } from './engine/client';
 import { store } from './state/store';
@@ -12,6 +13,7 @@ import './styles.css';
   store,
   engine,
   templates: TEMPLATES,
+  tools: { placeReference, compareWithReference, fitToReference, tunables },
   get renderer() {
     return getRenderer();
   },

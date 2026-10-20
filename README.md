@@ -25,7 +25,8 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 - **Shapes.** Circles to squircles, stars, sparkles, bursts, wavy and scalloped badges, globes, asterisks, lenses, clouds, folders, quarter and half circles, mascot bodies, eyes and smiles, all parametric.
 - **Backgrounds and formats.** Solid, linear, radial or aura mesh gradients, film grain, patterns (grid paper, dot grid, lines, stripes, checks, doodles), and an app-icon tile with gloss, shadow and a holographic rim, set up for macOS (rounded tile in the artwork) or iOS and Android (full square, with a preview of the system mask), plus an app-icon grid as an overlay or as layers. The background is the bottom row in Layers and a chip in the dock. Canvas presets cover Instagram, Stories, YouTube thumbnails, X headers, OG images, app icons, business cards, ID badges and more.
 - **Fonts.** TTF, OTF, TTC and WOFF, shaped with a HarfBuzz port, with variable axes. Text can morph into another font glyph by glyph.
-- **Image tracing.** PNG, JPG, WebP or SVG become smooth vector outlines, or keep hard pixel edges. Colour tracing turns a flat logo into one editable vector layer per colour, and a picture can sit under your work as a locked reference to trace with the pen (never exported).
+- **Image tracing.** PNG, JPG, WebP or SVG become smooth vector outlines, or keep hard pixel edges. Colour tracing turns a flat logo into one editable vector layer per colour, keeping shading as fitted gradients, and a picture can sit under your work as a locked reference to trace with the pen (never exported).
+- **Compare with reference.** With a reference picture in the design, the inspector scores how closely the artwork matches it and shows a heat map of where it differs (live if you like). **Fit** tunes any numeric setting of the selected layer (position, size, a squiggle's amplitude, a gradient's angle…) until it lines up with the reference, as one undo step.
 
 **Type mode**
 - Start a font by naming it and picking a typeface to reshape, or start blank and draw every glyph over a guide.
@@ -88,6 +89,8 @@ npm install
 | Build the web app | `npm run build` (output in `dist/`) |
 | Rust and UI unit tests | `npm test` |
 | Browser end-to-end test | `npm run build && npm run test:e2e` |
+| Live render studio (templates → PNG, compare with a reference) | `node scripts/studio.mjs`, then e.g. `curl '127.0.0.1:7799/compare?tpl=UFO%20poster&ref=ref.png&out=diff.png'` |
+| Measure an outline on a reference picture | `cargo run --release --example refpath -- mask.pgm` (a white-on-black PGM mask → path data) |
 
 CI builds an unsigned universal `.dmg` on every push to `main` (the *Morphotype-macOS* artifact). The first build of a new version (the `version` in `package.json`) on `main` also publishes a GitHub Release with the `.dmg` and the web build attached.
 
