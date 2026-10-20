@@ -67,6 +67,8 @@ export interface ShapeLayer extends EngineLayer {
   guide?: boolean;
   /** Loop and entrance, played on the scene clock. */
   motion?: Motion;
+  /** Shape and modifier settings that change over time, rebuilt on the scene clock (see geoMotion.ts). */
+  animate?: Record<string, ParamAnim>;
 }
 
 /**
@@ -91,6 +93,8 @@ export interface Group {
   children: Node[];
   /** Moves the whole group, or each child in turn (see Motion.stagger). */
   motion?: Motion;
+  /** Merged groups: modifier settings that change over time (see geoMotion.ts). */
+  animate?: Record<string, ParamAnim>;
 }
 
 export type Node = ShapeLayer | Group;

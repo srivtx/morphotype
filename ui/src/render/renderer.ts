@@ -89,6 +89,8 @@ export interface SceneItem {
   anim?: Record<string, ParamAnim>;
   /** How far (px) motion carries it from rest: a clipped object's field covers that much more, so its frame can stay still. */
   motionReach?: number;
+  /** Its outline is rebuilt on the scene clock: the field's area snaps to a coarse grid so its textures are reused from frame to frame. */
+  live?: boolean;
 }
 
 /** The scene item for one built object and its style. */
@@ -157,6 +159,10 @@ export class Renderer {
   timeline: Timeline = DEFAULT_TIMELINE;
   /** Exports pin the clock to the frame being drawn (null: everything at rest). */
   private pinned: { t: number | null } | null = null;
+  /** Open export sessions: the preview doesn't draw (it would rebuild their fields at its own density). */
+  private exporting = 0;
+  /** Bumped whenever the scene changes, so an export session rebuilds changed fields. */
+  private version = 0;
   onError: ((e: Error) => void) | null = null;
   /** GPU copies of Photo pictures, by asset id. */
   private photos = new Map<string, WebGLTexture>();
@@ -246,6 +252,7 @@ export class Renderer {
     }
     for (const o of old.values()) this.freeField(o);
     this.objs = next;
+    this.version++;
     this.invalidate();
   }
 
@@ -262,6 +269,7 @@ export class Renderer {
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => {
       this.raf = 0;
+      if (this.exporting) return;
       try {
         this.draw();
       } catch (e) {
@@ -426,10 +434,11 @@ export class Renderer {
     const stroke = st && st.width > 0 ? st.width * (st.align === 'outside' ? 1 : st.align === 'center' ? 0.5 : 0) : 0;
     const dp = o.item.depth && o.item.depth.amount > 0 ? o.item.depth.amount : 0;
     const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + dp + (o.item.soften ?? 0) * 1.5 + 3 + (o.item.clipD ? (o.item.motionReach ?? 0) : 0);
-    const x0 = Math.max(0, Math.floor(b[0] + W / 2 - m));
-    const y0 = Math.max(0, Math.floor(b[1] + H / 2 - m));
-    const x1 = Math.min(W, Math.ceil(b[2] + W / 2 + m));
-    const y1 = Math.min(H, Math.ceil(b[3] + H / 2 + m));
+    const q = o.item.live ? 16 : 1;
+    const x0 = Math.max(0, Math.floor((b[0] + W / 2 - m) / q) * q);
+    const y0 = Math.max(0, Math.floor((b[1] + H / 2 - m) / q) * q);
+    const x1 = Math.min(W, Math.ceil((b[2] + W / 2 + m) / q) * q);
+    const y1 = Math.min(H, Math.ceil((b[3] + H / 2 + m) / q) * q);
     if (x1 <= x0 || y1 <= y0) return null;
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
@@ -743,20 +752,28 @@ export class Renderer {
     const out = target(gl, W, Hh, formats(gl).rgba8);
     const { w: AW, h: AH } = this.art;
     const rectOf = (r: Region): [number, number, number, number] => [(r.x / AW) * 2 - 1, 1 - ((r.y + r.h) / AH) * 2, ((r.x + r.w) / AW) * 2 - 1, 1 - (r.y / AH) * 2];
+    // Fields at up to 2 texels per artboard px: at 1:1 thin bars and hairlines
+    // pick up half-pixel steps from the distance transform.
+    const prepare = () => this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false }, Math.max(k, Math.min(this.exportSupersample * k, this.exportSupersample)));
     let paint: () => void;
     try {
-      // Fields at up to 2 texels per artboard px: at 1:1 thin bars and hairlines
-      // pick up half-pixel steps from the distance transform.
-      paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false }, Math.max(k, Math.min(this.exportSupersample * k, this.exportSupersample)));
+      paint = prepare();
     } catch (e) {
       freeTarget(gl, out);
       throw e;
     }
+    let version = this.version;
+    this.exporting++;
     const raw = new Uint8Array(W * Hh * 4);
     return {
       width: W,
       height: Hh,
       frame: (t: number | null): { data: Uint8ClampedArray<ArrayBuffer>; width: number; height: number } => {
+        // Moving geometry swaps outlines between frames: rebuild just those fields.
+        if (version !== this.version) {
+          paint = prepare();
+          version = this.version;
+        }
         this.pinned = { t };
         try {
           gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
@@ -787,6 +804,7 @@ export class Renderer {
       },
       close: () => {
         freeTarget(gl, out);
+        this.exporting--;
         for (const o of this.objs) o.fieldKey = '';
         this.invalidate();
       },

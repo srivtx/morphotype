@@ -4,16 +4,16 @@ import { allImages } from '../state/assets';
 import { shortcutOf } from '../app/commands';
 import { engine } from '../engine/client';
 import { defaultParams, EFFECTS, effectById, PRESETS, type EffectDef, type ParamDef, type ParamValues, type Preset } from '../render/effects';
-import { clock, timelineOf } from '../state/clock';
 import type { ParamAnim } from '../state/motion';
 import { renderThumb, useThumb } from '../render/thumbs';
 import type { SceneItem } from '../render/renderer';
 import { background, fill, isGroup, pattern, textLayer, type Style } from '../state/model';
-import { edit, setSettings, store, useStore } from '../state/store';
+import { edit, setSettings, useStore } from '../state/store';
 import { findNode } from '../state/tree';
 import { ColorField } from './ColorPicker';
 import { Icon } from './icons';
-import { IconButton, Section, Segmented, Select, Slider, Toggle } from './ui';
+import { Keyframed } from './Keyframed';
+import { IconButton, Section, Select, Slider, Toggle } from './ui';
 
 // One shared sample outline for every preview card.
 let sample: Promise<{ d: string; bbox: [number, number, number, number] | null }> | null = null;
@@ -221,58 +221,12 @@ export function StylePanel() {
 
 type SetAnim = (k: string, fn: ((a: ParamAnim) => void) | null, init?: ParamAnim) => void;
 
-/**
- * A material setting with a keyframe button: turned on, the setting moves
- * between its own value and To on the scene clock, swinging back and forth or
- * ramping round.
- */
+/** A material setting with a keyframe button (see Keyframed). */
 function Animatable({ p, st, setAnim, children }: { p: ParamDef; st: Style; setAnim: SetAnim; children: React.ReactNode }) {
-  const a = st.animate?.[p.key];
-  const from = st.params[p.key] ?? p.default;
-  const toggle = () => {
-    if (a) return setAnim(p.key, null);
-    // A sensible far end: the other half of the range, or a contrasting colour.
-    const to = p.type === 'color' ? (String(from).toLowerCase() === '#111111' ? '#f4f1ea' : '#111111') : (() => {
-      const v = Number(from);
-      const span = (p.max ?? 1) - (p.min ?? 0);
-      return Math.round((v + span * 0.25 <= (p.max ?? 1) ? v + span * 0.25 : v - span * 0.25) / (p.step ?? 0.01)) * (p.step ?? 0.01);
-    })();
-    setAnim(p.key, () => undefined, { to, period: 2, phase: 0, mode: 'swing' });
-    clock.play(timelineOf(store.get().project));
-  };
   return (
-    <div className={`animatable ${a ? 'on' : ''}`}>
-      <div className="animatable-row">
-        {children}
-        <button className={`keyframe ${a ? 'on' : ''}`} aria-pressed={!!a} aria-label={`Animate ${p.label}`} data-tip={a ? `Stop animating ${p.label}` : `Animate ${p.label}`} onClick={toggle}>
-          <Icon name="keyframe" size={11} />
-        </button>
-      </div>
-      {a && (
-        <div className="anim-sub">
-          {p.type === 'color' ? (
-            <ColorField label="To" value={String(a.to)} onChange={(v) => setAnim(p.key, (x) => (x.to = v))} />
-          ) : (
-            <Slider label="To" min={p.min ?? 0} max={p.max ?? 1} step={p.step ?? 0.01} value={Number(a.to)} onChange={(v) => setAnim(p.key, (x) => (x.to = v))} />
-          )}
-          <Slider label="Cycle" min={0.2} max={20} step={0.1} suffix="s" reset={2} value={a.period} onChange={(v) => setAnim(p.key, (x) => (x.period = v))} />
-          <Slider label="Offset" min={0} max={1} step={0.01} reset={0} value={a.phase} onChange={(v) => setAnim(p.key, (x) => (x.phase = v))} />
-          <div className="dial-row">
-            <span>Motion</span>
-            <Segmented<ParamAnim['mode']>
-              size="sm"
-              value={a.mode}
-              onChange={(mode) => setAnim(p.key, (x) => (x.mode = mode))}
-              options={[
-                { value: 'swing', label: 'Swing', title: 'There and back, easing at each end' },
-                { value: 'ramp', label: 'Ramp', title: 'Steadily to To, then round again: for angles, shifts and hues' },
-                { value: 'flicker', label: 'Flicker', title: 'Jumps between steps from its value to To, at random: tiles, lights, screens' },
-              ]}
-            />
-          </div>
-        </div>
-      )}
-    </div>
+    <Keyframed label={p.label} anim={st.animate?.[p.key]} from={st.params[p.key] ?? p.default} color={p.type === 'color'} range={p.type === 'color' ? { min: 0, max: 1, step: 0.01 } : { min: p.min, max: p.max, step: p.step }} set={(fn, init) => setAnim(p.key, fn, init)}>
+      {children}
+    </Keyframed>
   );
 }
 

@@ -500,6 +500,56 @@ try {
   const withoutFlag = images(await download(async () => {}, () => page.keyboard.press(`Shift+${mod}+e`)));
   check(withoutFlag === withRef + 1, `references are left out of exports (${withRef} vs ${withoutFlag})`);
 
+  // ---- moving geometry: a pen line's Wave phase flows on the clock ----
+  {
+    const lineId = await page.evaluate(() => {
+      const m = window.morphotype;
+      const p = m.store.get().project;
+      const uid = `mwave${Date.now().toString(36)}`;
+      const line = {
+        id: `lwave${Date.now().toString(36)}`, name: 'Flow', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1,
+        modifiers: [{ kind: 'wave', amplitude: 0.06, wavelength: 1.2, phase: 0, on: true, uid }],
+        content: { type: 'line', d: 'M-0.8 0 C-0.4 -0.1 0.4 0.1 0.8 0', size: 900, width: 14, cap: 'round' },
+        style: { effect: 'flat', params: { fill: '#2563eb' } },
+      };
+      m.clock.pause({ duration: 1, loop: true });
+      m.store.set({ project: { ...p, layers: [line], timeline: { duration: 1, loop: true } }, selection: [line.id], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+      return line.id;
+    });
+    await settle(900);
+    await page.locator('.mod .mod-head [data-tip="Modifier options"]').first().click();
+    await page.getByRole('menuitem', { name: 'More controls' }).click();
+    await page.getByRole('button', { name: 'Animate Phase' }).click();
+    check(await until((st) => { const a = Object.entries(layersOf(st).find((l) => l.id === lineId)?.animate ?? {}); return a.length === 1 && /^mod:.+:phase$/.test(a[0][0]) && a[0][1].mode === 'ramp' && a[0][1].to > 6.2; }), 'a modifier slider has a keyframe: Wave phase ramps all the way round');
+    const sampled = await page.evaluate(async (id) => {
+      const m = window.morphotype;
+      const before = m.store.get();
+      m.clock.play({ duration: 1, loop: true });
+      const outlines = new Set();
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 120));
+        outlines.add(m.renderer.objs.find((o) => o.item.id === id)?.item.d);
+      }
+      const after = m.store.get();
+      m.clock.pause({ duration: 1, loop: true });
+      return { distinct: outlines.size, sameProject: before.project === after.project, history: after.past.length - before.past.length, frames: m.liveGeometry.stats.frames };
+    }, lineId);
+    check(sampled.distinct >= 3 && sampled.frames > 0, `the line's outline flows while the clock plays (${sampled.distinct} outlines in 12 samples)`);
+    check(sampled.sameProject && sampled.history === 0, 'moving geometry stays out of the project and the undo history');
+    await page.screenshot({ path: path.join(out, 'new-01b-flowing-line.png') });
+    // Video: the line is rebuilt for each frame's time.
+    await page.evaluate(() => {
+      const m = window.morphotype;
+      window.__geoBuilds = 0;
+      const ob = m.engine.buildExact.bind(m.engine);
+      m.engine.buildExact = (d) => (d.renders?.length === 1 && d.quality === 360 && window.__geoBuilds++, ob(d));
+    });
+    const video = await download(async () => {}, () => page.getByRole('button', { name: 'Export video' }).click());
+    const geoBuilds = await page.evaluate(() => window.__geoBuilds);
+    // (Software GL in the headless shell records an empty file; the frames themselves are checked on a GPU.)
+    check(geoBuilds >= 31, `video export builds the moving line for every frame (${geoBuilds} builds, ${(video.length / 1024).toFixed(0)} KB file)`);
+  }
+
   // ---- depth, glass and the icon grid ----
   await openTemplate('Frosted 404');
   await page.locator('.row', { hasText: 'Caption' }).click();

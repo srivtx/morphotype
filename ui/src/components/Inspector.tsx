@@ -14,11 +14,14 @@ import { BG_PRESETS, lookOf, SHAPE_RECIPES, type Recipe } from '../state/recipes
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
 import { allLayers, findNode } from '../state/tree';
+import { modAnimKey, pruneGeoAnims, symAnimKey } from '../state/geoMotion';
+import type { ParamAnim } from '../state/motion';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
 import { MotionSection } from './MotionPanel';
 import { Icon } from './icons';
 import { EffectThumb } from './StylePanel';
+import { Keyframed, type SetAnimOf } from './Keyframed';
 import { ModifierPicker, ShapePicker } from './pickers';
 import { IconButton, Menu, MenuItem, MenuSep, NumberBox, Popover, Section, Segmented, Select, Slider, Toggle } from './ui';
 
@@ -496,8 +499,42 @@ function GroupEditor({ g }: { g: Group }) {
           </button>
         </div>
       </Section>
-      {g.merge && <Modifiers mods={g.modifiers} onChange={(fn, key) => set((x) => fn(x.modifiers), key)} owner={g.id} />}
+      {g.merge && <Modifiers mods={g.modifiers} onChange={(fn, key) => set((x) => (fn(x.modifiers), pruneGeoAnims(x)), key)} owner={g.id} anims={geoAnims(g)} />}
     </>
+  );
+}
+
+/** Keyframes on a node's modifier and shape settings: they rebuild its outline on the scene clock. */
+interface GeoAnims {
+  of: Record<string, ParamAnim> | undefined;
+  set: (key: string) => SetAnimOf;
+}
+
+function geoAnims(n: Node): GeoAnims {
+  return {
+    of: n.animate,
+    set: (k) => (fn, init) =>
+      updateNode(
+        n.id,
+        (x) => {
+          const all = (x.animate ??= {});
+          if (!fn) delete all[k];
+          else fn((all[k] ??= structuredClone(init ?? { to: 0, period: 2, phase: 0, mode: 'swing' })));
+          if (!Object.keys(all).length) delete x.animate;
+        },
+        fn ? `ganim:${n.id}:${k}` : '',
+      ),
+  };
+}
+
+/** A number slider, with a keyframe button where the setting can move. */
+function KeyedSlider({ anims, k, label, min, max, step, value, reset, start, onChange }: { anims?: GeoAnims; k: string; label: string; min: number; max: number; step: number; value: number; reset?: number; start?: Partial<ParamAnim>; onChange: (v: number) => void }) {
+  const slider = <Slider label={label} min={min} max={max} step={step} value={value} reset={reset} onChange={onChange} />;
+  if (!anims) return slider;
+  return (
+    <Keyframed label={label} anim={anims.of?.[k]} from={value} range={{ min, max, step }} start={start} set={anims.set(k)}>
+      {slider}
+    </Keyframed>
   );
 }
 
@@ -514,7 +551,7 @@ function LayerEditor({ layer }: { layer: ShapeLayer }) {
         <Toggle label="Reference only" checked={!!layer.guide} onChange={(v) => set((l) => (l.guide = v || undefined))} hint="Shown while you design, left out of PNG, SVG and project previews: for pictures you trace over" />
       </Section>
       <QuickLooks layer={layer} />
-      <Modifiers mods={layer.modifiers} owner={layer.id} layer={layer} onChange={(fn, key) => set((l) => fn(l.modifiers), key)} />
+      <Modifiers mods={layer.modifiers} owner={layer.id} layer={layer} onChange={(fn, key) => set((l) => (fn(l.modifiers), pruneGeoAnims(l)), key)} anims={geoAnims(layer)} />
     </>
   );
 }
@@ -684,8 +721,10 @@ function SymbolEditor({ c, setC, layer }: { c: Of<'symbol'>; setC: <T extends Co
               <Choice value={String((c.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, string>)[f.key] = v))} />
             </div>
           ) : (
-            <Slider
+            <KeyedSlider
               key={f.key}
+              anims={geoAnims(layer)}
+              k={symAnimKey(f.key)}
               label={f.label}
               min={f.min}
               max={f.max}
@@ -860,7 +899,7 @@ function QuickLooks({ layer }: { layer: ShapeLayer }) {
   );
 }
 
-export function Modifiers({ mods, onChange, owner, layer }: { mods: ModEntry[]; onChange: (fn: (m: ModEntry[]) => void, key?: string) => void; owner: string; layer?: ShapeLayer }) {
+export function Modifiers({ mods, onChange, owner, layer, anims }: { mods: ModEntry[]; onChange: (fn: (m: ModEntry[]) => void, key?: string) => void; owner: string; layer?: ShapeLayer; anims?: GeoAnims }) {
   const advancedAll = useStore((s) => s.settings.advanced);
   const editing = useStore((s) => s.editing);
   const [picker, setPicker] = useState(false);
@@ -934,13 +973,17 @@ export function Modifiers({ mods, onChange, owner, layer }: { mods: ModEntry[]; 
                 ) : f.toggle ? (
                   <Toggle key={f.key} label={f.label} checked={Number(values[f.key] ?? 0) > 0.5} onChange={(v) => patch(m.uid, (x) => ((x as unknown as Record<string, number>)[f.key] = v ? 1 : 0))} />
                 ) : (
-                  <Slider
+                  <KeyedSlider
                     key={f.key}
+                    anims={anims}
+                    k={modAnimKey(m.uid, f.key)}
                     label={f.label}
                     min={f.min}
                     max={f.max}
                     step={f.step}
                     value={Number(values[f.key] ?? 0)}
+                    // A phase goes round: ramp it a whole turn on from where it is, for a steady flow.
+                    start={f.key === 'phase' ? { to: Number(values[f.key] ?? 0) + f.max, mode: 'ramp' } : undefined}
                     onChange={(v) => patch(m.uid, (x) => ((x as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
                   />
                 ),
