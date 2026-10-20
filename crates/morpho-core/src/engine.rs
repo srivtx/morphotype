@@ -6,7 +6,7 @@ use crate::fit::fit_shape;
 use crate::font::{glyph_outline, pair_kerning, shape_line, FontData, FontInfo};
 use crate::geom::{flatten_curves, normalize_winding, poly_to_curves, Affine, CurveShape, Pt, Rect, Shape};
 use crate::modifiers::{apply, apply_all, apply_all_frames, Ctx, Geo, ModEntry, Modifier};
-use crate::morph::Morph;
+use crate::morph::{CurveMorph, Morph};
 use crate::svg;
 use crate::symbols::{self, Symbol};
 use crate::trace::{trace, TraceOpts};
@@ -407,11 +407,19 @@ struct GlyphGeo {
     poly: Shape,
 }
 
+/// Cached correspondence between two glyphs, in em units: the curve morph
+/// when their contours could be made point-compatible, and the polyline
+/// morph that is always available.
+struct GlyphMorph {
+    poly: Morph,
+    curves: Option<CurveMorph>,
+}
+
 #[derive(Default)]
 pub struct Engine {
     fonts: HashMap<String, FontData>,
     glyphs: HashMap<(String, u64, u16), Rc<GlyphGeo>>,
-    morphs: HashMap<(String, u64, u16, String, u64, u16), Rc<Morph>>,
+    morphs: HashMap<(String, u64, u16, String, u64, u16), Rc<GlyphMorph>>,
     layers: HashMap<u64, Rc<Local>>,
     /// Finished font glyphs by spec, character and quality: editing one
     /// glyph or recompiling the tester only rebuilds what changed.
@@ -426,6 +434,12 @@ type Kerning = HashMap<(char, char), f64>;
 const PREVIEW_QUALITY: f64 = 120.0;
 const EXPORT_QUALITY: f64 = 360.0;
 const MORPH_SAMPLES: usize = 192;
+/// How close (in em) a morphed point must sit to a zone in both fonts to be
+/// snapped onto the blended zone. Smaller than any overshoot.
+const ZONE_SNAP: f64 = 0.01;
+/// How far (in em) a morphed glyph's curves may stray from either source
+/// where runs of them are refit as one spline.
+const MORPH_FIT: f64 = 0.0005;
 
 fn hash_of<T: Hash + ?Sized>(v: &T) -> u64 {
     let mut h = DefaultHasher::new();
@@ -494,14 +508,14 @@ impl Engine {
         Ok(g)
     }
 
-    fn glyph_morph(&mut self, fa: &str, aa: &BTreeMap<String, f32>, ga: u16, fb: &str, ab: &BTreeMap<String, f32>, gb: u16) -> Result<Rc<Morph>, String> {
+    fn glyph_morph(&mut self, fa: &str, aa: &BTreeMap<String, f32>, ga: u16, fb: &str, ab: &BTreeMap<String, f32>, gb: u16) -> Result<Rc<GlyphMorph>, String> {
         let key = (fa.to_string(), axes_key(aa), ga, fb.to_string(), axes_key(ab), gb);
         if let Some(m) = self.morphs.get(&key) {
             return Ok(m.clone());
         }
         let a = self.glyph(fa, aa, ga)?;
         let b = self.glyph(fb, ab, gb)?;
-        let m = Rc::new(Morph::new(&a.poly, &b.poly, MORPH_SAMPLES));
+        let m = Rc::new(GlyphMorph { poly: Morph::new(&a.poly, &b.poly, MORPH_SAMPLES), curves: CurveMorph::new(&a.curves, &b.curves, MORPH_SAMPLES, MORPH_FIT) });
         if self.morphs.len() > 4_000 {
             self.morphs.clear();
         }
@@ -637,7 +651,7 @@ impl Engine {
                     }
                     Some(mo) => {
                         let mm = self.glyph_morph(font, axes, g.a, &mo.font, &mo.axes, g.b)?;
-                        poly.extend(mm.at(t).transformed(&m));
+                        poly.extend(mm.poly.at(t).transformed(&m));
                     }
                 }
             }
@@ -1198,7 +1212,16 @@ impl Engine {
                         match target {
                             Some((gb, adv_b)) => {
                                 let mm = self.glyph_morph(&spec.font, &spec.axes, ga, &m.font, &m.axes, gb)?;
-                                (mm.at(t), None, adv_a * (1.0 - t) + adv_b * t)
+                                let adv = adv_a * (1.0 - t) + adv_b * t;
+                                match &mm.curves {
+                                    Some(cm) => {
+                                        let cs = cm.at(t, &self.morph_zones(&spec.font, &m.font)?, ZONE_SNAP);
+                                        let mut poly = flatten_curves(&cs, 0.0006).cleaned(1e-10);
+                                        normalize_winding(&mut poly);
+                                        (poly, Some(cs), adv)
+                                    }
+                                    None => (mm.poly.at(t), None, adv),
+                                }
                             }
                             // The target font lacks this character: keep the base glyph
                             // rather than blending towards its .notdef box.
@@ -1353,6 +1376,14 @@ impl Engine {
             v = v * (1.0 - t) + fa(b) as f64 / b.units_per_em.max(1) as f64 * t;
         }
         Ok((v * upm).round() as i16)
+    }
+
+    /// Baseline, x-height and cap height of two fonts, in em (y-down), for
+    /// snapping morphed points onto the blended zones.
+    fn morph_zones(&self, a: &str, b: &str) -> Result<[(f64, f64); 3], String> {
+        let (a, b) = (&self.font(a)?.info, &self.font(b)?.info);
+        let em = |i: &FontInfo, v: i16| -(v as f64) / i.units_per_em.max(1) as f64;
+        Ok([(0.0, 0.0), (em(a, a.x_height), em(b, b.x_height)), (em(a, a.cap_height), em(b, b.cap_height))])
     }
 
     /// Cap height and x-height of the font being built, in units of `upm`.
