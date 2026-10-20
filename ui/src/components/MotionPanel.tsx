@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { selectedNodes, updateSelected } from '../app/actions';
 import { clock, timelineOf } from '../state/clock';
 import { isGroup, type Node } from '../state/model';
-import { EASES, ENTER_OPTIONS, ENTER_UI, entersFading, entranceEnd, FEELS, feelOf, isStill, lastSlot, LEAVE_OPTIONS, LEAVE_UI, leaveEnd, leavesFading, loopPeriod, LOOP_OPTIONS, LOOP_UI, newMotion, progressAt, settleTime, STAGGER_ORDERS, type Bezier, type EnterKind, type LeaveKind, type LoopKind, type Motion, type SlideDir, type StaggerOrder, type Transition, type TransitionType } from '../state/motion';
+import { addStop, EASES, ENTER_OPTIONS, ENTER_UI, entersFading, entranceEnd, FEELS, feelOf, isStill, lastSlot, LEAVE_OPTIONS, LEAVE_UI, leaveEnd, leavesFading, legsOf, loopPeriod, LOOP_OPTIONS, LOOP_UI, newMotion, progressAt, settleTime, STAGGER_ORDERS, thenTransition, type Bezier, type EnterKind, type LeaveKind, type LoopKind, type Motion, type SlideDir, type StaggerOrder, type Stop, type Transition, type TransitionType } from '../state/motion';
 import { edit, store, useStore } from '../state/store';
 import { allLayers, findNode } from '../state/tree';
 import { Icon, type IconName } from './icons';
@@ -324,8 +324,8 @@ export function EnterControls({ m, set, onPick }: { m: Motion; set: SetMotion; o
   );
 }
 
-/** Then: after arriving, it moves on or leaves. */
-export function ThenControls({ m, set, onPick }: { m: Motion; set: SetMotion; onPick?: () => void }) {
+/** Then: after arriving, it moves on or leaves; a Move to… can go on through more stops (`stops`: list them here). */
+export function ThenControls({ m, set, onPick, stops = true }: { m: Motion; set: SetMotion; onPick?: () => void; stops?: boolean }) {
   const adv = useMotionAdvanced();
   const kind = m.leave ?? 'none';
   const ui = kind !== 'none' && kind !== 'fade' && kind !== 'move' ? LEAVE_UI[kind] : null;
@@ -358,7 +358,7 @@ export function ThenControls({ m, set, onPick }: { m: Motion; set: SetMotion; on
             <NumberBox label="X" value={m.toX ?? 0} onChange={(v) => set((x) => (x.toX = v), 'toX')} title="Where it goes, across from its place (px)" />
             <NumberBox label="Y" value={m.toY ?? 0} onChange={(v) => set((x) => (x.toY = v), 'toY')} title="Where it goes, down from its place (px)" />
           </div>
-          <p className="hint">It stays there. Drag the dashed copy on the canvas to move where it goes.</p>
+          <p className="hint">{m.stops?.length ? 'Then on through each stop below.' : 'It stays there.'} Drag the dashed copy on the canvas to move where it goes.</p>
         </>
       )}
       {ui && <Slider label={ui.label} value={m.leaveDistance ?? ui.default} min={ui.min} max={ui.max} step={ui.step} suffix={ui.unit === 'px' ? '' : ui.unit} reset={ui.default} onChange={(v) => set((x) => (x.leaveDistance = v), 'leaveDistance')} />}
@@ -378,7 +378,64 @@ export function ThenControls({ m, set, onPick }: { m: Motion; set: SetMotion; on
           <p className="hint">Done by {at(leaveEnd(m))}.</p>
         </>
       )}
+      {kind === 'move' && (
+        <>
+          {stops && m.stops?.map((_, i) => <StopControls key={i} m={m} index={i} set={set} />)}
+          <button className="btn small add-stop" onClick={() => set((x) => void addStop(x))} data-tip="Then move on again, to one more spot">
+            <Icon name="plus" size={12} /> Add a stop
+          </button>
+        </>
+      )}
     </>
+  );
+}
+
+/** One stop after Then's Move to…: where, how long it waits first, and how it gets there (`onRemove`: on its own, in the timeline's editor). */
+export function StopControls({ m, index: i, set, onRemove }: { m: Motion; index: number; set: SetMotion; onRemove?: () => void }) {
+  const adv = useMotionAdvanced();
+  const s = m.stops?.[i];
+  if (!s) return null;
+  const tr = s.transition ?? thenTransition(m);
+  const leg = legsOf(m)[i + 1];
+  const setStop = (fn: (s: Stop) => void, key = '') => set((x) => x.stops?.[i] && fn(x.stops[i]), key && `stop${i}.${key}`);
+  const remove = () => {
+    set((x) => {
+      x.stops?.splice(i, 1);
+      if (!x.stops?.length) delete x.stops;
+    });
+    onRemove?.();
+  };
+  return (
+    <div className="stop-controls">
+      {!onRemove && (
+        <h4 className="motion-step">
+          Stop {i + 2}
+          <button className="icon-btn" aria-label={`Remove stop ${i + 2}`} data-tip="Remove this stop" onClick={remove}>
+            <Icon name="close" size={12} />
+          </button>
+        </h4>
+      )}
+      <div className="xy-row">
+        <span>To</span>
+        <NumberBox label="X" value={s.x} onChange={(v) => setStop((t) => (t.x = v), 'x')} title="Where it goes next, across from its place (px)" />
+        <NumberBox label="Y" value={s.y} onChange={(v) => setStop((t) => (t.y = v), 'y')} title="Where it goes next, down from its place (px)" />
+      </div>
+      <Slider label="Waits" value={s.hold ?? 0} min={0} max={5} step={0.05} suffix="s" reset={0} onChange={(v) => setStop((t) => (t.hold = v), 'hold')} />
+      {adv ? (
+        <>
+          <Toggle label="Its own curve" checked={!!s.transition} onChange={(v) => setStop((t) => (v ? (t.transition = { ...thenTransition(m) }) : delete t.transition))} hint="Off: it moves with Then's curve" />
+          {s.transition && <TransitionEditor value={tr} onChange={(t, key) => setStop((x) => (x.transition = t), key && `tr.${key}`)} />}
+        </>
+      ) : (
+        <FeelPicker value={tr} onChange={(t, key) => setStop((x) => (x.transition = t), key && `tr.${key}`)} />
+      )}
+      {leg && <p className="hint">Sets off at {at(leg.start)}, there by {at(leg.end)}.</p>}
+      {onRemove && (
+        <button className="btn tl-remove" onClick={remove}>
+          Remove stop
+        </button>
+      )}
+    </div>
   );
 }
 

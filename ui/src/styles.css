@@ -4641,6 +4641,33 @@ body.tl-dragging * {
 .tl-enter.leave.inherited {
   background: rgb(206 214 232 / 0.62);
 }
+/* Then with stops: a segment per step, the gaps between them its holds. */
+.tl-enter.leave.steps {
+  background: rgb(206 214 232 / 0.38);
+}
+.tl-step {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 4px;
+  border-right: 1.5px solid rgb(0 0 0 / 0.18);
+  background: rgb(206 214 232);
+}
+.tl-enter.inherited .tl-step {
+  background: rgb(206 214 232 / 0.7);
+}
+.tl-step:hover {
+  background: rgb(190 200 224);
+}
+.tl-step em {
+  position: absolute;
+  right: 10px;
+  bottom: 1px;
+  color: rgb(0 0 0 / 0.45);
+  font-size: 9.5px;
+  font-style: normal;
+  pointer-events: none;
+}
 /* The dashed copy where a Move starts or ends, to drag on the canvas. */
 .move-ghost {
   position: absolute;
@@ -4669,10 +4696,36 @@ body.tl-dragging * {
   overflow: visible;
   pointer-events: none;
 }
-.move-path line {
+.move-path line,
+.move-path polyline {
+  fill: none;
   stroke: var(--accent-2);
   stroke-width: 1.5;
   stroke-dasharray: 4 4;
+}
+/* Stops after Then: a numbered dashed copy each, and their controls. */
+.move-ghost span b {
+  margin-right: 4px;
+  font-weight: 700;
+}
+.stop-controls {
+  display: contents;
+}
+.stop-controls .motion-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.stop-controls .motion-step .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+.add-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  margin-top: 6px;
 }
 
 /* ---------- DialKit principles, app-wide ----------

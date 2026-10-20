@@ -123,6 +123,32 @@ export const LEARN_TEMPLATES: Template[] = [
     group([words('Hello', 84, 0, 60, INK, 'Hello', 'inter-black'), words('there!', 84, 0, 160, COLOURS[3], 'there!', 'inter-black')], { name: 'Words', motion: newMotion({ enter: 'rise', distance: 60, delay: 0.9, stagger: 0.25, transition: feel('Snappy', 0.45) }) }),
     ...[0, 0.33, 0.66].map((phase, i) => shape('sparkle', 70 - i * 12, 420 - i * 60, -40 + i * 110, flat(COLOURS[(i * 2 + 1) % COLOURS.length]), `Sparkle ${i + 1}`, {}, { loop: 'spin', amount: 1, period: 2.5, phase, enter: 'grow', distance: 0, delay: 1.4 + i * 0.15, transition: feel('Bouncy', 0.5) })),
   ]),
+  lesson('Learn 10 · A path of stops', 'A ball hops along a path, waiting at each stop: Then > Move to…, then + Add a stop', [
+    ...caption('A path of stops', 'Then > Move to... takes it to stop 1; + Add a stop adds the next, with its own wait\nand Feel. Drag the numbered copies; the timeline shows a segment for each stop.'),
+    ...(
+      [
+        [-420, 200, 'Start'],
+        [-140, -20, 'Stop 1'],
+        [140, 200, 'Stop 2'],
+        [420, -20, 'Stop 3'],
+      ] as const
+    ).map(([x, y, name]) => mark(x, y, 150, name)),
+    shape('circle', 120, -420, 200, flat(COLOURS[4]), 'Ball', {}, {
+      enter: 'grow',
+      distance: 0,
+      delay: 0.2,
+      transition: feel('Bouncy', 0.5),
+      leave: 'move',
+      toX: 280,
+      toY: -220,
+      leaveAt: 1,
+      leaveTransition: feel('Smooth', 0.7),
+      stops: [
+        { x: 560, y: 0, hold: 0.4 },
+        { x: 840, y: -220, hold: 0.4, transition: feel('Bouncy', 0.7) },
+      ],
+    }),
+  ]),
 ];
 
 // ---------- starters: small finished animations to open and reuse ----------
