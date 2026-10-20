@@ -55,7 +55,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Export the audit fonts
         run: |
-          FONT_AUDIT_OUT=font-audit cargo test -p morpho-core --test font_audit -- --nocapture | tee audit.txt
+          # Absolute: cargo runs the test from crates/morpho-core, not the repo root.
+          FONT_AUDIT_OUT="$PWD/font-audit" cargo test -p morpho-core --test font_audit -- --nocapture | tee audit.txt
           # A two-character fixture for the morph fallback, not a real font.
           rm font-audit/morph-missing.ttf
           { echo '### Font export audit'; echo '```'; sed -n '/^case/,/^$/p' audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -69,11 +70,12 @@ jobs:
       - name: fontbakery
         # contour_count: modifiers change outlines on purpose.
         # STAT/ital_axis: a lone italic export has no Roman to pair with.
+        # HTML reports: 1.1.0's --ghmarkdown crashes on a font with no warnings.
         run: |
           status=0
           for f in font-audit/*.ttf; do
             fontbakery check-universal -x contour_count -x opentype/STAT/ital_axis \
-              --ghmarkdown "font-audit/$(basename "$f" .ttf)-fontbakery.md" "$f" || status=1
+              --html "font-audit/$(basename "$f" .ttf)-fontbakery.html" "$f" || status=1
           done
           exit $status
       - uses: actions/upload-artifact@v4

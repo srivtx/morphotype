@@ -1,7 +1,8 @@
 //! Font export audit: exports a matrix of fonts through the engine and
 //! measures them against their sources. Run with
 //! `cargo test -p morpho-core --test font_audit -- --nocapture` to see the table;
-//! set `FONT_AUDIT_OUT` to a folder to keep the exported fonts.
+//! set `FONT_AUDIT_OUT` to a folder to keep the exported fonts (relative paths
+//! start from crates/morpho-core, where cargo runs the test).
 
 use morpho_core::font::to_sfnt;
 use morpho_core::{Engine, FontSpec};
