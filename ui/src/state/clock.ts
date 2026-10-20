@@ -18,8 +18,13 @@ let playing = true;
 /** Playhead when paused, or where playing started from. */
 let base = 0;
 let started = performance.now();
+/** Bumped on every play, pause and seek, so views can tell the playhead moved. */
+let version = 0;
 const subs = new Set<() => void>();
-const emit = () => subs.forEach((f) => f());
+const emit = () => {
+  version++;
+  subs.forEach((f) => f());
+};
 
 const raw = () => (playing ? base + (performance.now() - started) / 1000 : base);
 
@@ -32,6 +37,9 @@ export function timeOn(t: number, tl: Timeline): number {
 export const clock = {
   get playing() {
     return playing;
+  },
+  get version() {
+    return version;
   },
   time: (tl: Timeline) => timeOn(raw(), tl),
   /** Still moving: playing, and either looping or not at the end yet. */

@@ -7,11 +7,13 @@ import { Renderer, sceneItem, type SceneItem } from '../../render/renderer';
 import { liveOutlines, onLiveOutlines } from '../../app/geoMotion';
 import { clock, timelineOf } from '../../state/clock';
 import { motionReach } from '../../state/motion';
+import { pieceLinks, piecesOf } from '../../state/letters';
 import { apply, invert, type Pt, type Xform } from '../../state/geometry';
 import { isGroup, type Node, type ShapeLayer } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, toast, useStore } from '../../state/store';
 import { allLayers, ancestors, buildScene, find, findNode, isLocked, isVisible, layersOf, topmost } from '../../state/tree';
 import { boxesIntersect, hitLayer, resolveTarget, unionOf } from './hit';
+import { MoveGhosts } from './MoveGhosts';
 import { Overlay, type Guide, type Handle } from './Overlay';
 import { TextEditor } from './TextEditor';
 import { Toolbar } from './Toolbar';
@@ -52,14 +54,30 @@ export function syncScene(r: Renderer) {
     }
     return c;
   };
+  const reachTimes = Array.from({ length: 97 }, (_, i) => (i / 96) * reachSpan);
   for (const o of objects) {
     const out = renders.get(o.id);
     if (!out) continue;
-    const item = sceneItem(o.id, out, o.style, o.guide, o.clip ? renders.get(o.clip)?.d : null);
+    const clipD = o.clip ? renders.get(o.clip)?.d : null;
+    const links = o.motion?.map((l) => ({ motion: l.motion, pivot: pivot(l.at), offset: l.offset }));
+    // A text moving letter by letter: one object per letter (or word), each about its own centre, in turn.
+    const pieces = o.letters && links ? piecesOf(out, o.letters) : null;
+    if (pieces?.length && links) {
+      pieceLinks(links, pieces, o.id).forEach((motion, i) => {
+        const item = sceneItem(`${o.id}#${i}`, pieces[i], o.style, o.guide, clipD);
+        item.frame = out.bbox;
+        item.motion = motion;
+        if (live?.has(o.id)) item.live = true;
+        if (item.clipD) item.motionReach = motionReach(motion, pieces[i].bbox, reachTimes, loopLength);
+        items.push(item);
+      });
+      continue;
+    }
+    const item = sceneItem(o.id, out, o.style, o.guide, clipD);
     if (live?.has(o.id)) item.live = true;
-    if (o.motion) {
-      item.motion = o.motion.map((l) => ({ motion: l.motion, pivot: pivot(l.at), offset: l.offset }));
-      if (item.clipD && out.bbox) item.motionReach = motionReach(item.motion, out.bbox, Array.from({ length: 97 }, (_, i) => (i / 96) * reachSpan), loopLength);
+    if (links) {
+      item.motion = links;
+      if (item.clipD && out.bbox) item.motionReach = motionReach(item.motion, out.bbox, reachTimes, loopLength);
     }
     items.push(item);
   }
@@ -831,6 +849,7 @@ export function Viewport() {
         <path ref={previewRef} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
       </svg>
       {r && <Overlay renderer={r} tick={tick} guides={guides} marquee={marquee} editing={editing} onHandle={beginHandle} onCursor={setCursor} measure={altHeld && !drag.current} />}
+      {r && !editing && <MoveGhosts renderer={r} tick={tick} />}
       {hint && (
         <div className="drag-hint" style={{ left: hint.x + 16, top: hint.y + 18 }}>
           {hint.text}

@@ -85,17 +85,30 @@ export function texture(gl: WebGL2RenderingContext, w: number, h: number, f: For
   return t;
 }
 
+/**
+ * Formats already known to render. Asking the GPU whether a framebuffer is
+ * complete waits for all queued work to finish, so it's asked once per format,
+ * not for every target: moving objects make new targets every frame.
+ */
+const renderable = new WeakMap<WebGL2RenderingContext, Set<number>>();
+
 export function target(gl: WebGL2RenderingContext, w: number, h: number, f: Format): Target {
   const tex = texture(gl, w, h, f);
   const fbo = gl.createFramebuffer();
   if (!fbo) throw new GLError('Could not create framebuffer');
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-  const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  if (status !== gl.FRAMEBUFFER_COMPLETE) {
-    throw new GLError(`Framebuffer incomplete (0x${status.toString(16)}). This GPU can't render float targets.`);
+  let known = renderable.get(gl);
+  if (!known) renderable.set(gl, (known = new Set()));
+  if (!known.has(f.internal)) {
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      throw new GLError(`Framebuffer incomplete (0x${status.toString(16)}). This GPU can't render float targets.`);
+    }
+    known.add(f.internal);
   }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return { tex, fbo, w, h };
 }
 

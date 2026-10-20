@@ -4,6 +4,8 @@ import { brushById } from './brushes';
 import { LAB_TEMPLATES } from './templatesLab';
 import { STUDIO_TEMPLATES } from './templatesStudio';
 import { GRAPHIC_TEMPLATES } from './templatesGraphic';
+import { LEARN_TEMPLATES, STARTER_TEMPLATES } from './templatesLearn';
+import { SHOWCASE_TEMPLATES } from './templatesShowcase';
 import { MOTION_TEMPLATES } from './templatesMotion';
 import { background, fill, group, MODIFIER_UI, mods, pattern, strokeLayer, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer } from './model';
 
@@ -79,7 +81,7 @@ const drawn = (pts: P[], width: number, color: string, brush: string, name: stri
 export interface Template {
   name: string;
   hint: string;
-  category: 'Logo' | 'Icon' | 'Type' | 'Social' | 'Print';
+  category: 'Logo' | 'Icon' | 'Type' | 'Social' | 'Print' | 'Learn';
   make: () => Project;
 }
 
@@ -822,10 +824,13 @@ const ALL: Template[] = [
 
 /** Newest, most current looks first. */
 const FEATURED = [
+  ...SHOWCASE_TEMPLATES.map((t) => t.name),
   ...MOTION_TEMPLATES.map((t) => t.name),
+  ...STARTER_TEMPLATES.map((t) => t.name),
+  ...LEARN_TEMPLATES.map((t) => t.name),
   ...GRAPHIC_TEMPLATES.map((t) => t.name),
   ...LAB_TEMPLATES.map((t) => t.name),
   ...STUDIO_TEMPLATES.map((t) => t.name),
   'Printed shapes', 'Night notes', 'Echo rings', 'Sun stamp', 'Ring seal', 'Voxel cursor', 'Dot type', 'Folder sticker', 'Pixel wordmark', 'Pixel poster', 'Dither signal', 'Fused band', 'Pixel garden'];
-const EVERY = [...ALL, ...LAB_TEMPLATES, ...STUDIO_TEMPLATES, ...GRAPHIC_TEMPLATES, ...MOTION_TEMPLATES];
+const EVERY = [...ALL, ...LAB_TEMPLATES, ...STUDIO_TEMPLATES, ...GRAPHIC_TEMPLATES, ...MOTION_TEMPLATES, ...LEARN_TEMPLATES, ...STARTER_TEMPLATES, ...SHOWCASE_TEMPLATES];
 export const TEMPLATES: Template[] = [...FEATURED.map((n) => EVERY.find((t) => t.name === n)!).filter(Boolean), ...EVERY.filter((t) => !FEATURED.includes(t.name))];

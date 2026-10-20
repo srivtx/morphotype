@@ -3,6 +3,7 @@ import type { ParamAnim } from '../state/motion';
 import { store } from '../state/store';
 import { ColorField } from './ColorPicker';
 import { Icon } from './icons';
+import { CycleSlider } from './MotionPanel';
 import { Segmented, Slider } from './ui';
 
 /** Turn a setting's animation on (from `init`), change it, or off (null). */
@@ -40,7 +41,7 @@ export function Keyframed({ label, anim, from, color, range, start, set, childre
           ) : (
             <Slider label="To" min={range.min} max={range.max} step={range.step} value={Number(anim.to)} onChange={(v) => set((x) => (x.to = v))} />
           )}
-          <Slider label="Cycle" min={0.2} max={20} step={0.1} suffix="s" reset={2} value={anim.period} onChange={(v) => set((x) => (x.period = v))} />
+          <CycleSlider value={anim.period} max={20} onChange={(v) => set((x) => (x.period = v))} />
           <Slider label="Offset" min={0} max={1} step={0.01} reset={0} value={anim.phase} onChange={(v) => set((x) => (x.phase = v))} />
           <div className="dial-row">
             <span>Motion</span>

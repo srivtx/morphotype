@@ -10,7 +10,8 @@ import type { Renderer } from '../render/renderer';
 import { parsePath, serializePath, type Node as GNode } from '../state/geometry';
 import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
-import { timelineOf } from '../state/clock';
+import { clock, timelineOf } from '../state/clock';
+import { isStill, type Motion } from '../state/motion';
 import { anyGeoAnim } from '../state/geoMotion';
 import { geometryFrames, holdLiveGeometry } from './geoMotion';
 import { group, isGroup, lineLayer, newModifier, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
@@ -720,6 +721,23 @@ export function copyStyle() {
 }
 export function pasteStyle() {
   if (styleClipboard) applyStyle(styleClipboard);
+}
+
+// Motion: how it comes in, Then, its loop and its stagger, from one layer to others.
+let motionClipboard: Motion | null = null;
+export function copyMotion() {
+  const m = primaryNode()?.motion;
+  if (!m || isStill(m)) return toast('Nothing to copy: this layer has no motion yet.');
+  motionClipboard = structuredClone(m);
+  toast('Motion copied');
+}
+export function pasteMotion() {
+  if (!motionClipboard) return toast('Copy a layer’s motion first (⌥⇧⌘C).');
+  const m = motionClipboard;
+  updateSelected((n) => {
+    n.motion = structuredClone(m);
+  });
+  clock.replay(timelineOf(store.get().project));
 }
 
 export function setBackground(fn: (b: Background) => void, key = '') {

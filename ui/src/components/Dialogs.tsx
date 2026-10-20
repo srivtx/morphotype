@@ -109,7 +109,7 @@ function TemplatesDialog() {
         <Segmented
           size="sm"
           value={cat}
-          options={(['All', 'Logo', 'Icon', 'Type', 'Social', 'Print'] as const).map((c) => ({ value: c, label: c }))}
+          options={(['All', 'Learn', 'Logo', 'Icon', 'Type', 'Social', 'Print'] as const).map((c) => ({ value: c, label: c }))}
           onChange={setCat}
         />
       </div>
