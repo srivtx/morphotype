@@ -617,6 +617,99 @@ try {
     await page.evaluate(() => window.morphotype.store.set({ selection: [] }));
   }
 
+  // ---- a path of stops: Then moves on through every stop, on the canvas and in video ----
+  {
+    const ballId = await page.evaluate(() => {
+      const m = window.morphotype;
+      const p = m.templates.find((t) => t.name.startsWith('Learn 10')).make();
+      const ball = p.layers.find((l) => l.name === 'Ball');
+      m.clock.pause({ duration: 5, loop: true });
+      m.clock.seek(0);
+      m.store.set({ project: p, selection: [ball.id], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+      return ball.id;
+    });
+    await settle(1200);
+    const ballOf = (st) => layersOf(st).find((l) => l.id === ballId);
+    const ghosts = await page.locator('.move-ghost').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
+    check(ghosts.join('|') === 'Stop 1 of Ball|Stop 2 of Ball|Stop 3 of Ball', `every stop is a numbered dashed copy on the canvas (${ghosts.length})`);
+    check((await page.locator('.move-path polyline').getAttribute('points')).trim().split(/\s+/).length === 4, 'a dashed path joins its place and the three stops');
+    // Where it is on the canvas at a time on the clock (px from its place).
+    const at = (t) =>
+      page.evaluate(
+        ({ id, t }) => {
+          const m = window.morphotype;
+          m.clock.seek(t);
+          const o = m.renderer.objs.find((x) => x.item.id === id);
+          const pl = m.renderer.placed(o);
+          return [Math.round(pl.m[4]), Math.round(pl.m[5])];
+        },
+        { id: ballId, t },
+      );
+    const near = ([x, y], [X, Y]) => Math.abs(x - X) <= 3 && Math.abs(y - Y) <= 3;
+    const visits = [await at(0.9), await at(2), await at(3.1), await at(4.9)];
+    check(near(visits[0], [0, 0]) && near(visits[1], [280, -220]) && near(visits[2], [560, 0]) && near(visits[3], [840, -220]), `the ball plays its three stops in order on the canvas (${visits.map((v) => v.join(',')).join(' → ')})`);
+    await page.evaluate(() => window.morphotype.clock.seek(2.45));
+    await settle(400);
+    await page.screenshot({ path: path.join(out, 'new-01c-path-of-stops.png') });
+    // Drag the third copy with ⇧: it keeps to one axis.
+    const g3 = await page.locator('[aria-label="Stop 3 of Ball"]').boundingBox();
+    await page.keyboard.down('Shift');
+    await page.mouse.move(g3.x + g3.width / 2, g3.y + g3.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(g3.x + g3.width / 2 - 60, g3.y + g3.height / 2 + 8, { steps: 6 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    let st = await state();
+    const s3 = ballOf(st).motion.stops[1];
+    check(s3.x < 800 && s3.y === -220, `dragging a stop's copy moves that stop, ⇧ on one axis (${s3.x}, ${s3.y})`);
+    // The timeline: Then is one clip with a segment per stop.
+    if (await page.getByRole('button', { name: 'Open the timeline' }).count()) await page.getByRole('button', { name: 'Open the timeline' }).click();
+    await page.locator('.tl-step').first().waitFor({ timeout: 5000 });
+    check((await page.locator('.tl-step').count()) === 3, 'Then is a sequence clip with a segment for each stop');
+    const handle = await page.locator('.tl-step').nth(1).locator('.tl-clip-handle').boundingBox();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2 + 40, handle.y + handle.height / 2, { steps: 5 });
+    await page.mouse.up();
+    st = await state();
+    const retimed = ballOf(st).motion;
+    check(retimed.stops[0].transition?.duration > 0.75 && retimed.leaveTransition.duration === 0.7, `dragging a boundary retimes that stop only (${retimed.stops[0].transition?.duration} s)`);
+    await page.getByRole('button', { name: 'Stop 3', exact: true }).click();
+    await page.locator('.tl-editor header b', { hasText: 'Stop 3' }).waitFor({ timeout: 5000 });
+    check(true, 'clicking a segment edits that stop');
+    await page.keyboard.press('Escape');
+    await page.locator('.tl-editor').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    if (!(await page.locator('.add-stop').count())) await page.locator('.section-toggle:text-is("Motion")').click();
+    await page.locator('.add-stop').click();
+    st = await state();
+    check(ballOf(st).motion.stops.length === 3 && (await page.locator('.tl-step').count()) === 4 && (await page.locator('.move-ghost').count()) === 4, '+ Add a stop adds one more Move to… after the last');
+    await page.keyboard.press(`${mod}+z`);
+    await page.keyboard.press(`${mod}+z`);
+    await page.keyboard.press(`${mod}+z`);
+    st = await state();
+    check(ballOf(st).motion.stops.length === 2 && ballOf(st).motion.stops[1].x === 840 && !ballOf(st).motion.stops[0].transition, 'undo takes the stop, the retime and the drag back');
+    // Video: each frame is drawn at its own time, so the ball passes every stop in order.
+    await page.evaluate((id) => {
+      const r = window.morphotype.renderer;
+      window.__ballFrames = [];
+      const placed = r.placed.bind(r);
+      r.placed = (o) => {
+        const pl = placed(o);
+        if (r.exporting && o.item.id === id && pl) window.__ballFrames.push([r.pinned?.t, Math.round(pl.m[4]), Math.round(pl.m[5])]);
+        return pl;
+      };
+    }, ballId);
+    const t0 = Date.now();
+    const video = await download(async () => {}, () => page.getByRole('button', { name: 'Export video' }).first().click());
+    const frames = await page.evaluate(() => window.__ballFrames);
+    const frameAt = (t) => frames.find((f) => Math.abs(f[0] - t) < 1 / 60);
+    const inVideo = [0.9, 2, 3.1, 4.9].map((t) => frameAt(t)?.slice(1) ?? [NaN, NaN]);
+    check(
+      frames.length >= 150 && near(inVideo[0], [0, 0]) && near(inVideo[1], [280, -220]) && near(inVideo[2], [560, 0]) && near(inVideo[3], [840, -220]),
+      `exported video plays the stops in order (${frames.length} frames: ${inVideo.map((v) => v.join(',')).join(' → ')}; ${((Date.now() - t0) / 1000).toFixed(1)} s, ${(video.length / 1024).toFixed(0)} KB)`,
+    );
+  }
+
   // ---- depth, glass and the icon grid ----
   await openTemplate('Frosted 404');
   await page.locator('.row', { hasText: 'Caption' }).click();

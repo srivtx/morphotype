@@ -128,6 +128,32 @@ export const LEARN_TEMPLATES: Template[] = [
     textLayer('Hello!', 'inter-black', { x: 0, y: 40, name: 'Word', style: flat(COLOURS[0]), motion: newMotion({ enter: 'rise', distance: 140, delay: 0.3, transition: feel('Bouncy', 0.6), letters: 'letters', stagger: 0.08, loop: 'float', amount: 12, period: 1.5 }) }, { size: 220 }),
     textLayer('and now word by word', 'inter', { x: 0, y: 230, name: 'Line', style: flat(INK), motion: newMotion({ enter: 'drop', distance: 50, delay: 1.2, transition: feel('Snappy', 0.4), letters: 'words', stagger: 0.2 }) }, { size: 48 }),
   ]),
+  lesson('Learn 10 · A path of stops', 'A ball hops along a path, waiting at each stop: Then > Move to…, then + Add a stop', [
+    ...caption('A path of stops', 'Then > Move to... takes it to stop 1; + Add a stop adds the next, with its own wait\nand Feel. Drag the numbered copies; the timeline shows a segment for each stop.'),
+    ...(
+      [
+        [-420, 200, 'Start'],
+        [-140, -20, 'Stop 1'],
+        [140, 200, 'Stop 2'],
+        [420, -20, 'Stop 3'],
+      ] as const
+    ).map(([x, y, name]) => mark(x, y, 150, name)),
+    shape('circle', 120, -420, 200, flat(COLOURS[4]), 'Ball', {}, {
+      enter: 'grow',
+      distance: 0,
+      delay: 0.2,
+      transition: feel('Bouncy', 0.5),
+      leave: 'move',
+      toX: 280,
+      toY: -220,
+      leaveAt: 1,
+      leaveTransition: feel('Smooth', 0.7),
+      stops: [
+        { x: 560, y: 0, hold: 0.4 },
+        { x: 840, y: -220, hold: 0.4, transition: feel('Bouncy', 0.7) },
+      ],
+    }),
+  ]),
 ];
 
 // ---------- starters: small finished animations to open and reuse ----------

@@ -76,6 +76,19 @@ export interface Motion {
   order?: StaggerOrder;
   /** Text: each letter (or word) moves in turn about its own centre, `stagger` s apart; absent, the text moves as one. */
   letters?: LetterMode;
+  /** Then: Move to…: more spots after it, visited in order (each holds until the next). */
+  stops?: Stop[];
+}
+
+/** One more spot on the path after Then's Move to…: it sets off once the one before has arrived. */
+export interface Stop {
+  /** Where it goes, px from its place. */
+  x: number;
+  y: number;
+  /** Seconds it waits at the spot before, once there. */
+  hold?: number;
+  /** Its own transition (Then's when absent). */
+  transition?: Transition;
 }
 
 export const EASES: { label: string; value: Bezier }[] = [
@@ -486,6 +499,59 @@ function leavePose(m: Motion, t: number): Pose {
   return p;
 }
 
+/** Then's transition: its own, or the entrance's. */
+export const thenTransition = (m: Motion) => m.leaveTransition ?? m.transition;
+
+/** One step of the path: where it goes (px from its place), when it sets off and when it has arrived. */
+export interface Leg {
+  x: number;
+  y: number;
+  start: number;
+  end: number;
+  transition: Transition;
+}
+
+/** Then's Move to… and each stop after it, in order (none unless Then moves). */
+export function legsOf(m: Motion): Leg[] {
+  if (m.leave !== 'move') return [];
+  const start = m.leaveAt ?? 0;
+  const tr = thenTransition(m);
+  const legs: Leg[] = [{ x: m.toX ?? 0, y: m.toY ?? 0, start, end: start + settleTime(tr), transition: tr }];
+  for (const s of m.stops ?? []) {
+    const t = s.transition ?? tr;
+    const at = legs.at(-1)!.end + Math.max(0, s.hold ?? 0);
+    legs.push({ x: s.x, y: s.y, start: at, end: at + settleTime(t), transition: t });
+  }
+  return legs;
+}
+
+/** The stops after Then: each moves on from the spot before. */
+function stopsPose(legs: Leg[], t: number): Pose {
+  const p = { ...REST };
+  for (let i = 1; i < legs.length; i++) {
+    const k = progressAt(legs[i].transition, t - legs[i].start);
+    p.x += (legs[i].x - legs[i - 1].x) * k;
+    p.y += (legs[i].y - legs[i - 1].y) * k;
+  }
+  return p;
+}
+
+/**
+ * Add a stop after the last one: a turn to the right of the way it was
+ * going, 160 px on, a beat after it arrives.
+ */
+export function addStop(m: Motion): Stop {
+  const legs = legsOf(m);
+  const last = legs.at(-1) ?? { x: 0, y: 0 };
+  const prev = legs.at(-2) ?? { x: 0, y: 0 };
+  const [dx, dy] = [last.x - prev.x, last.y - prev.y];
+  const len = Math.hypot(dx, dy);
+  const [ux, uy] = len > 1e-6 ? [-dy / len, dx / len] : [0, 1];
+  const s: Stop = { x: Math.round(last.x + ux * 160), y: Math.round(last.y + uy * 160), hold: 0.4 };
+  (m.stops ??= []).push(s);
+  return s;
+}
+
 const join = (a: Pose, b: Pose): Pose => ({ x: a.x + b.x, y: a.y + b.y, rotate: a.rotate + b.rotate, scale: a.scale * b.scale, opacity: a.opacity * b.opacity });
 
 /** The pose `m` gives at `t` seconds on the clock. */
@@ -493,14 +559,15 @@ export function poseAt(m: Motion, t: number, loopLength?: number): Pose {
   let p = m.loop === 'none' ? REST : loopPose(m, t, loopLength);
   if (m.enter !== 'none') p = join(p, enterPose(m, t));
   if (m.leave && m.leave !== 'none') p = join(p, leavePose(m, t));
+  if (m.leave === 'move' && m.stops?.length) p = join(p, stopsPose(legsOf(m), t));
   return p;
 }
 
 /** When the entrance has settled (0 without one). */
 export const entranceEnd = (m: Motion) => (m.enter === 'none' ? 0 : m.delay + settleTime(m.transition));
 
-/** When Then has settled (0 without one). */
-export const leaveEnd = (m: Motion) => (!m.leave || m.leave === 'none' ? 0 : (m.leaveAt ?? 0) + settleTime(m.leaveTransition ?? m.transition));
+/** When Then (and its last stop) has settled (0 without one). */
+export const leaveEnd = (m: Motion) => (!m.leave || m.leave === 'none' ? 0 : m.leave === 'move' ? legsOf(m).at(-1)!.end : (m.leaveAt ?? 0) + settleTime(thenTransition(m)));
 
 /** When everything but the loop is done, for a group of `children` (its stagger spreads them). */
 export function motionEnd(m: Motion, children = 0): number {
