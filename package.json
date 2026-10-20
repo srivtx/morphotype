@@ -1,7 +1,7 @@
 {
   "name": "morphotype",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "description": "Mac-first type and logo lab: morph fonts, build new ones, trace images and render GPU effects.",
   "scripts": {
