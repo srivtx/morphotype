@@ -5,8 +5,9 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { selectedNodes, updateSelected } from '../app/actions';
 import { clock, timelineOf } from '../state/clock';
 import { isGroup, type Node } from '../state/model';
-import { EASES, ENTER_OPTIONS, ENTER_UI, entersFading, entranceEnd, FEELS, feelOf, isStill, lastSlot, LEAVE_OPTIONS, LEAVE_UI, leaveEnd, leavesFading, loopPeriod, LOOP_OPTIONS, LOOP_UI, newMotion, progressAt, settleTime, STAGGER_ORDERS, type Bezier, type EnterKind, type LeaveKind, type LoopKind, type Motion, type SlideDir, type StaggerOrder, type Transition, type TransitionType } from '../state/motion';
+import { EASES, ENTER_OPTIONS, ENTER_UI, entersFading, entranceEnd, FEELS, feelOf, isStill, lastSlot, LEAVE_OPTIONS, LEAVE_UI, leaveEnd, leavesFading, loopPeriod, LOOP_OPTIONS, LOOP_UI, newMotion, progressAt, settleTime, STAGGER_ORDERS, type Bezier, type EnterKind, type LeaveKind, type LetterMode, type LoopKind, type Motion, type SlideDir, type StaggerOrder, type Transition, type TransitionType } from '../state/motion';
 import { edit, store, useStore } from '../state/store';
+import { LETTER_ORDERS, pieceCount } from '../state/letters';
 import { allLayers, findNode } from '../state/tree';
 import { Icon, type IconName } from './icons';
 import { NumberBox, Section, Segmented, Select, Slider, Toggle } from './ui';
@@ -483,11 +484,56 @@ export function ChildrenControls({ m, set, count }: { m: Motion; set: SetMotion;
   );
 }
 
+/** Text: move as one, or each letter or word in turn about its own centre. */
+export function LettersControls({ m, set, text }: { m: Motion; set: SetMotion; text: string }) {
+  const adv = useMotionAdvanced();
+  const count = m.letters ? pieceCount(text, m.letters) : 0;
+  const what = m.letters === 'words' ? (count === 1 ? 'word' : 'words') : count === 1 ? 'letter' : 'letters';
+  return (
+    <>
+      {/* Under the Letters heading, the whole width: three choices with longer names. */}
+      <Segmented<'together' | LetterMode>
+        size="sm"
+        value={m.letters ?? 'together'}
+        options={[
+          { value: 'together', label: 'Together', title: 'The text moves as one' },
+          { value: 'letters', label: 'One by one', title: 'Each letter comes in, moves on and loops on its own, about its own centre, a little after the one before' },
+          { value: 'words', label: 'Word by word', title: 'Each word moves on its own, a little after the one before' },
+        ]}
+        onChange={(v) =>
+          set((x) => {
+            if (v === 'together') delete x.letters;
+            else {
+              x.letters = v;
+              x.stagger = x.stagger || (v === 'words' ? 0.2 : 0.06);
+            }
+          }, 'letters')
+        }
+      />
+      {m.letters && adv && (
+        <>
+          <Slider label="Gap" value={m.stagger} min={0} max={1} step={0.01} suffix="s" reset={m.letters === 'words' ? 0.2 : 0.06} onChange={(v) => set((x) => (x.stagger = v), 'stagger')} />
+          <div className="dial-row">
+            <span>Order</span>
+            <Segmented<StaggerOrder> size="sm" value={m.order ?? 'first'} options={LETTER_ORDERS} onChange={(order) => set((x) => (x.order = order))} />
+          </div>
+        </>
+      )}
+      {m.letters && (
+        <p className="hint">
+          {count} {what}, {m.stagger.toFixed(2)} s apart: the last starts {(m.stagger * lastSlot(m.order, count)).toFixed(2)} s after the first.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** Loop, entrance, Then and (for groups) children, for the selection (shown for the last one picked). */
 export function MotionSection({ nodes }: { nodes: Node[] }) {
   const primary = nodes.at(-1)!;
   const m = primary.motion ?? newMotion();
   const group = isGroup(primary) && !primary.merge;
+  const text = !isGroup(primary) && primary.content.type === 'text' ? primary.content.text : null;
   const set: SetMotion = (fn, key = '') =>
     updateSelected((n) => {
       n.motion = n.motion ?? newMotion();
@@ -521,6 +567,12 @@ export function MotionSection({ nodes }: { nodes: Node[] }) {
         <>
           <h4 className="motion-step">Children</h4>
           <ChildrenControls m={m} set={set} count={primary.children.length} />
+        </>
+      )}
+      {text !== null && !isStill(primary.motion) && (
+        <>
+          <h4 className="motion-step">Letters</h4>
+          <LettersControls m={m} set={set} text={text} />
         </>
       )}
       {nodes.length > 1 && anyMoving(nodes) && (

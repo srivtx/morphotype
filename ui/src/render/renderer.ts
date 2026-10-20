@@ -91,6 +91,8 @@ export interface SceneItem {
   motionReach?: number;
   /** Its outline is rebuilt on the scene clock: the field's area snaps to a coarse grid so its textures are reused from frame to frame. */
   live?: boolean;
+  /** The box its material is laid out in, when that isn't its own: a letter moving on its own keeps its text's, so a gradient still runs across the word. */
+  frame?: Box | null;
 }
 
 /** The scene item for one built object and its style. */
@@ -429,7 +431,8 @@ export class Renderer {
     const b = o.item.bbox;
     if (!b || !o.path) return null;
     const { w: W, h: H } = this.art;
-    const size = { w: b[2] - b[0], h: b[3] - b[1] };
+    const fb = o.item.frame ?? b;
+    const size = { w: fb[2] - fb[0], h: fb[3] - fb[1] };
     const st = o.item.stroke;
     const stroke = st && st.width > 0 ? st.width * (st.align === 'outside' ? 1 : st.align === 'center' ? 0.5 : 0) : 0;
     const dp = o.item.depth && o.item.depth.amount > 0 ? o.item.depth.amount : 0;
@@ -559,7 +562,7 @@ export class Renderer {
       u_bevelTex: this.heightSpec(o).bevel * kk,
       u_ambient: this.bg ? ambientOf(this.bg) : [0.1, 0.1, 0.1],
     };
-    const b = o.item.bbox!;
+    const b = o.item.frame ?? o.item.bbox!;
     u.u_bbox = [(b[0] + W / 2 - r.x) / r.w, (b[1] + H / 2 - r.y) / r.h, (b[2] + W / 2 - r.x) / r.w, (b[3] + H / 2 - r.y) / r.h];
     const t = this.now();
     const loopLength = this.timeline.loop ? this.timeline.duration : undefined;

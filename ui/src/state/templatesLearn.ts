@@ -1,4 +1,4 @@
-// Learn motion: eight small scenes, each teaching one idea with the plain
+// Learn motion: small scenes, each teaching one idea with the plain
 // tools — library shapes, a flat colour or Puffy, and the Motion panel. The
 // caption on the canvas says how it was made; open the timeline to see when
 // each part moves, and take it apart.
@@ -122,6 +122,11 @@ export const LEARN_TEMPLATES: Template[] = [
     shape('catHead', 260, -230, 120, puffy('#ffb21e', '#d9731c'), 'Cat', {}, { enter: 'drop', distance: 420, delay: 0.2, transition: feel('Bouncy', 0.8), loop: 'wiggle', amount: 4, period: 2.5 }),
     group([words('Hello', 84, 0, 60, INK, 'Hello', 'inter-black'), words('there!', 84, 0, 160, COLOURS[3], 'there!', 'inter-black')], { name: 'Words', motion: newMotion({ enter: 'rise', distance: 60, delay: 0.9, stagger: 0.25, transition: feel('Snappy', 0.45) }) }),
     ...[0, 0.33, 0.66].map((phase, i) => shape('sparkle', 70 - i * 12, 420 - i * 60, -40 + i * 110, flat(COLOURS[(i * 2 + 1) % COLOURS.length]), `Sparkle ${i + 1}`, {}, { loop: 'spin', amount: 1, period: 2.5, phase, enter: 'grow', distance: 0, delay: 1.4 + i * 0.15, transition: feel('Bouncy', 0.5) })),
+  ]),
+  lesson('Learn 9 · Letter by letter', 'A word rises a letter at a time and floats in a wave; a line follows word by word. No splitting into layers', [
+    ...caption('Letter by letter', 'Select the word: Motion > Comes in > Rise, then Letters > One by one. Each letter gets\nthe entrance, Then and loop in turn, about its own centre. Advanced sets the Gap and order.'),
+    textLayer('Hello!', 'inter-black', { x: 0, y: 40, name: 'Word', style: flat(COLOURS[0]), motion: newMotion({ enter: 'rise', distance: 140, delay: 0.3, transition: feel('Bouncy', 0.6), letters: 'letters', stagger: 0.08, loop: 'float', amount: 12, period: 1.5 }) }, { size: 220 }),
+    textLayer('and now word by word', 'inter', { x: 0, y: 230, name: 'Line', style: flat(INK), motion: newMotion({ enter: 'drop', distance: 50, delay: 1.2, transition: feel('Snappy', 0.4), letters: 'words', stagger: 0.2 }) }, { size: 48 }),
   ]),
 ];
 

@@ -550,6 +550,73 @@ try {
     check(geoBuilds >= 31, `video export builds the moving line for every frame (${geoBuilds} builds, ${(video.length / 1024).toFixed(0)} KB file)`);
   }
 
+  // ---- letter by letter: a typed word rises one letter at a time, on the canvas and in exported frames ----
+  {
+    await page.evaluate(() => {
+      const m = window.morphotype;
+      const p = m.store.get().project;
+      m.clock.pause({ duration: 2, loop: true });
+      // The Motion section opens with the selection (it remembers being closed).
+      localStorage.setItem('mt.section.motion', '1');
+      m.store.set({ project: { ...p, layers: [], background: { ...p.background, fill: { kind: 'solid', colors: ['#ffffff'], angle: 0 } }, timeline: { duration: 2, loop: true } }, selection: [], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+    });
+    await settle(400);
+    await page.keyboard.press('t');
+    await page.mouse.click(vb.x + vb.width / 2, vb.y + vb.height / 2);
+    await settle(300);
+    await page.keyboard.type('Hello', { delay: 20 });
+    await page.keyboard.press('Escape');
+    await settle(400);
+    const textId = await page.evaluate(() => {
+      const st = window.morphotype.store;
+      const p = structuredClone(st.get().project);
+      const t = p.layers.find((l) => l.content?.text === 'Hello');
+      t.style = { effect: 'flat', params: { fill: '#000000' } };
+      t.motion = { loop: 'none', amount: 16, period: 2, phase: 0, enter: 'rise', distance: 150, delay: 0, transition: { type: 'easing', duration: 0.5, ease: [0.16, 1, 0.3, 1], bounce: 0.25, stiffness: 200, damping: 20, mass: 1 }, stagger: 0 };
+      st.set({ project: p, selection: [t.id] });
+      return t.id;
+    });
+    await settle(600);
+    const together = await page.evaluate((id) => ({ objs: window.morphotype.renderer.objs.filter((o) => o.item.id.startsWith(id)).length, tagged: !!window.morphotype.store.get().build.renders.find((r) => r.id === id)?.glyphs }), textId);
+    check(together.objs === 1 && !together.tagged, 'text that moves as one is drawn as one object, with no letter tags');
+    await page.getByRole('radio', { name: 'One by one' }).click();
+    check(await until((st) => layersOf(st).find((l) => l.id === textId)?.motion?.letters === 'letters'), 'Motion > Letters > One by one sets the text moving letter by letter');
+    const letters = await page.evaluate(async (id) => {
+      const m = window.morphotype;
+      for (let k = 0; k < 200 && !m.renderer.objs.some((o) => o.item.id === `${id}#4`); k++) await new Promise((r) => setTimeout(r, 25));
+      const objs = m.renderer.objs.filter((o) => o.item.id.startsWith(`${id}#`));
+      return { n: objs.length, offsets: objs.map((o) => +o.item.motion[0].offset.toFixed(3)), first: objs[0]?.item.bbox, last: objs.at(-1)?.item.bbox, gap: m.store.get().project.layers.find((l) => l.id === id).motion.stagger };
+    }, textId);
+    check(letters.n === 5 && letters.offsets.every((o, i) => Math.abs(o - i * letters.gap) < 1e-6), `the five letters start ${letters.gap} s apart (${letters.offsets.join(', ')})`);
+    // Ink inside each letter's resting box, early on and once all have arrived.
+    const ink = await page.evaluate(({ first, last }) => {
+      const m = window.morphotype;
+      const { width: W, height: H } = m.store.get().project.canvas;
+      const frames = m.renderer.exportFrames(1, false);
+      const count = (img, b) => {
+        let n = 0;
+        for (let y = Math.floor(b[1] + H / 2); y < Math.ceil(b[3] + H / 2); y++)
+          for (let x = Math.floor(b[0] + W / 2); x < Math.ceil(b[2] + W / 2); x++) {
+            const i = (y * img.width + x) * 4;
+            if (img.data[i] + img.data[i + 1] + img.data[i + 2] < 384) n++;
+          }
+        return n;
+      };
+      try {
+        const early = frames.frame(0.12);
+        const late = frames.frame(1.5);
+        return { early: [count(early, first), count(early, last)], late: [count(late, first), count(late, last)] };
+      } finally {
+        frames.close();
+      }
+    }, letters);
+    check(ink.early[0] > 30 && ink.early[1] === 0 && ink.late[0] > 30 && ink.late[1] > 30, `exported frames: early the first letter is rising and the last hasn't started (${ink.early}), later both are in place (${ink.late})`);
+    await page.evaluate(() => window.morphotype.clock.seek(0.16));
+    await settle(500);
+    await page.screenshot({ path: path.join(out, 'new-01c-letter-by-letter.png') });
+    await page.evaluate(() => window.morphotype.store.set({ selection: [] }));
+  }
+
   // ---- depth, glass and the icon grid ----
   await openTemplate('Frosted 404');
   await page.locator('.row', { hasText: 'Caption' }).click();

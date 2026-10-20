@@ -17,7 +17,8 @@ import { frameAt, loopLengthOf, rowsOf, snapTime, type Clip, type Row, type Trac
 import { findNode } from '../../state/tree';
 import { ColorField } from '../ColorPicker';
 import { Icon } from '../icons';
-import { AdvancedSwitch, ChildrenControls, CycleSlider, EnterControls, LoopControls, ThenControls } from '../MotionPanel';
+import { AdvancedSwitch, ChildrenControls, CycleSlider, EnterControls, LettersControls, LoopControls, ThenControls } from '../MotionPanel';
+import { textPieces } from '../../state/letters';
 import { Popover, Segmented, Slider } from '../ui';
 
 /** Frames per second: what video export renders, and what the ruler and drags count in. */
@@ -31,7 +32,7 @@ export function sceneMoves(p: Project): boolean {
 
 /** When the last entrance or Then settles, so the timeline can be fitted to it. */
 function lastEntrance(ns: Node[]): number {
-  return Math.max(0, ...ns.map((n) => Math.max(n.motion ? motionEnd(n.motion, isGroup(n) && !n.merge ? n.children.length : 0) : 0, isGroup(n) ? lastEntrance(n.children) : 0)));
+  return Math.max(0, ...ns.map((n) => Math.max(n.motion ? motionEnd(n.motion, isGroup(n) && !n.merge ? n.children.length : textPieces(n)) : 0, isGroup(n) ? lastEntrance(n.children) : 0)));
 }
 
 /** Re-render every frame while playing, and on play / pause / seek (scrubbing while paused included). */
@@ -776,6 +777,7 @@ function ClipEditor({ row, track: k, onDone }: { row: Node; track: Track; onDone
         {head(k.kind === 'enter' ? 'Comes in' : 'Then')}
         {k.kind === 'enter' ? <EnterControls m={m} set={setMotion} /> : <ThenControls m={m} set={setMotion} />}
         {children > 0 && <ChildrenControls m={m} set={setMotion} count={children} />}
+        {ownerNode && !isGroup(ownerNode) && ownerNode.content.type === 'text' && <LettersControls m={m} set={setMotion} text={ownerNode.content.text} />}
         {k.kind === 'enter' ? remove('Remove entrance', (x) => (x.enter = 'none')) : remove('Remove Then', (x) => (x.leave = 'none'))}
       </div>
     );
