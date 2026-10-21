@@ -96,7 +96,7 @@ button { font: inherit; color: inherit; }
   transform: translateY(-6px);
 }
 .nav-links { display: flex; gap: 4px; margin-left: auto; }
-.nav-links a { text-decoration: none; font: 600 15px var(--display); padding: 9px 12px; border-radius: 12px; color: var(--ink-2); transition: background 0.2s, color 0.2s; }
+.nav-links a { white-space: nowrap; text-decoration: none; font: 600 15px var(--display); padding: 9px 12px; border-radius: 12px; color: var(--ink-2); transition: background 0.2s, color 0.2s; }
 .nav-links a:hover { background: var(--tint); color: var(--ink); }
 
 /* Buttons */
@@ -442,6 +442,10 @@ li:hover .picon rect, .platform:hover .picon rect { transform: translate(var(--d
   .tcard { --w: 180px; }
   .hand { height: 470px; }
   .feature-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 820px) {
+  .nav-links { display: none; }
+  .nav-cta { margin-left: auto; }
 }
 @media (max-width: 720px) {
   .hand { height: auto; display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 18px 16px 34px; margin: 0 -16px; scrollbar-width: none; }
