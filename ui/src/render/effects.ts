@@ -708,7 +708,6 @@ vec4 effect(vec2 uv) {
   uv -= offsetUv(vec2(u_offsetX, u_offsetY));
   float dt = sdfPx(uv);
   float cov = cover(dt);
-  if (cov <= 0.0) return paper;
   float ra = radians(u_rampAngle);
   float g = clamp(dot(boxUv(uv) - 0.5, vec2(sin(ra), -cos(ra))) + 0.5, 0.0, 1.0);
   float tone = mix(1.0, g, u_ramp);
@@ -727,6 +726,8 @@ vec4 effect(vec2 uv) {
   float d = u_lines > 0.5 ? (abs(f.y) - tone * 0.5) : (length(f) - sqrt(max(tone, 0.0)) * 0.5);
   d *= u_cell * u_k;
   float m = clamp(0.5 - d / max(fwidth(d), 1e-3), 0.0, 1.0);
+  // Only after fwidth: a derivative needs every pixel of its 2×2 quad still running.
+  if (cov <= 0.0) return paper;
   float a2 = m * cov;
   return over(vec4(u_ink * a2, a2), paper);
 }`,
@@ -1573,7 +1574,6 @@ float pattern(vec2 q, vec2 px) {
 }
 vec4 effect(vec2 uv) {
   float cov = cover(sdfPx(uv));
-  if (cov <= 0.0) return vec4(0.0);
   vec2 lo = u_region.xy + u_bbox.xy * u_region.zw, hi = u_region.xy + u_bbox.zw * u_region.zw;
   vec2 ctr = (lo + hi) * 0.5 + (hi - lo) * 0.5 * vec2(u_cx, u_cy);
   vec2 px = artPx(uv) - ctr;
@@ -1589,6 +1589,8 @@ vec4 effect(vec2 uv) {
   float d = pattern(q, px);
   // Distance in cells → screen pixels for a one-pixel anti-aliased edge.
   float aa = max(length(fwidth(q)), 1e-4) * 0.75;
+  // Only after fwidth: a derivative needs every pixel of its 2×2 quad still running.
+  if (cov <= 0.0) return vec4(0.0);
   float ink = clamp(0.5 - d / aa, 0.0, 1.0);
   if (k == 19) ink = (clamp(0.5 - band(q.x, u_weight) / aa, 0.0, 1.0) + clamp(0.5 - band(q.y, u_weight) / aa, 0.0, 1.0)) * 0.5;
   if (k == 21) {
