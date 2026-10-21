@@ -54,6 +54,7 @@ const SAMPLE_MOD: Partial<Record<ModifierKind, object>> = {
   echo: { count: 2, spacing: 0.08, width: 0.03 },
   pixelate: { size: 0.07, shape: 'square', gap: 0.12, dissolve: 0.7 },
   foam: { amount: 0.8, size: 0.2, wall: 0.015 },
+  glitch: { amount: 0.8, size: 0.08, spread: 0.35, shift: 0.1, bands: 0.15, seed: 3 },
   isometric: { face: 'left' },
 };
 

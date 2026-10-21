@@ -74,6 +74,12 @@ export function paramInfo(n: Node, scope: 'style' | 'geo', key: string): { label
     const from = n.content.type === 'text' ? (n.content.morph?.t ?? 0) : n.content.t;
     return { label: 'Morph · Blend', color: false, from, range: { min: 0, max: 1, step: 0.005 } };
   }
+  const line = /^line:(start|end|offset)$/.exec(key);
+  if (line && !isGroup(n) && n.content.type === 'line') {
+    const f = line[1] as 'start' | 'end' | 'offset';
+    const from = n.content.trim?.[f] ?? (f === 'end' ? 1 : 0);
+    return { label: `Line · ${{ start: 'Start', end: 'End', offset: 'Slide' }[f]}`, color: false, from, range: { min: f === 'offset' ? -1 : 0, max: 1, step: 0.005 } };
+  }
   const field = key.replace(/^sym:/, '');
   if (!isGroup(n) && n.content.type === 'symbol') {
     const f = SYMBOL_UI[n.content.symbol.kind]?.fields.find((x) => x.key === field);

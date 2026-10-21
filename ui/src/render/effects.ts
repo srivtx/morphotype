@@ -271,23 +271,59 @@ const inflate: EffectDef = {
     num('shadow', 'Shadow', 0, 1, 0.01, 0.4),
     num('shadowOffset', 'Shadow offset', 0, 120, 1, 24, true),
     num('shadowSoft', 'Shadow blur', 1, 200, 1, 40, true),
+    choice('surface', 'Surface', ['Smooth', 'Contour lines', 'Speckles'], 0),
+    col('marks', 'Marks colour', '#ffffff'),
+    num('marksAmount', 'Marks', 0, 1, 0.01, 0.8),
+    num('marksSize', 'Mark size', 4, 400, 1, 70),
+    num('marksWidth', 'Line width', 0.2, 16, 0.1, 1.6),
+    num('marksFlow', 'Flow', -10, 10, 0.01, 0),
   ],
   height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
   reach: (p) => n(p, 'shadowOffset') + n(p, 'shadowSoft') * 4,
   glsl: /* glsl */ `
-uniform vec3 u_body, u_shade;
+uniform vec3 u_body, u_shade, u_marks;
 uniform float u_depth, u_gloss, u_rimTint, u_shadow, u_shadowOffset, u_shadowSoft;
+uniform float u_surface, u_marksAmount, u_marksSize, u_marksWidth, u_marksFlow;
+/** Topographic lines: level curves of a slow noise, lifted by the puff so they wrap round the form. */
+float contours(vec2 uv) {
+  vec2 p = artPx(uv) / max(u_marksSize * 5.0, 1.0);
+  // About one line per Mark size across the noise's slopes.
+  float v = (fbm3(p + vec2(u_marksFlow * 0.13, u_marksFlow * 0.05)) * 2.4 + 0.5 * H(uv)) * 9.0 + u_marksFlow * 0.25;
+  float d = abs(fract(v + 0.5) - 0.5) / max(fwidth(v), 1e-4);
+  return 1.0 - clamp(d - u_marksWidth * u_k * 0.5 + 0.5, 0.0, 1.0);
+}
+/** Flecks of different sizes, two offset grids of one random dot per cell. */
+float speckles(vec2 uv) {
+  vec2 p = artPx(uv) + vec2(u_marksFlow * 7.0, 0.0);
+  float s = max(u_marksSize * 0.5, 1.0), a = 0.0;
+  for (int k = 0; k < 2; k++) {
+    vec2 q = p / s + float(k) * vec2(0.5, 0.37);
+    vec2 cell = floor(q);
+    float h = hash12(cell + float(k) * 17.0);
+    if (h < u_marksAmount * 0.9) {
+      vec2 at = cell + 0.25 + 0.5 * vec2(hash12(cell + 3.1), hash12(cell + 7.7));
+      float r = (0.06 + 0.2 * pow(hash12(cell + 11.3), 2.0)) * (0.6 + u_marksWidth * 0.25);
+      float d = (length(q - at) - r) * s * u_k;
+      a = max(a, clamp(0.5 - d, 0.0, 1.0) * (0.65 + 0.35 * hash12(cell + 5.3)));
+    }
+  }
+  return a;
+}
 vec4 effect(vec2 uv) {
   float sd = sdfArt(uv - offsetUv(vec2(0.0, u_shadowOffset)));
   float sh = exp(-max(sd, 0.0) / max(u_shadowSoft, 1.0)) * u_shadow * 0.6;
   vec4 shadow = vec4(0.0, 0.0, 0.0, sh);
   float dt = sdfPx(uv);
   float cov = cover(dt);
+  // Marks before the early return: contour lines take derivatives.
+  float marks = u_surface > 1.5 ? speckles(uv) : u_surface > 0.5 ? contours(uv) * u_marksAmount : 0.0;
   if (cov <= 0.0) return shadow;
   vec3 n = normalAt(uv, u_depth);
   vec3 L = normalize(vec3(-0.35, -0.7, 0.62));
   float wrap = clamp(dot(n, L) * 0.6 + 0.45, 0.0, 1.0);
   vec3 c = mix(u_shade, u_body, smoothstep(0.0, 1.0, wrap));
+  // Printed on the skin: shaded with it, so marks darken on the shadow side.
+  c = mix(c, u_marks * mix(0.72, 1.06, wrap), marks);
   float fres = pow(1.0 - clamp(n.z, 0.0, 1.0), 2.5);
   c = mix(c, u_ambient * 1.15, fres * u_rimTint);
   float spec = pow(max(dot(reflect(-L, n), vec3(0.0, 0.0, 1.0)), 0.0), 16.0) * u_gloss;

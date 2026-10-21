@@ -45,6 +45,15 @@ fn full_turn() -> f64 {
 fn twelve() -> f64 {
     12.0
 }
+fn glitch_size() -> f64 {
+    0.05
+}
+fn glitch_spread() -> f64 {
+    0.3
+}
+fn glitch_bands() -> f64 {
+    0.12
+}
 fn echo_gap() -> f64 {
     0.06
 }
@@ -239,6 +248,28 @@ pub enum Modifier {
         spread: f64,
         #[serde(default = "d180")]
         angle: f64,
+        #[serde(default)]
+        seed: u32,
+    },
+    /// Digital glitch: square pixel debris scattered off the edges (and
+    /// bitten out of them), thinning out `spread` em away, and horizontal
+    /// bands of the shape torn sideways by up to `shift` em.
+    Glitch {
+        /// How much debris, 0..1; the same blocks stay as it grows.
+        #[serde(default = "half")]
+        amount: f64,
+        /// Block size in em.
+        #[serde(default = "glitch_size")]
+        size: f64,
+        /// How far debris reaches from the edge, in em.
+        #[serde(default = "glitch_spread")]
+        spread: f64,
+        /// Largest sideways tear of a band, in em.
+        #[serde(default)]
+        shift: f64,
+        /// Typical band height, in em.
+        #[serde(default = "glitch_bands")]
+        bands: f64,
         #[serde(default)]
         seed: u32,
     },
@@ -597,6 +628,7 @@ pub fn apply(geo: Geo, m: &Modifier, ctx: &Ctx) -> Geo {
             g
         }
         Modifier::Foam { amount, size, wall, spread, angle, seed } => Geo::poly_only(foam(&geo.poly, ctx, amount, size, wall, spread, angle, seed)),
+        Modifier::Glitch { amount, size, spread, shift, bands, seed } => Geo::poly_only(glitch(&geo.poly, ctx, amount, size, spread, shift, bands, seed)),
         Modifier::Echo { count, spacing, width } => {
             let n = (count.round() as usize).clamp(0, 40);
             let (sp, hw) = (spacing.abs().max(0.002) * em, (width.abs() * em * 0.5).max(1e-6));
@@ -929,6 +961,105 @@ fn foam(s: &Shape, ctx: &Ctx, amount: f64, size: f64, wall: f64, spread: f64, an
             for i in i0..i1 {
                 let k = j * g.w + i;
                 v[k] = v[k].max((r - g.sample_pos(i, j).dist(p)) as f32);
+            }
+        }
+    }
+    extract(&v, &g, 0.0, g.cell * 0.15, g.cell * g.cell * 1.5)
+}
+
+/// Bilinear sample of a field at `p` (clamped to the grid).
+fn sample(v: &[f32], g: &Grid, p: Pt) -> f32 {
+    let x = ((p.x - g.origin.x) / g.cell - 0.5).clamp(0.0, (g.w - 1) as f64);
+    let y = ((p.y - g.origin.y) / g.cell - 0.5).clamp(0.0, (g.h - 1) as f64);
+    let (i, j) = ((x as usize).min(g.w.saturating_sub(2)), (y as usize).min(g.h.saturating_sub(2)));
+    let (fx, fy) = ((x - i as f64) as f32, (y - j as f64) as f32);
+    let at = |i: usize, j: usize| v[j * g.w + i];
+    let top = at(i, j) + (at(i + 1, j) - at(i, j)) * fx;
+    let bot = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * fx;
+    top + (bot - top) * fy
+}
+
+/// See [`Modifier::Glitch`]. Works on the distance field: bands read it
+/// shifted sideways, then debris blocks are unioned in and bites cut out
+/// as exact box distances, so blocks keep square corners.
+#[allow(clippy::too_many_arguments)]
+fn glitch(s: &Shape, ctx: &Ctx, amount: f64, size: f64, spread: f64, shift: f64, bands: f64, seed: u32) -> Shape {
+    let bbox = s.bbox();
+    let em = ctx.em;
+    let amount = amount.clamp(0.0, 1.0);
+    let block = (size.abs() * em).max(em / 200.0);
+    let reach = spread.abs() * em;
+    let shift = shift.abs() * em;
+    if bbox.is_empty() || (amount < 1e-3 && shift < 1e-6) {
+        return s.clone();
+    }
+    let cell = ctx.cell().min(block / 4.0).max(em / 1024.0);
+    let pad = reach + shift + block * 2.0;
+    let g = Grid::covering(bbox, pad, cell);
+    let src = signed_distance(s, &g, pad + 3.0 * g.cell);
+    // Bands of random height; about half of them torn sideways by whole blocks.
+    let bh = (bands.abs() * em).max(g.cell * 2.0);
+    let (y0, y1) = (g.origin.y, g.origin.y + g.h as f64 * g.cell);
+    let mut cuts: Vec<(f64, f64)> = Vec::new();
+    let mut y = y0;
+    for k in 0..4096i64 {
+        if y >= y1 {
+            break;
+        }
+        y += bh * (0.35 + 1.3 * cell_hash(k, 7, seed));
+        let dx = if shift > 0.0 && cell_hash(k, 11, seed) < 0.45 { ((cell_hash(k, 13, seed) * 2.0 - 1.0) * shift / block).round() * block } else { 0.0 };
+        cuts.push((y, dx));
+    }
+    let dx_at = |y: f64| cuts.get(cuts.partition_point(|c| c.0 < y)).map_or(0.0, |c| c.1);
+    let tear = |f: &[f32]| -> Vec<f32> {
+        (0..g.len())
+            .map(|k| {
+                let p = g.sample_pos(k % g.w, k / g.w);
+                let dx = if shift > 0.0 { dx_at(p.y) } else { 0.0 };
+                if dx == 0.0 { f[k] } else { sample(f, &g, Pt { x: p.x - dx, y: p.y }) }
+            })
+            .collect()
+    };
+    let mut v = tear(&src);
+    if amount >= 1e-3 && reach > 0.0 {
+        // Debris breaks off the outside of the whole form: measured from its
+        // silhouette with the gaps between letters and their counters closed.
+        let r = 0.3 * em;
+        let closed = offset(&offset(s, r, ctx), -r, ctx);
+        let hull = tear(&signed_distance(&closed, &g, pad + 3.0 * g.cell));
+        let torn = v.clone();
+        let half = block * 0.5;
+        let (bi0, bj0) = ((g.origin.x / block).floor() as i64, (g.origin.y / block).floor() as i64);
+        let (bi1, bj1) = (((g.origin.x + g.w as f64 * g.cell) / block).ceil() as i64, ((g.origin.y + g.h as f64 * g.cell) / block).ceil() as i64);
+        for bj in bj0..bj1 {
+            for bi in bi0..bi1 {
+                let c = Pt { x: (bi as f64 + 0.5) * block, y: (bj as f64 + 0.5) * block };
+                let (d, inside) = (sample(&hull, &g, c) as f64, sample(&torn, &g, c) as f64);
+                // Debris comes in clumps (low-frequency noise over the block
+                // grid), densest against the edge, so it reads as stepped
+                // chunks breaking off rather than dust.
+                let n = 0.5 + 0.5 * crate::noise::noise2(bi as f64 * 0.23, bj as f64 * 0.23, seed);
+                let clump = ((n - 0.42) / 0.3).clamp(0.0, 1.0);
+                let r = cell_hash(bi, bj, seed.wrapping_add(1));
+                let near = (1.0 - d / reach).clamp(0.0, 1.0);
+                let add = d > 0.0 && d < reach && r < amount * clump * (0.08 + 2.2 * near * near);
+                let bite = inside <= 0.0 && -inside < block * 1.2 && d > -block * 1.5 && r < amount * 0.12 * clump * clump;
+                if !add && !bite {
+                    continue;
+                }
+                let i0 = (((c.x - half - g.origin.x) / g.cell).floor() - 2.0).max(0.0) as usize;
+                let j0 = (((c.y - half - g.origin.y) / g.cell).floor() - 2.0).max(0.0) as usize;
+                let i1 = ((((c.x + half - g.origin.x) / g.cell).ceil() + 2.0).max(0.0) as usize).min(g.w);
+                let j1 = ((((c.y + half - g.origin.y) / g.cell).ceil() + 2.0).max(0.0) as usize).min(g.h);
+                for j in j0..j1 {
+                    for i in i0..i1 {
+                        let p = g.sample_pos(i, j);
+                        let (qx, qy) = ((p.x - c.x).abs() - half, (p.y - c.y).abs() - half);
+                        let bx = ((qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0)) as f32;
+                        let k = j * g.w + i;
+                        v[k] = if add { v[k].min(bx) } else { v[k].max(-bx) };
+                    }
+                }
             }
         }
     }
@@ -1370,6 +1501,23 @@ mod tests {
         // and centred where the text was (y = 10).
         assert!((b.width() - b.height()).abs() < 10.0, "{b:?}");
         assert!((b.center().y - 10.0).abs() < 6.0, "{b:?}");
+    }
+
+    #[test]
+    fn glitch_adds_debris_and_tears_bands() {
+        let base = || Geo::poly_only(square(100.0));
+        let plain = apply(base(), &Modifier::Glitch { amount: 0.0, size: 0.05, spread: 0.3, shift: 0.0, bands: 0.12, seed: 1 }, &CTX).poly;
+        assert!((plain.area() - square(100.0).area()).abs() < 1.0);
+        let g = apply(base(), &Modifier::Glitch { amount: 1.0, size: 0.05, spread: 0.3, shift: 0.0, bands: 0.12, seed: 1 }, &CTX).poly;
+        assert!(g.contours.len() > 3, "debris blocks");
+        assert!(g.bbox().width() > 101.0, "debris reaches past the edge");
+        // Torn bands stick out sideways but keep the height.
+        let t = apply(base(), &Modifier::Glitch { amount: 0.0, size: 0.05, spread: 0.3, shift: 0.2, bands: 0.1, seed: 2 }, &CTX).poly;
+        assert!(t.bbox().width() > 102.0 && (t.bbox().height() - 100.0).abs() < 2.0, "{:?}", t.bbox());
+        // Growing the amount keeps the blocks it had: less debris reaches no farther.
+        let less = apply(base(), &Modifier::Glitch { amount: 0.4, size: 0.05, spread: 0.3, shift: 0.0, bands: 0.12, seed: 1 }, &CTX).poly;
+        let (a, b) = (less.bbox(), g.bbox());
+        assert!(a.x0 >= b.x0 - 0.5 && a.y0 >= b.y0 - 0.5 && a.x1 <= b.x1 + 0.5 && a.y1 <= b.y1 + 0.5, "{a:?} {b:?}");
     }
 
     #[test]

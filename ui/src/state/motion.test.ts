@@ -93,6 +93,14 @@ describe('animated settings', () => {
     expect(steps.every((v) => [0, 10 / 3, 20 / 3, 10].some((s) => Math.abs(v - s) < 1e-9))).toBe(true);
     expect(new Set(steps.map((v) => v.toFixed(3))).size).toBeGreaterThan(2);
     expect(animatedValue(0, fl, 0.3)).toBe(animatedValue(0, fl, 0.3));
+    // Hold waits at its value, goes to To, waits a moment, and is back by the end of the cycle.
+    const ho = { ...a, mode: 'hold' as const };
+    expect(animatedValue(0, ho, 0)).toBe(0);
+    expect(animatedValue(0, ho, 2 * 0.35)).toBe(0);
+    expect(animatedValue(0, ho, 2 * 0.55)).toBeGreaterThan(5);
+    expect(animatedValue(0, ho, 2 * 0.65)).toBeCloseTo(10);
+    expect(animatedValue(0, ho, 2 * 0.85)).toBeGreaterThan(0);
+    expect(animatedValue(0, ho, 2 * 0.999)).toBeLessThan(0.01);
     const mid = parseInt(String(animatedValue('#000000', { ...a, to: '#ffffff' }, 0.5)).slice(1, 3), 16);
     expect(Math.abs(mid - 127.5)).toBeLessThanOrEqual(1);
   });

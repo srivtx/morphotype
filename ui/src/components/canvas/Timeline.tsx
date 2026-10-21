@@ -801,7 +801,7 @@ function CycleClip({ row, k, ctx, open }: { row: Node; k: Extract<Track, { kind:
   const tip = `${k.label}: ${P.toFixed(2)} s a cycle${fitted ? ` (you set ${stored.toFixed(2)} s; fitted to the loop)` : ''}. Drag to shift it, drag a mark to change the cycle, click to edit`;
   const unit = k.kind === 'loop' ? (LOOP_UI[k.motion.loop as Exclude<LoopKind, 'none'>]?.unit ?? '') : '';
   const arrow = k.kind === 'loop' && k.motion.loop === 'slide' ? ` ${{ left: '←', right: '→', up: '↑', down: '↓' }[k.motion.dir ?? 'right']}${k.motion.oneWay ? ' one way' : ''}` : '';
-  const what = k.kind === 'loop' ? `${k.label}${arrow} ${+Math.abs(k.motion.amount).toFixed(1)}${unit}` : `${k.anim.mode === 'swing' ? 'Swing' : k.anim.mode === 'ramp' ? 'Ramp' : 'Flicker'} to ${typeof k.anim.to === 'number' ? +k.anim.to.toFixed(2) : k.anim.to}`;
+  const what = k.kind === 'loop' ? `${k.label}${arrow} ${+Math.abs(k.motion.amount).toFixed(1)}${unit}` : `${{ swing: 'Swing', ramp: 'Ramp', flicker: 'Flicker', hold: 'Hold' }[k.anim.mode]} to ${typeof k.anim.to === 'number' ? +k.anim.to.toFixed(2) : k.anim.to}`;
   return (
     <div className={`tl-clip tl-cycle ${gradient ? 'colour' : ''}`} style={{ background: gradient }} onPointerDown={body} data-tip={tip}>
       <svg className="tl-wave" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden>
@@ -941,6 +941,7 @@ function ParamAdvanced({ anim, set }: { anim: ParamAnim; set: (fn: (a: ParamAnim
             { value: 'swing', label: 'Swing', title: 'There and back, easing at each end' },
             { value: 'ramp', label: 'Ramp', title: 'Steadily to To, then round again' },
             { value: 'flicker', label: 'Flicker', title: 'Jumps between steps at random' },
+            { value: 'hold', label: 'Hold', title: 'Waits, then goes to To and comes back' },
           ]}
         />
       </div>

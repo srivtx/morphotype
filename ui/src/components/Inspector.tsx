@@ -4,7 +4,7 @@ import { addIconGrid, alignSelected, distributeSelected, editPoints, editWarp, f
 import { addCentreDot, addFace, variationsOf, type Variant } from '../app/assists';
 import { arrange, DEFAULT_LAYOUT, type Layout, type LayoutKind } from '../app/layout';
 import { run, shortcutOf } from '../app/commands';
-import type { Content, Dash, ModEntry, ModifierKind, Squiggle, SquiggleKind, SymbolKind } from '../engine/types';
+import type { Content, Dash, ModEntry, ModifierKind, Squiggle, SquiggleKind, SymbolKind, Trim } from '../engine/types';
 import { backgroundCss, fillCss } from '../render/background';
 import { effectById } from '../render/effects';
 import { luminance, QUICK_COLORS, recolor } from '../render/palette';
@@ -14,7 +14,7 @@ import { BG_PRESETS, lookOf, SHAPE_RECIPES, type Recipe } from '../state/recipes
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
 import { allLayers, findNode } from '../state/tree';
-import { modAnimKey, MORPH_KEY, pruneGeoAnims, symAnimKey } from '../state/geoMotion';
+import { lineAnimKey, modAnimKey, MORPH_KEY, pruneGeoAnims, symAnimKey, TRIM_DEFAULT } from '../state/geoMotion';
 import type { ParamAnim } from '../state/motion';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
@@ -415,10 +415,13 @@ function BlendRow({ node }: { node: Node }) {
 const SQUIGGLE_DEFAULT: Squiggle = { kind: 'zigzag', amplitude: 20, spacing: 24, smooth: 0, round: 0, loops: 1.2, perSegment: true, flatEnds: false, flip: false };
 const DASH_DEFAULT: Dash = { dash: 16, gap: 12, offset: 0 };
 
-/** Squiggles and dashes along a pen line: zigzag, wave, meander, coil, scallop; dashes or dots. */
-function LineAlong({ c, setC }: { c: Of<'line'>; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
+/** Squiggles and dashes along a pen line: zigzag, wave, meander, coil, scallop; dashes or dots. Then how much of it is drawn. */
+function LineAlong({ c, setC, anims }: { c: Of<'line'>; anims?: GeoAnims; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
   const sq = c.squiggle ?? null;
   const da = c.dash ?? null;
+  const tr = c.trim ?? TRIM_DEFAULT;
+  const setTr = (fn: (t: Trim) => void, key = '') => setC<'line'>((x) => fn((x.trim ??= { ...TRIM_DEFAULT })), key);
+  const parts = (c.d.match(/[Mm]/g) ?? []).length;
   const setSq = (fn: (q: Squiggle) => void, key = '') => setC<'line'>((x) => x.squiggle && fn(x.squiggle), key);
   const setDa = (fn: (q: Dash) => void, key = '') => setC<'line'>((x) => x.dash && fn(x.dash), key);
   return (
@@ -458,6 +461,11 @@ function LineAlong({ c, setC }: { c: Of<'line'>; setC: <T extends Content['type'
           <Slider label="Offset" value={da.offset} min={-300} max={300} step={0.5} suffix="px" reset={0} onChange={(v) => setDa((q) => (q.offset = v), 'do')} />
         </>
       )}
+      <p className="hint">Drawn: the part of the line that shows. Animate End (the diamond) to draw it on; Slide moves the drawn part along, round and round on a loop.</p>
+      <KeyedSlider anims={anims} k={lineAnimKey('start')} label="Start" value={tr.start} min={0} max={1} step={0.005} reset={0} start={{ to: 1 }} onChange={(v) => setTr((t) => (t.start = v), 'trs')} />
+      <KeyedSlider anims={anims} k={lineAnimKey('end')} label="End" value={tr.end} min={0} max={1} step={0.005} reset={1} start={{ to: 0 }} onChange={(v) => setTr((t) => (t.end = v), 'tre')} />
+      <KeyedSlider anims={anims} k={lineAnimKey('offset')} label="Slide" value={tr.offset} min={-1} max={1} step={0.005} reset={0} start={{ to: tr.offset + 1, mode: 'ramp' }} onChange={(v) => setTr((t) => (t.offset = v), 'tro')} />
+      {parts > 1 && <Toggle label="Every part at once" hint="Draw each piece of the line at the same time, instead of one after another." checked={tr.each} onChange={(v) => setTr((t) => (t.each = v))} />}
     </>
   );
 }
@@ -588,7 +596,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
             <Segmented size="sm" value={c.cap} options={CAP_OPTIONS} onChange={(v) => setC<'line'>((x) => (x.cap = v))} />
           </div>
           <Slider label="Size" value={c.size} min={10} max={3000} step={1} onChange={(v) => setC<'line'>((x) => (x.size = v), 'ls')} />
-          <LineAlong c={c} setC={setC} />
+          <LineAlong c={c} setC={setC} anims={geoAnims(layer)} />
           <button className="btn" onClick={() => void editPoints(layer.id)}>
             <Icon name="points" /> Edit points
           </button>

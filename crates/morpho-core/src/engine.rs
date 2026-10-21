@@ -112,6 +112,9 @@ pub enum Content {
         /// Dashes or dots along the (squiggled) line.
         #[serde(default)]
         dash: Option<crate::along::Dash>,
+        /// Only part of the line drawn: animate it to draw the line on.
+        #[serde(default)]
+        trim: Option<crate::along::Trim>,
     },
     /// Freehand brush stroke: points `[x, y, pressure]` in layer pixels.
     Stroke {
@@ -975,7 +978,7 @@ impl Engine {
                 normalize_winding(&mut poly);
                 (Geo { poly, curves: None }, em)
             }
-            Content::Line { d, size, width, cap, squiggle, dash } => {
+            Content::Line { d, size, width, cap, squiggle, dash, trim } => {
                 let subs = svg::parse_subpaths(d)?;
                 let m = Affine::scale(*size, *size);
                 let tol = (width.abs() * 0.02).clamp(0.02, 1.0);
@@ -989,6 +992,12 @@ impl Engine {
                         }
                     })
                     .collect();
+                // A trimmed line keeps the whole centre line as its spine, so
+                // colour along it stays put while it draws on.
+                let whole = trim.as_ref().map(|_| lines.clone());
+                if let Some(tr) = trim {
+                    lines = crate::along::trim(lines, tr);
+                }
                 if let Some(dd) = dash {
                     lines = lines
                         .into_iter()
@@ -1001,7 +1010,7 @@ impl Engine {
                         .collect();
                 }
                 // At most ~2 px cells: coarser fields show as steps along long lines.
-                spine = Some(lines.iter().map(|(l, closed)| {
+                spine = Some(whole.as_ref().unwrap_or(&lines).iter().map(|(l, closed)| {
                     let mut l = l.clone();
                     if *closed && l.first().zip(l.last()).is_some_and(|(a, b)| a.dist(*b) > 1e-9) {
                         l.push(l[0]);

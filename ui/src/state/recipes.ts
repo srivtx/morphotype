@@ -53,6 +53,10 @@ export const SHAPE_RECIPES: Recipe[] = [
   { name: 'Diamonds', mods: [{ kind: 'pixelate', size: 0.06, shape: 'diamond', gap: 0.12, dissolve: 0, angle: 180, seed: 1 }], tags: 'pixel rhombus mosaic' },
   { name: 'Iso left', mods: [{ kind: 'isometric', face: 'left' }], tags: '3d isometric cube side' },
   { name: 'Iso top', mods: [{ kind: 'isometric', face: 'top' }], tags: '3d isometric cube floor' },
+  { name: 'Glitch', mods: [{ kind: 'glitch', amount: 0.6, size: 0.045, spread: 0.35, shift: 0.08, bands: 0.1, seed: 3 }], tags: 'pixel debris scan lines corrupt digital y2k' },
+  { name: 'Pixel debris', mods: [{ kind: 'glitch', amount: 0.85, size: 0.06, spread: 0.6, shift: 0, bands: 0.12, seed: 5 }], tags: 'glitch pixel blocks scatter dust' },
+  { name: 'Torn scan', mods: [{ kind: 'glitch', amount: 0, size: 0.05, spread: 0.3, shift: 0.18, bands: 0.07, seed: 2 }], tags: 'glitch vhs scan lines tear shift' },
+  { name: 'Pixel badge', mods: [{ kind: 'weight', amount: 0.12 }, { kind: 'pixelate', size: 0.07, shape: 'square', gap: 0, dissolve: 0, angle: 180, seed: 1 }], tags: 'stepped container blocky backing label sticker frame (put it under the type)' },
   { name: 'Rough cut', mods: [{ kind: 'wobble', amount: 0.012, scale: 0.12, seed: 5 }, { kind: 'ink', amount: 0.008, scale: 0.2, seed: 2 }], tags: 'stamp lino hand cut rough edge' },
 ];
 

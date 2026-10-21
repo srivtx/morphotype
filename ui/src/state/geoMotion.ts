@@ -8,7 +8,8 @@
 //   mod:<uid>:<field>   a modifier's number field (layers and merged groups)
 //   sym:<field>         a library shape's number field
 //   morph:t             the blend of a text's font morph, or of a morph layer
-import type { EngineDocument, ModEntry } from '../engine/types';
+//   line:<field>        how much of a pen line is drawn (its Trim: start, end, offset)
+import type { EngineDocument, ModEntry, Trim } from '../engine/types';
 import { isChoice, isGroup, MODIFIER_UI, SYMBOL_UI, type Field, type Node, type NumberField, type Project, type ShapeLayer } from './model';
 import { animatedValue, type ParamAnim } from './motion';
 import { buildScene, walk } from './tree';
@@ -18,6 +19,10 @@ export type GeoAnims = Record<string, ParamAnim>;
 export const modAnimKey = (uid: string, field: string) => `mod:${uid}:${field}`;
 export const symAnimKey = (field: string) => `sym:${field}`;
 export const MORPH_KEY = 'morph:t';
+export const lineAnimKey = (field: keyof Trim) => `line:${field}`;
+
+/** A pen line drawn whole. */
+export const TRIM_DEFAULT: Trim = { start: 0, end: 1, offset: 0, each: false };
 
 /** Whether a node has a morph blend to move: text morphing to another font, or a morph layer. */
 const hasMorph = (n: Node) => !isGroup(n) && ((n.content.type === 'text' && !!n.content.morph) || n.content.type === 'morph');
@@ -27,6 +32,7 @@ function applies(n: Node, key: string): boolean {
   const m = /^mod:([^:]+):(.+)$/.exec(key);
   if (m) return typeof (n.modifiers.find((x) => x.uid === m[1]) as unknown as Record<string, unknown> | undefined)?.[m[2]] === 'number';
   if (key === MORPH_KEY) return hasMorph(n);
+  if (key.startsWith('line:')) return !isGroup(n) && n.content.type === 'line' && typeof TRIM_DEFAULT[key.slice(5) as keyof Trim] === 'number';
   if (!key.startsWith('sym:') || isGroup(n) || n.content.type !== 'symbol') return false;
   return typeof (n.content.symbol as unknown as Record<string, unknown>)[key.slice(4)] === 'number';
 }
@@ -65,6 +71,7 @@ export function modifiersAt(mods: ModEntry[], anims: GeoAnims | undefined, t: nu
 }
 
 const BLEND: NumberField = { key: 't', label: 'Blend', min: 0, max: 1, step: 0.005 };
+const SLIDE: NumberField = { key: 'offset', label: 'Slide', min: -1, max: 1, step: 0.005 };
 
 /** A layer's content with its animated shape fields and morph blend at `t`. */
 export function contentAt(c: ShapeLayer['content'], anims: GeoAnims | undefined, t: number, loopLength?: number): ShapeLayer['content'] {
@@ -73,6 +80,19 @@ export function contentAt(c: ShapeLayer['content'], anims: GeoAnims | undefined,
     const at = (from: number) => Math.min(1, Math.max(0, valueAt(from, blend, t, loopLength, BLEND)));
     if (c.type === 'text' && c.morph) return { ...c, morph: { ...c.morph, t: at(c.morph.t) } };
     if (c.type === 'morph') return { ...c, t: at(c.t) };
+  }
+  if (c.type === 'line') {
+    let trim: Trim | null = null;
+    for (const [k, a] of Object.entries(anims ?? {})) {
+      if (!k.startsWith('line:')) continue;
+      const key = k.slice(5) as keyof Trim;
+      const from = (c.trim ?? TRIM_DEFAULT)[key];
+      if (typeof from !== 'number') continue;
+      // Start and end stay on the line; the slide wraps round, so it may go on.
+      const v = valueAt(from, a, t, loopLength, key === 'offset' ? SLIDE : undefined);
+      trim = { ...(trim ?? c.trim ?? TRIM_DEFAULT), [key]: key === 'offset' ? v : Math.min(1, Math.max(0, v)) };
+    }
+    return trim ? { ...c, trim } : c;
   }
   if (c.type !== 'symbol') return c;
   let symbol = c.symbol;
