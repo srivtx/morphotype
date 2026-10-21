@@ -230,108 +230,172 @@ interface SliderProps {
   suffix?: string;
 }
 
+/** Click snaps to the nearest step when there are few, else to a nearby tenth (DialKit's "decile magnet"). */
+function snapClick(v: number, min: number, max: number, step: number) {
+  if ((max - min) / step <= 10) return min + Math.round((v - min) / step) * step;
+  const t = (v - min) / (max - min || 1);
+  const near = Math.round(t * 10) / 10;
+  return Math.abs(t - near) <= 0.03125 ? min + near * (max - min) : v;
+}
+
 /**
- * Compact slider row: drag the track, scrub the label, type a number, or use
- * the arrow keys (⇧ for bigger steps). Double-click resets.
+ * A filled bar slider, after DialKit (MIT, Josh Puckett): the label sits on
+ * the left and the value on the right inside one bar. Drag anywhere to set
+ * the value (⇧ for fine, relative moves), click to jump (snapping to tenths),
+ * pull past an end and it stretches a little. Hover the number, or press
+ * Enter, to type a value (maths works). Arrow keys step (⇧ ×10); double-click
+ * resets. Ranges through zero fill from zero.
  */
 export function Slider({ label, value, min, max, step, onChange, reset, suffix }: SliderProps) {
   const [text, setText] = useState<string | null>(null);
-  const track = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState<'hover' | 'drag' | null>(null);
+  const [editable, setEditable] = useState(false);
+  const [stretch, setStretch] = useState(0);
+  const bar = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const press = useRef<{ x: number; y: number; v: number; moved: boolean; rect: DOMRect } | null>(null);
+  const hoverTimer = useRef(0);
   const d = decimals(step);
   const clampStep = (v: number) => Math.round(Math.min(max, Math.max(min, v)) / step) * step;
+  const set = (v: number) => onChange(Number(clampStep(v).toFixed(d)));
   const pct = Math.max(0, Math.min(1, (value - min) / (max - min || 1))) * 100;
   const zero = min < 0 && max > 0 ? ((0 - min) / (max - min)) * 100 : 0;
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
 
-  const fromPointer = (clientX: number) => {
-    const r = track.current!.getBoundingClientRect();
-    const t = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
-    onChange(Number(clampStep(min + t * (max - min)).toFixed(d)));
-  };
-  const onTrackDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    (e.target as Element).setPointerCapture(e.pointerId);
+  const at = (clientX: number, r: DOMRect) => min + Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * (max - min);
+  const onDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || text !== null) return;
+    e.preventDefault();
+    bar.current!.focus({ preventScroll: true });
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
     beginGesture();
-    fromPointer(e.clientX);
+    press.current = { x: e.clientX, y: e.clientY, v: value, moved: false, rect: bar.current!.getBoundingClientRect() };
   };
-  // Scrubbing the label nudges relative to the start value.
-  const scrub = useRef<{ x: number; v: number } | null>(null);
-  const onLabelDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    (e.target as Element).setPointerCapture(e.pointerId);
-    beginGesture();
-    scrub.current = { x: e.clientX, v: value };
+  const onMove = (e: React.PointerEvent) => {
+    const p = press.current;
+    if (!p) return;
+    if (!p.moved && Math.hypot(e.clientX - p.x, e.clientY - p.y) <= 3) return;
+    if (!p.moved) setActive('drag');
+    p.moved = true;
+    const r = p.rect;
+    // Past an end the bar gives a little: up to 8 px, easing off over 200 px after a 32 px dead zone.
+    const past = e.clientX < r.left ? r.left - e.clientX : e.clientX > r.right ? e.clientX - r.right : 0;
+    setStretch(Math.sign(e.clientX - r.left) * 8 * Math.sqrt(Math.min(Math.max(0, past - 32) / 200, 1)) * (past > 0 ? 1 : 0));
+    if (e.shiftKey) set(p.v + ((e.clientX - p.x) / r.width) * (max - min) * 0.1);
+    else set(at(e.clientX, r));
   };
-  const onLabelMove = (e: React.PointerEvent) => {
-    const s = scrub.current;
-    if (!s) return;
-    const range = max - min;
-    const v = s.v + ((e.clientX - s.x) / 200) * range * (e.shiftKey ? 0.1 : 1);
-    onChange(Number(clampStep(v).toFixed(d)));
+  const onUp = (e: React.PointerEvent) => {
+    const p = press.current;
+    if (!p) return;
+    press.current = null;
+    if (!p.moved) set(snapClick(at(e.clientX, p.rect), min, max, step));
+    setStretch(0);
+    setActive(bar.current?.matches(':hover') ? 'hover' : null);
+    commitEdit();
   };
   const onKey = (e: React.KeyboardEvent) => {
-    const big = e.shiftKey ? 10 : 1;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') onChange(Number(clampStep(value + step * big).toFixed(d)));
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') onChange(Number(clampStep(value - step * big).toFixed(d)));
+    if (e.target !== e.currentTarget) return;
+    const big = e.shiftKey || e.key.startsWith('Page') ? 10 : 1;
+    if (['ArrowRight', 'ArrowUp', 'PageUp'].includes(e.key)) set(value + step * big);
+    else if (['ArrowLeft', 'ArrowDown', 'PageDown'].includes(e.key)) set(value - step * big);
     else if (e.key === 'Home') onChange(min);
     else if (e.key === 'End') onChange(max);
+    else if (e.key === 'Enter') startTyping();
     else return;
     e.preventDefault();
     e.stopPropagation();
   };
+  const startTyping = () => {
+    setText(value.toFixed(d));
+    requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.select();
+    });
+  };
+  const done = (keep: boolean) => {
+    const v = text === null || text.trim() === '' ? NaN : Number.isFinite(Number(text)) ? Number(text) : evalMath(text);
+    if (keep && Number.isFinite(v)) onChange(v);
+    setText(null);
+    setEditable(false);
+  };
+  // The handle fades back where it would cover the label or the number.
+  const w = bar.current?.offsetWidth ?? 200;
+  const labelEnd = labelRef.current ? ((10 + labelRef.current.offsetWidth + 8) / w) * 100 : 30;
+  const valueStart = input.current ? ((w - 12 - Math.min(input.current.scrollWidth, 60) - 8) / w) * 100 : 78;
+  const dodge = pct < labelEnd || pct > valueStart;
+  const steps = (max - min) / step;
+  const ticks = steps <= 10 ? Array.from({ length: Math.max(0, Math.round(steps) - 1) }, (_, i) => ((i + 1) / steps) * 100) : Array.from({ length: 9 }, (_, i) => (i + 1) * 10);
   return (
-    <div className="slider" onDoubleClick={() => reset !== undefined && onChange(reset)}>
-      <span className="slider-label" onPointerDown={onLabelDown} onPointerMove={onLabelMove} onPointerUp={() => ((scrub.current = null), commitEdit())} data-tip={reset !== undefined ? 'Drag to scrub · double-click to reset' : 'Drag to scrub'}>
-        {label}
-      </span>
+    <div className="slider" onDoubleClick={() => reset !== undefined && text === null && onChange(reset)}>
       <div
-        ref={track}
-        className="slider-track"
+        ref={bar}
+        className={`bar ${active ? 'active' : ''} ${active === 'drag' ? 'dragging' : ''}`}
+        style={stretch ? { width: `calc(100% + ${Math.abs(stretch)}px)`, transform: stretch < 0 ? `translateX(${stretch}px)` : undefined } : undefined}
         role="slider"
         tabIndex={0}
         aria-label={label}
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={value}
-        onPointerDown={onTrackDown}
-        onPointerMove={(e) => e.buttons === 1 && fromPointer(e.clientX)}
-        onPointerUp={commitEdit}
+        aria-valuetext={`${value.toFixed(d)}${suffix ?? ''}`}
+        data-tip={reset !== undefined ? 'Drag · ⇧ fine · double-click resets' : undefined}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+        onPointerEnter={() => !press.current && setActive('hover')}
+        onPointerLeave={() => !press.current && setActive(null)}
         onKeyDown={onKey}
       >
-        <div className="slider-fill" style={{ left: `${Math.min(zero, pct)}%`, width: `${Math.abs(pct - zero)}%` }} />
-        <div className="slider-thumb" style={{ left: `${pct}%` }} />
+        <div className="bar-ticks">
+          {ticks.map((t) => (
+            <i key={t} style={{ left: `${t}%` }} />
+          ))}
+        </div>
+        <div className="bar-fill" style={{ left: `${Math.min(zero, pct)}%`, width: `${Math.abs(pct - zero)}%` }} />
+        <div className={`bar-handle ${dodge ? 'dodge' : ''}`} style={{ left: `max(5px, calc(${pct}% - 9px))` }} />
+        <span ref={labelRef} className="bar-label">
+          {label}
+        </span>
+        <input
+          ref={input}
+          className={`bar-num ${editable || text !== null ? 'editable' : ''}`}
+          aria-label={`${label} value`}
+          value={text ?? value.toFixed(d) + (suffix ?? '')}
+          size={Math.max(3, (text ?? value.toFixed(d) + (suffix ?? '')).length)}
+          onPointerEnter={() => {
+            clearTimeout(hoverTimer.current);
+            hoverTimer.current = window.setTimeout(() => setEditable(true), 800);
+          }}
+          onPointerLeave={() => {
+            clearTimeout(hoverTimer.current);
+            if (text === null) setEditable(false);
+          }}
+          onPointerDown={(e) => {
+            // Once it's offered for typing, clicks go to the number, not the bar.
+            if (editable) e.stopPropagation();
+          }}
+          onFocus={() => text === null && startTyping()}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={() => done(true)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter' || e.key === 'Escape') {
+              // Commit (or not) without letting the key do anything else.
+              e.preventDefault();
+              done(e.key === 'Enter');
+              bar.current?.focus({ preventScroll: true });
+            }
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+              e.preventDefault();
+              const v = Number(text ?? value) + (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
+              onChange(Number(v.toFixed(d)));
+              setText(v.toFixed(d));
+            }
+          }}
+        />
       </div>
-      <input
-        className="slider-num"
-        aria-label={`${label} value`}
-        value={text ?? value.toFixed(d) + (suffix ?? '')}
-        onFocus={(e) => {
-          setText(value.toFixed(d));
-          requestAnimationFrame(() => e.target.select());
-        }}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          const v = Number(text);
-          if (text !== null && text.trim() !== '' && Number.isFinite(v)) onChange(v);
-          setText(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            // Commit without letting Enter activate anything else.
-            e.preventDefault();
-            (e.target as HTMLInputElement).blur();
-          }
-          if (e.key === 'Escape') {
-            setText(null);
-            (e.target as HTMLInputElement).blur();
-          }
-          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-            e.preventDefault();
-            const v = Number(text ?? value) + (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
-            onChange(Number(v.toFixed(d)));
-            setText(v.toFixed(d));
-          }
-        }}
-      />
     </div>
   );
 }
@@ -442,8 +506,26 @@ export function Segmented<T extends string>({
   onChange: (v: T) => void;
   size?: 'sm' | 'md';
 }) {
+  // One pill slides to the picked option (DialKit's segmented control).
+  const wrap = useRef<HTMLDivElement>(null);
+  const [pill, setPill] = useState<{ x: number; w: number; slide: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const measure = () => {
+      const on = el.querySelector<HTMLElement>('button.on');
+      // It appears in place, and slides only when the choice changes.
+      setPill((p) => (on ? { x: on.offsetLeft, w: on.offsetWidth, slide: !!p } : null));
+    };
+    measure();
+    // Buttons share the width, so the pill follows when the panel resizes.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [value, options.length]);
   return (
-    <div className={`segmented ${size}`} role="radiogroup">
+    <div ref={wrap} className={`segmented ${size}`} role="radiogroup">
+      {pill && <span className="segmented-pill" style={{ transform: `translateX(${pill.x}px)`, width: pill.w, transition: pill.slide ? undefined : 'none' }} />}
       {options.map((o) => (
         <button
           key={o.value}

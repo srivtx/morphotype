@@ -197,7 +197,7 @@ function Templates({ limit, onAll }: { limit?: number; onAll?: () => void }) {
       <div className="home-section-head">
         <h2>Templates</h2>
         {!limit && (
-          <Segmented size="sm" value={cat} options={(['All', 'Logo', 'Icon', 'Type', 'Social', 'Print'] as const).map((c) => ({ value: c, label: c }))} onChange={setCat} />
+          <Segmented size="sm" value={cat} options={(['All', 'Learn', 'Logo', 'Icon', 'Type', 'Social', 'Print'] as const).map((c) => ({ value: c, label: c }))} onChange={setCat} />
         )}
         <span className="spacer" />
         {onAll && (

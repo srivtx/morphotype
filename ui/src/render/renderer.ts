@@ -1,14 +1,17 @@
-import { BLUR_FS, BLUR_RGBA_FS, FULLSCREEN_VS, HEIGHT_FS, JFA_FS, RECT_VS, SDF_FS, SEED_FS } from './passes';
+import { BLUR_FS, BLUR_RGBA_FS, FULLSCREEN_VS, HEIGHT_FS, JFA_FS, MOVED_RECT_VS, RECT_VS, SDF_FS, SEED_FS } from './passes';
 import { COMMON_GLSL, effectById, type EffectDef, type HeightSpec, type ParamValues } from './effects';
 import { ambientOf, backgroundUniforms, BG_FS } from './background';
 import type { Background, BlendMode, Depth, Stroke, Style } from '../state/model';
 import { imageAsset, imageElement, onImagesReady } from '../state/assets';
+import { clock, DEFAULT_TIMELINE, type Timeline } from '../state/clock';
+import { animatedValue, applyMat, compose, placement, type Mat, type Motion, type ParamAnim } from '../state/motion';
 import { bindTextures, formats, freeTarget, GLError, hexToRgb, program, setUniforms, target, texture, type Program, type Target, type UniformValue } from './gl';
 
 const EFFECT_FS = (body: string) => /* glsl */ `#version 300 es
 precision highp float;
 ${COMMON_GLSL}
 in vec2 v_uv;
+in vec2 v_clipUv;
 out vec4 o;
 ${body}
 uniform float u_strokeW, u_strokeAlign, u_strokeOpacity, u_opacity, u_hasClip;
@@ -45,7 +48,10 @@ void main() {
     o = over(vec4(u_strokeColor * a, a), o);
   }
   if (u_sideDepth > 0.0) o = over(o, depthSide(v_uv));
-  if (u_hasClip > 0.5) o *= texture(u_clipMask, v_uv).a;
+  if (u_hasClip > 0.5) {
+    vec2 c = v_clipUv;
+    o *= texture(u_clipMask, c).a * step(0.0, c.x) * step(c.x, 1.0) * step(0.0, c.y) * step(c.y, 1.0);
+  }
   o *= u_opacity;
 }`;
 
@@ -77,11 +83,21 @@ export interface SceneItem {
   guide?: boolean;
   /** A pen line's centre line, for materials that colour along it. */
   spine?: number[] | null;
+  /** Motions moving it at draw time (its own first), each about a rest centre in artboard coordinates. */
+  motion?: { motion: Motion; pivot: [number, number]; offset: number }[];
+  /** Material settings that change over time. */
+  anim?: Record<string, ParamAnim>;
+  /** How far (px) motion carries it from rest: a clipped object's field covers that much more, so its frame can stay still. */
+  motionReach?: number;
+  /** Its outline is rebuilt on the scene clock: the field's area snaps to a coarse grid so its textures are reused from frame to frame. */
+  live?: boolean;
+  /** The box its material is laid out in, when that isn't its own: a letter moving on its own keeps its text's, so a gradient still runs across the word. */
+  frame?: Box | null;
 }
 
 /** The scene item for one built object and its style. */
 export function sceneItem(id: string, out: { d: string; bbox: Box | null; spine?: number[] }, st: Style, guide?: boolean, clipD?: string | null): SceneItem {
-  return { id, d: out.d, bbox: out.bbox, clipD, spine: out.spine ?? null, effect: effectById(st.effect), params: st.params, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, soften: st.soften, guide };
+  return { id, d: out.d, bbox: out.bbox, clipD, spine: out.spine ?? null, effect: effectById(st.effect), params: st.params, anim: st.animate, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, soften: st.soften, guide };
 }
 
 interface Field {
@@ -132,16 +148,26 @@ export class Renderer {
   private objs: Obj[] = [];
   private seeds: { a: Target; b: Target; w: number; h: number } | null = null;
   private maskCanvas = document.createElement('canvas');
+  private maskCtx: CanvasRenderingContext2D | null = null;
+  /** GL limits are asked once: a query can wait on the GPU. */
+  private maxTexture = 0;
   private art = { w: 1200, h: 1200 };
   private bg: Background | null = null;
   private resolution = 1024;
   /** Field density for exports, in texels per output px (1 = quick drafts). */
   exportSupersample = 2;
-  private start = performance.now();
   private raf = 0;
   view: View = { zoom: 0.5, panX: 0, panY: 0 };
   checker = true;
+  /** Reduce motion: everything holds still at rest. */
   paused = false;
+  timeline: Timeline = DEFAULT_TIMELINE;
+  /** Exports pin the clock to the frame being drawn (null: everything at rest). */
+  private pinned: { t: number | null } | null = null;
+  /** Open export sessions: the preview doesn't draw (it would rebuild their fields at its own density). */
+  private exporting = 0;
+  /** Bumped whenever the scene changes, so an export session rebuilds changed fields. */
+  private version = 0;
   onError: ((e: Error) => void) | null = null;
   /** GPU copies of Photo pictures, by asset id. */
   private photos = new Map<string, WebGLTexture>();
@@ -155,6 +181,7 @@ export class Renderer {
       throw new GLError('This GPU cannot render to float textures (EXT_color_buffer_float).');
     }
     this.gl = gl;
+    this.maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
     this.progs = {
       seed: program(gl, FULLSCREEN_VS, SEED_FS),
       jfa: program(gl, FULLSCREEN_VS, JFA_FS),
@@ -231,12 +258,13 @@ export class Renderer {
     }
     for (const o of old.values()) this.freeField(o);
     this.objs = next;
+    this.version++;
     this.invalidate();
   }
 
   /** Texture resolution used for previews (longest artboard side, in texels). */
   setPreviewResolution(px: number) {
-    const r = Math.max(256, Math.min(Math.round(px), 3072, this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number));
+    const r = Math.max(256, Math.min(Math.round(px), 3072, this.maxTexture));
     if (Math.abs(r - this.resolution) / this.resolution < 0.2) return;
     this.resolution = r;
     this.invalidate();
@@ -247,14 +275,34 @@ export class Renderer {
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => {
       this.raf = 0;
+      if (this.exporting) return;
       try {
         this.draw();
       } catch (e) {
         this.onError?.(e as Error);
         return;
       }
-      if (!this.paused && this.objs.some((o) => o.item.effect.animated?.(o.item.params))) this.invalidate();
+      if (!this.paused && clock.running(this.timeline) && this.moving()) this.invalidate();
     });
+  }
+
+  /** Anything that changes with time: animated materials or motion. */
+  moving() {
+    return this.objs.some((o) => o.item.motion?.length || (o.item.anim && Object.keys(o.item.anim).length) || o.item.effect.animated?.(o.item.params));
+  }
+
+  /** Seconds on the scene clock for this frame; null holds everything at rest. */
+  private now(): number | null {
+    if (this.pinned) return this.pinned.t;
+    return this.paused ? null : clock.time(this.timeline);
+  }
+
+  /** Where motion puts an object now (artboard map), and its fade. */
+  private placed(o: Obj): { m: Mat; opacity: number } | null {
+    const t = this.now();
+    const links = o.item.motion;
+    if (t === null || !links?.length) return null;
+    return placement(links, t, this.timeline.loop ? this.timeline.duration : undefined);
   }
 
   dispose() {
@@ -350,7 +398,7 @@ export class Renderer {
     if (!src || src.length < 8) return null;
     if (o.spine && o.spine.src === src) return o.spine;
     const gl = this.gl;
-    const n = Math.min(src.length >> 2, Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number, 4096));
+    const n = Math.min(src.length >> 2, Math.min(this.maxTexture, 4096));
     if (o.spine) gl.deleteTexture(o.spine.tex);
     const tex = texture(gl, n, 1, formats(gl).rgba32f);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, 1, gl.RGBA, gl.FLOAT, new Float32Array(src.slice(0, n * 4)));
@@ -387,15 +435,17 @@ export class Renderer {
     const b = o.item.bbox;
     if (!b || !o.path) return null;
     const { w: W, h: H } = this.art;
-    const size = { w: b[2] - b[0], h: b[3] - b[1] };
+    const fb = o.item.frame ?? b;
+    const size = { w: fb[2] - fb[0], h: fb[3] - fb[1] };
     const st = o.item.stroke;
     const stroke = st && st.width > 0 ? st.width * (st.align === 'outside' ? 1 : st.align === 'center' ? 0.5 : 0) : 0;
     const dp = o.item.depth && o.item.depth.amount > 0 ? o.item.depth.amount : 0;
-    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + dp + (o.item.soften ?? 0) * 1.5 + 3;
-    const x0 = Math.max(0, Math.floor(b[0] + W / 2 - m));
-    const y0 = Math.max(0, Math.floor(b[1] + H / 2 - m));
-    const x1 = Math.min(W, Math.ceil(b[2] + W / 2 + m));
-    const y1 = Math.min(H, Math.ceil(b[3] + H / 2 + m));
+    const m = Math.max(0, o.item.effect.reach(o.item.params, size)) + stroke + dp + (o.item.soften ?? 0) * 1.5 + 3 + (o.item.clipD ? (o.item.motionReach ?? 0) : 0);
+    const q = o.item.live ? 16 : 1;
+    const x0 = Math.max(0, Math.floor((b[0] + W / 2 - m) / q) * q);
+    const y0 = Math.max(0, Math.floor((b[1] + H / 2 - m) / q) * q);
+    const x1 = Math.min(W, Math.ceil((b[2] + W / 2 + m) / q) * q);
+    const y1 = Math.min(H, Math.ceil((b[3] + H / 2 + m) / q) * q);
     if (x1 <= x0 || y1 <= y0) return null;
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
@@ -408,7 +458,7 @@ export class Renderer {
       this.freeField(o);
       return;
     }
-    const max = Math.min(this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number, 8192);
+    const max = Math.min(this.maxTexture, 8192);
     k = Math.min(k, max / Math.max(region.w, region.h));
     const key = `${k.toFixed(5)}:${region.x},${region.y},${region.w},${region.h}`;
     if (o.field && o.fieldKey === key) return;
@@ -426,7 +476,7 @@ export class Renderer {
       c.width = w;
       c.height = h;
     }
-    const ctx = c.getContext('2d', { willReadFrequently: false });
+    const ctx = (this.maskCtx ??= c.getContext('2d', { willReadFrequently: false }));
     if (!ctx) throw new GLError('2D canvas unavailable');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, w, h);
@@ -495,7 +545,7 @@ export class Renderer {
   private effectProgram(def: EffectDef): Program {
     let p = this.effects.get(def.id);
     if (!p) {
-      p = program(this.gl, RECT_VS, EFFECT_FS(def.glsl));
+      p = program(this.gl, MOVED_RECT_VS, EFFECT_FS(def.glsl));
       this.effects.set(def.id, p);
     }
     return p;
@@ -511,14 +561,19 @@ export class Renderer {
       u_art: [W, H],
       u_region: [r.x, r.y, r.w, r.h],
       u_k: kk,
-      u_time: this.paused ? 0 : (performance.now() - this.start) / 1000,
+      u_time: this.now() ?? 0,
+      u_loopLength: this.timeline.loop ? this.timeline.duration : 0,
       u_bevelTex: this.heightSpec(o).bevel * kk,
       u_ambient: this.bg ? ambientOf(this.bg) : [0.1, 0.1, 0.1],
     };
-    const b = o.item.bbox!;
+    const b = o.item.frame ?? o.item.bbox!;
     u.u_bbox = [(b[0] + W / 2 - r.x) / r.w, (b[1] + H / 2 - r.y) / r.h, (b[2] + W / 2 - r.x) / r.w, (b[3] + H / 2 - r.y) / r.h];
+    const t = this.now();
+    const loopLength = this.timeline.loop ? this.timeline.duration : undefined;
     for (const def of o.item.effect.params) {
-      const v = o.item.params[def.key] ?? def.default;
+      const base = o.item.params[def.key] ?? def.default;
+      const a = o.item.anim?.[def.key];
+      const v = a && t !== null ? animatedValue(base, a, t, loopLength) : base;
       u[`u_${def.key}`] = def.type === 'color' ? hexToRgb(String(v)) : Number(v);
     }
     const st = o.item.stroke;
@@ -565,8 +620,14 @@ export class Renderer {
   }
 
   /** Draw background then objects into the bound framebuffer. `rect` maps the artboard to clip space. */
-  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean, fb: { fbo: WebGLFramebuffer | null; w: number; h: number; pxPerArt: number; guides: boolean }, fieldK = k) {
+  private composite(k: number, rectOf: (r: Region) => [number, number, number, number], transparent: boolean, checker: boolean, fb: { fbo: WebGLFramebuffer | null; w: number; h: number; pxPerArt: number; guides: boolean; scissor?: [number, number, number, number] }, fieldK = k) {
     const gl = this.gl;
+    // Artboard → clip space is a scale and offset per axis; motion maps compose with it.
+    const [ax0, ayb, ax1, ayt] = rectOf({ x: 0, y: 0, w: this.art.w, h: this.art.h });
+    const sx = (ax1 - ax0) / this.art.w;
+    const sy = (ayb - ayt) / this.art.h;
+    const toClip: Mat = [sx, 0, 0, sy, ax0 + (sx * this.art.w) / 2, ayt + (sy * this.art.h) / 2];
+    const fromClip: Mat = [1 / sx, 0, 0, 1 / sy, -toClip[4] / sx, -toClip[5] / sy];
     const objs = fb.guides ? this.objs : this.objs.filter((o) => !o.item.guide);
     for (const o of objs) {
       this.buildField(o, fieldK);
@@ -582,10 +643,27 @@ export class Renderer {
         setUniforms(gl, p, { ...backgroundUniforms(bg), u_rect: rectOf({ x: 0, y: 0, w: this.art.w, h: this.art.h }), u_art: [this.art.w, this.art.h], u_checker: checker, u_k: k });
         gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
+      // Things moving off the artboard are cut at its edge, as in exports.
+      if (fb.scissor) {
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(...fb.scissor);
+      }
       for (const o of objs) {
         if (!o.field || !o.region) continue;
+        const at = this.placed(o);
+        if (at && at.opacity <= 0.002) continue;
+        const xf = at ? compose(toClip, compose(at.m, fromClip)) : null;
+        let rect = rectOf(o.region);
+        if (xf) {
+          // The moved quad's bounds, for what glass sees behind it.
+          const cs = [applyMat(xf, rect[0], rect[1]), applyMat(xf, rect[2], rect[1]), applyMat(xf, rect[0], rect[3]), applyMat(xf, rect[2], rect[3])];
+          rect = [Math.min(...cs.map((c) => c[0])), Math.min(...cs.map((c) => c[1])), Math.max(...cs.map((c) => c[0])), Math.max(...cs.map((c) => c[1]))];
+        }
         // Glass and lenses see what's drawn so far.
-        const bdu = o.item.effect.backdrop ? this.captureBackdrop(rectOf(o.region), fb, Number(o.item.params.blur ?? 0) * fb.pxPerArt) : null;
+        // (Blurring the copy draws to other targets: no scissor there.)
+        if (fb.scissor) gl.disable(gl.SCISSOR_TEST);
+        const bdu = o.item.effect.backdrop ? this.captureBackdrop(rect, fb, Number(o.item.params.blur ?? 0) * fb.pxPerArt) : null;
+        if (fb.scissor) gl.enable(gl.SCISSOR_TEST);
         const p = this.effectProgram(o.item.effect);
         gl.useProgram(p.prog);
         const pic = o.item.effect.photo ? String(o.item.params.image ?? '') : '';
@@ -605,6 +683,9 @@ export class Renderer {
           ...(o.item.effect.spine ? { u_spineN: sp?.n ?? 0 } : {}),
           ...this.effectUniforms(o),
           u_rect: rectOf(o.region),
+          u_xf: xf ? [xf[0], xf[1], xf[2], xf[3]] : [1, 0, 0, 1],
+          u_xfT: xf ? [xf[4], xf[5]] : [0, 0],
+          ...(at ? { u_opacity: Math.max(0, Math.min(1, (o.item.opacity ?? 1) * at.opacity)) } : {}),
           u_hasClip: o.field.clip ? 1 : 0,
           ...(o.item.effect.photo ? { u_hasPhoto: photo ? 1 : 0, u_imgAspect: meta ? meta.w / meta.h : 1 } : {}),
           ...(o.item.effect.backdrop ? (bdu ?? { u_hasBackdrop: 0 }) : {}),
@@ -618,6 +699,7 @@ export class Renderer {
       }
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       gl.disable(gl.BLEND);
+      gl.disable(gl.SCISSOR_TEST);
     };
   }
 
@@ -639,7 +721,9 @@ export class Renderer {
       const [x1, y0] = toClip(ar.x + (r.x + r.w) * z, ar.y + r.y * z);
       return [x0, y1, x1, y0];
     };
-    const paint = this.composite(k, rectOf, false, this.checker, { fbo: null, w: cw, h: ch, pxPerArt: z * dpr, guides: true });
+    // Scissor box in device pixels, bottom-up.
+    const sc: [number, number, number, number] = [Math.floor(ar.x * dpr), Math.floor((this.canvas.clientHeight - ar.y - ar.h) * dpr), Math.ceil(ar.w * dpr), Math.ceil(ar.h * dpr)];
+    const paint = this.composite(k, rectOf, false, this.checker, { fbo: null, w: cw, h: ch, pxPerArt: z * dpr, guides: true, scissor: sc });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, cw, ch);
     gl.clearColor(0.043, 0.043, 0.051, 1);
@@ -649,49 +733,89 @@ export class Renderer {
 
   /**
    * Render the artboard at `scale` × its size and return straight-alpha RGBA
-   * rows top-to-bottom. Preview fields are rebuilt afterwards.
+   * rows top-to-bottom. Stills show the design at rest: no motion, materials
+   * at time 0. Preview fields are rebuilt afterwards.
    */
   renderPixels(scale: number, transparent: boolean): { data: Uint8ClampedArray<ArrayBuffer>; width: number; height: number } {
+    const s = this.exportFrames(scale, transparent);
+    try {
+      return s.frame(null);
+    } finally {
+      s.close();
+    }
+  }
+
+  /**
+   * Frames for an animation export: fields are built once at export density,
+   * then each frame only redraws at its time on the clock. Call `close` when
+   * done so the preview rebuilds its own fields.
+   */
+  exportFrames(scale: number, transparent: boolean) {
     const gl = this.gl;
-    const max = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number, 8192);
+    const max = Math.min(this.maxTexture, 8192);
     const W = Math.max(1, Math.min(Math.round(this.art.w * scale), max));
     const Hh = Math.max(1, Math.min(Math.round(this.art.h * scale), max));
     const k = W / this.art.w;
     const out = target(gl, W, Hh, formats(gl).rgba8);
     const { w: AW, h: AH } = this.art;
     const rectOf = (r: Region): [number, number, number, number] => [(r.x / AW) * 2 - 1, 1 - ((r.y + r.h) / AH) * 2, ((r.x + r.w) / AW) * 2 - 1, 1 - (r.y / AH) * 2];
+    // Fields at up to 2 texels per artboard px: at 1:1 thin bars and hairlines
+    // pick up half-pixel steps from the distance transform.
+    const prepare = () => this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false }, Math.max(k, Math.min(this.exportSupersample * k, this.exportSupersample)));
+    let paint: () => void;
     try {
-      // Fields at up to 2 texels per artboard px: at 1:1 thin bars and hairlines
-      // pick up half-pixel steps from the distance transform.
-      const paint = this.composite(k, rectOf, transparent, false, { fbo: out.fbo, w: W, h: Hh, pxPerArt: k, guides: false }, Math.max(k, Math.min(this.exportSupersample * k, this.exportSupersample)));
-      gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
-      gl.viewport(0, 0, W, Hh);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      paint();
-      const raw = new Uint8Array(W * Hh * 4);
-      gl.readPixels(0, 0, W, Hh, gl.RGBA, gl.UNSIGNED_BYTE, raw);
-      // Flip rows (GL is bottom-up) and un-premultiply.
-      const data = new Uint8ClampedArray(raw.length);
-      const row = W * 4;
-      for (let y = 0; y < Hh; y++) {
-        const src = (Hh - 1 - y) * row;
-        const dst = y * row;
-        for (let i = 0; i < row; i += 4) {
-          const a = raw[src + i + 3];
-          const m = a > 0 && a < 255 ? 255 / a : 1;
-          data[dst + i] = raw[src + i] * m;
-          data[dst + i + 1] = raw[src + i + 1] * m;
-          data[dst + i + 2] = raw[src + i + 2] * m;
-          data[dst + i + 3] = a;
-        }
-      }
-      return { data, width: W, height: Hh };
-    } finally {
+      paint = prepare();
+    } catch (e) {
       freeTarget(gl, out);
-      for (const o of this.objs) o.fieldKey = '';
-      this.invalidate();
+      throw e;
     }
+    let version = this.version;
+    this.exporting++;
+    const raw = new Uint8Array(W * Hh * 4);
+    return {
+      width: W,
+      height: Hh,
+      frame: (t: number | null): { data: Uint8ClampedArray<ArrayBuffer>; width: number; height: number } => {
+        // Moving geometry swaps outlines between frames: rebuild just those fields.
+        if (version !== this.version) {
+          paint = prepare();
+          version = this.version;
+        }
+        this.pinned = { t };
+        try {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
+          gl.viewport(0, 0, W, Hh);
+          gl.clearColor(0, 0, 0, 0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          paint();
+          gl.readPixels(0, 0, W, Hh, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+        } finally {
+          this.pinned = null;
+        }
+        // Flip rows (GL is bottom-up) and un-premultiply.
+        const data = new Uint8ClampedArray(raw.length);
+        const row = W * 4;
+        for (let y = 0; y < Hh; y++) {
+          const src = (Hh - 1 - y) * row;
+          const dst = y * row;
+          for (let i = 0; i < row; i += 4) {
+            const a = raw[src + i + 3];
+            const m = a > 0 && a < 255 ? 255 / a : 1;
+            data[dst + i] = raw[src + i] * m;
+            data[dst + i + 1] = raw[src + i + 1] * m;
+            data[dst + i + 2] = raw[src + i + 2] * m;
+            data[dst + i + 3] = a;
+          }
+        }
+        return { data, width: W, height: Hh };
+      },
+      close: () => {
+        freeTarget(gl, out);
+        this.exporting--;
+        for (const o of this.objs) o.fieldKey = '';
+        this.invalidate();
+      },
+    };
   }
 
   async exportPNG(scale: number, transparent: boolean): Promise<Uint8Array> {

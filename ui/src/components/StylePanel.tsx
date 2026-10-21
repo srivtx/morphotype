@@ -3,7 +3,8 @@ import { applyPreset, applyStyle, pickPhoto, copyStyle, pasteStyle, selectedNode
 import { allImages } from '../state/assets';
 import { shortcutOf } from '../app/commands';
 import { engine } from '../engine/client';
-import { defaultParams, EFFECTS, effectById, PRESETS, type EffectDef, type ParamValues, type Preset } from '../render/effects';
+import { defaultParams, EFFECTS, effectById, PRESETS, type EffectDef, type ParamDef, type ParamValues, type Preset } from '../render/effects';
+import type { ParamAnim } from '../state/motion';
 import { renderThumb, useThumb } from '../render/thumbs';
 import type { SceneItem } from '../render/renderer';
 import { background, fill, isGroup, pattern, textLayer, type Style } from '../state/model';
@@ -11,6 +12,7 @@ import { edit, setSettings, useStore } from '../state/store';
 import { findNode } from '../state/tree';
 import { ColorField } from './ColorPicker';
 import { Icon } from './icons';
+import { Keyframed } from './Keyframed';
 import { IconButton, Section, Select, Slider, Toggle } from './ui';
 
 // One shared sample outline for every preview card.
@@ -107,6 +109,22 @@ export function StylePanel() {
         for (const t of targets) if (t.style.effect === st.effect) t.style.params[k] = v;
       }
     }, `fx:${selection.join()}:${k}`);
+  /** Turn a setting's animation on (from its value toward `to`), change it, or off (null). */
+  const setAnim = (k: string, fn: ((a: ParamAnim) => void) | null, init?: ParamAnim) =>
+    edit((p) => {
+      for (const n of selectedNodes()) {
+        const target = findNode(p.layers, n.id);
+        if (!target) continue;
+        const targets = isGroup(target) && !target.merge ? collect(target) : [target];
+        for (const t of targets) {
+          if (t.style.effect !== st.effect) continue;
+          const all = (t.style.animate ??= {});
+          if (!fn) delete all[k];
+          else fn((all[k] ??= structuredClone(init ?? st.animate?.[k] ?? { to: 0, period: 2, phase: 0, mode: 'swing' })));
+          if (!Object.keys(all).length) delete t.style.animate;
+        }
+      }
+    }, fn ? `anim:${selection.join()}:${k}` : '');
   const matches = (p: Preset) => p.effect === st.effect && Object.entries(p.params).every(([k, v]) => st.params[k] === v);
   const visible = showAll || q ? presets : presets.slice(0, 12);
   return (
@@ -177,7 +195,9 @@ export function StylePanel() {
           .filter((p) => advanced || !p.advanced)
           .map((p) =>
             p.type === 'color' ? (
-              <ColorField key={p.key} label={p.label} value={String(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+              <Animatable key={p.key} p={p} st={st} setAnim={setAnim}>
+                <ColorField label={p.label} value={String(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+              </Animatable>
             ) : p.options ? (
               <div className="field" key={p.key}>
                 <span>{p.label}</span>
@@ -186,7 +206,9 @@ export function StylePanel() {
             ) : p.min === 0 && p.max === 1 && p.step === 1 ? (
               <Toggle key={p.key} label={p.label} checked={Number(st.params[p.key] ?? p.default) > 0.5} onChange={(v) => setParam(p.key, v ? 1 : 0)} />
             ) : (
-              <Slider key={p.key} label={p.label} min={p.min} max={p.max} step={p.step} reset={p.default} value={Number(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+              <Animatable key={p.key} p={p} st={st} setAnim={setAnim}>
+                <Slider label={p.label} min={p.min} max={p.max} step={p.step} reset={p.default} value={Number(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+              </Animatable>
             ),
           )}
         <button className="link-btn" onClick={() => applyStyle({ effect: st.effect, params: defaultParams(def) })}>
@@ -194,6 +216,17 @@ export function StylePanel() {
         </button>
       </Section>
     </div>
+  );
+}
+
+type SetAnim = (k: string, fn: ((a: ParamAnim) => void) | null, init?: ParamAnim) => void;
+
+/** A material setting with a keyframe button (see Keyframed). */
+function Animatable({ p, st, setAnim, children }: { p: ParamDef; st: Style; setAnim: SetAnim; children: React.ReactNode }) {
+  return (
+    <Keyframed label={p.label} anim={st.animate?.[p.key]} from={st.params[p.key] ?? p.default} color={p.type === 'color'} range={p.type === 'color' ? { min: 0, max: 1, step: 0.01 } : { min: p.min, max: p.max, step: p.step }} set={(fn, init) => setAnim(p.key, fn, init)}>
+      {children}
+    </Keyframed>
   );
 }
 

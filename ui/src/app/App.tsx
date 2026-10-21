@@ -12,6 +12,7 @@ import { Tooltips } from '../components/ui';
 import { BrushBar } from '../components/canvas/BrushBar';
 import { PenOverlay } from '../components/canvas/PenTool';
 import { Viewport } from '../components/canvas/Viewport';
+import { TimelineBar } from '../components/canvas/Timeline';
 import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
 import { buildScene } from '../state/tree';
@@ -22,6 +23,7 @@ import { ShapePicker } from '../components/pickers';
 import { emptyProject, symbolLayer } from '../state/model';
 import { allCommands, matchKey, run } from './commands';
 import { startAutosave } from './autosave';
+import { startLiveGeometry } from './geoMotion';
 import { newDesign, openLast, pageBackground } from './projects';
 import { openDocument } from '../state/store';
 
@@ -238,6 +240,7 @@ function DesignMode() {
       </aside>
       <section className="center">
         <Viewport />
+        <TimelineBar />
         {empty && tool === 'select' && !editing && <EmptyStart />}
         {tool === 'text' && !editing && (
           <div className="edit-pill" role="status">
@@ -289,6 +292,7 @@ export function App() {
         store.set({ fonts, ready: true });
         prewarmThumbs();
         startAutosave();
+        startLiveGeometry();
         // `?editor` (tests, demos) opens straight into a scratch design.
         const q = new URLSearchParams(location.search);
         if (q.has('editor')) openDocument(emptyProject());

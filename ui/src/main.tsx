@@ -3,8 +3,10 @@ import { createRoot } from 'react-dom/client';
 import { getRenderer, placeReference } from './app/actions';
 import { compareWithReference, fitToReference, tunables } from './app/compare';
 import { App } from './app/App';
+import { holdLiveGeometry, liveStats } from './app/geoMotion';
 import { engine } from './engine/client';
 import { store } from './state/store';
+import { clock } from './state/clock';
 import { TEMPLATES } from './state/templates';
 import './styles.css';
 
@@ -13,6 +15,8 @@ import './styles.css';
   store,
   engine,
   templates: TEMPLATES,
+  clock,
+  liveGeometry: { stats: liveStats, hold: holdLiveGeometry },
   tools: { placeReference, compareWithReference, fitToReference, tunables },
   get renderer() {
     return getRenderer();

@@ -8,6 +8,8 @@ import { PRESETS } from '../render/effects';
 import { CANVAS_PRESETS, isGroup, newModifier, SYMBOL_UI, symbolLayer } from '../state/model';
 import { edit, redo, select, setSettings, store, toast, undo } from '../state/store';
 import { ancestors } from '../state/tree';
+import { clock, timelineOf } from '../state/clock';
+import { addCentreDot, addFace, tileSheet } from './assists';
 import { goHome } from './projects';
 import {
   addEmptyLayer,
@@ -20,6 +22,7 @@ import {
   convertToOutline,
   copyPNG,
   copySelected,
+  copyMotion,
   copyStyle,
   cutSelected,
   distributeSelected,
@@ -28,6 +31,7 @@ import {
   editText,
   endTextEdit,
   exportJPG,
+  exportVideo,
   exportPNG,
   exportSVG,
   flipSelected,
@@ -37,6 +41,7 @@ import {
   nudge,
   openProject,
   paste,
+  pasteMotion,
   pasteStyle,
   primaryNode,
   removeSelected,
@@ -89,6 +94,9 @@ export function commands(): Command[] {
     { id: 'export-jpg', title: 'Export JPG (for social posts)', group: 'Export', icon: 'export', keywords: 'instagram thumbnail jpeg', run: () => void exportJPG() },
     { id: 'export-svg', title: 'Export SVG', group: 'Export', icon: 'export', keys: ['shift+mod+e'], keywords: 'vector logo', run: () => void exportSVG() },
     { id: 'copy-png', title: 'Copy as image', group: 'Export', icon: 'copy', keys: ['shift+mod+c'], keywords: 'clipboard png', run: () => void copyPNG() },
+    { id: 'export-video', title: 'Export video (one pass of the timeline)', group: 'Export', icon: 'film', keywords: 'mp4 webm animation motion movie record', run: () => void exportVideo() },
+    { id: 'play-pause', title: 'Play or pause motion', group: 'View', icon: 'play', keys: ['k'], keywords: 'animation timeline motion stop', when: design, run: () => clock.toggle(timelineOf(store.get().project)) },
+    { id: 'replay', title: 'Play motion from the start', group: 'View', icon: 'replay', keys: ['shift+k'], keywords: 'animation timeline restart entrance', when: design, run: () => clock.replay(timelineOf(store.get().project)) },
     { id: 'export-font', title: 'Export as font…', group: 'Export', icon: 'font', keywords: 'ttf woff install', run: () => store.set({ dialog: { kind: 'font' } }) },
     // Edit
     { id: 'undo', title: 'Undo', group: 'Edit', icon: 'undo', keys: ['mod+z'], run: undo },
@@ -115,6 +123,8 @@ export function commands(): Command[] {
     { id: 'select-parent', title: 'Select parent group', group: 'Edit', keys: ['shift+enter'], hidden: true, when: hasSel, run: () => selectParent() },
     { id: 'copy-style', title: 'Copy style', group: 'Edit', icon: 'droplet', keys: ['alt+mod+c'], when: hasSel, run: copyStyle },
     { id: 'paste-style', title: 'Paste style', group: 'Edit', icon: 'droplet', keys: ['alt+mod+v'], when: hasSel, run: pasteStyle },
+    { id: 'copy-motion', title: 'Copy motion', group: 'Edit', icon: 'motion', keys: ['alt+shift+mod+c'], keywords: 'animation entrance loop stagger', when: hasSel, run: copyMotion },
+    { id: 'paste-motion', title: 'Paste motion', group: 'Edit', icon: 'motion', keys: ['alt+shift+mod+v'], keywords: 'animation entrance loop stagger', when: hasSel, run: pasteMotion },
     { id: 'next-layer', title: 'Select next layer', group: 'Edit', keys: ['tab'], hidden: true, run: () => cycle(1) },
     { id: 'prev-layer', title: 'Select previous layer', group: 'Edit', keys: ['shift+tab'], hidden: true, run: () => cycle(-1) },
     // Tools
@@ -133,6 +143,9 @@ export function commands(): Command[] {
     ...(Object.keys(SYMBOL_UI) as SymbolKind[]).map(
       (k): Command => ({ id: `add-${k}`, title: `Add ${SYMBOL_UI[k].label.toLowerCase()}`, group: 'Add', icon: 'shapes', keywords: `shape symbol ${SYMBOL_UI[k].group}`, run: () => addShape(symbolLayer(k)) }),
     ),
+    { id: 'add-face', title: 'Add a face (eyes and a smile) to the selection', group: 'Add', icon: 'sparkle', keywords: 'eyes smile mascot character cute emoji', when: hasSel, run: () => primaryNode() && addFace(primaryNode()!.id) },
+    { id: 'add-centre-dot', title: 'Add a centre dot to the selection', group: 'Add', icon: 'plus', keywords: 'flower middle center dot boss badge', when: hasSel, run: () => primaryNode() && addCentreDot(primaryNode()!.id) },
+    { id: 'tile-sheet', title: 'Arrange as a sheet of coloured tiles', group: 'Arrange', icon: 'grid', keywords: 'grid tiles sticker sheet layout colour blocks', run: tileSheet },
     // Object
     { id: 'new-layer', title: 'New empty layer', group: 'Arrange', icon: 'plus', keys: ['shift+mod+n'], keywords: 'blank transparent layer folder draw into', when: () => store.get().mode === 'design', run: addEmptyLayer },
     { id: 'group', title: 'Group', group: 'Arrange', icon: 'group', keys: ['mod+g'], when: hasSel, run: () => groupSelected(false) },

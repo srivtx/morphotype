@@ -114,6 +114,10 @@ try {
   };
 
   // ---- every template renders ----
+  await page.evaluate(() => {
+    window.morphotype.clock.pause({ duration: 6, loop: true });
+    window.morphotype.clock.seek(5);
+  });
   await page.keyboard.press(`${mod}+n`);
   const names = (await page.locator('.template strong').allTextContents()).filter((n) => n !== 'Blank canvas');
   await page.keyboard.press('Escape');
@@ -131,6 +135,11 @@ try {
       p2.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
       await p2.goto(`http://127.0.0.1:${port}/?editor`);
       await p2.waitForFunction(() => window.morphotype?.renderer, null, { timeout: 30_000 });
+      // Hold motion still, after every entrance, so screenshots are stable and software GL isn't redrawing every frame.
+      await p2.evaluate(() => {
+        window.morphotype.clock.pause({ duration: 6, loop: true });
+        window.morphotype.clock.seek(5);
+      });
       for (let i = lane; i < names.length; i += lanes) {
         const name = names[i];
         const result = await p2.evaluate(async (name) => {
@@ -490,6 +499,216 @@ try {
   await settle();
   const withoutFlag = images(await download(async () => {}, () => page.keyboard.press(`Shift+${mod}+e`)));
   check(withoutFlag === withRef + 1, `references are left out of exports (${withRef} vs ${withoutFlag})`);
+
+  // ---- moving geometry: a pen line's Wave phase flows on the clock ----
+  {
+    const lineId = await page.evaluate(() => {
+      const m = window.morphotype;
+      const p = m.store.get().project;
+      const uid = `mwave${Date.now().toString(36)}`;
+      const line = {
+        id: `lwave${Date.now().toString(36)}`, name: 'Flow', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1,
+        modifiers: [{ kind: 'wave', amplitude: 0.06, wavelength: 1.2, phase: 0, on: true, uid }],
+        content: { type: 'line', d: 'M-0.8 0 C-0.4 -0.1 0.4 0.1 0.8 0', size: 900, width: 14, cap: 'round' },
+        style: { effect: 'flat', params: { fill: '#2563eb' } },
+      };
+      m.clock.pause({ duration: 1, loop: true });
+      m.store.set({ project: { ...p, layers: [line], timeline: { duration: 1, loop: true } }, selection: [line.id], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+      return line.id;
+    });
+    await settle(900);
+    await page.locator('.mod .mod-head [data-tip="Modifier options"]').first().click();
+    await page.getByRole('menuitem', { name: 'More controls' }).click();
+    await page.getByRole('button', { name: 'Animate Phase' }).click();
+    check(await until((st) => { const a = Object.entries(layersOf(st).find((l) => l.id === lineId)?.animate ?? {}); return a.length === 1 && /^mod:.+:phase$/.test(a[0][0]) && a[0][1].mode === 'ramp' && a[0][1].to > 6.2; }), 'a modifier slider has a keyframe: Wave phase ramps all the way round');
+    const sampled = await page.evaluate(async (id) => {
+      const m = window.morphotype;
+      const before = m.store.get();
+      m.clock.play({ duration: 1, loop: true });
+      const outlines = new Set();
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 120));
+        outlines.add(m.renderer.objs.find((o) => o.item.id === id)?.item.d);
+      }
+      const after = m.store.get();
+      m.clock.pause({ duration: 1, loop: true });
+      return { distinct: outlines.size, sameProject: before.project === after.project, history: after.past.length - before.past.length, frames: m.liveGeometry.stats.frames };
+    }, lineId);
+    check(sampled.distinct >= 3 && sampled.frames > 0, `the line's outline flows while the clock plays (${sampled.distinct} outlines in 12 samples)`);
+    check(sampled.sameProject && sampled.history === 0, 'moving geometry stays out of the project and the undo history');
+    await page.screenshot({ path: path.join(out, 'new-01b-flowing-line.png') });
+    // Video: the line is rebuilt for each frame's time.
+    await page.evaluate(() => {
+      const m = window.morphotype;
+      window.__geoBuilds = 0;
+      const ob = m.engine.buildExact.bind(m.engine);
+      m.engine.buildExact = (d) => (d.renders?.length === 1 && d.quality === 360 && window.__geoBuilds++, ob(d));
+    });
+    const video = await download(async () => {}, () => page.getByRole('button', { name: 'Export video' }).click());
+    const geoBuilds = await page.evaluate(() => window.__geoBuilds);
+    // (Software GL in the headless shell records an empty file; the frames themselves are checked on a GPU.)
+    check(geoBuilds >= 31, `video export builds the moving line for every frame (${geoBuilds} builds, ${(video.length / 1024).toFixed(0)} KB file)`);
+  }
+
+  // ---- letter by letter: a typed word rises one letter at a time, on the canvas and in exported frames ----
+  {
+    await page.evaluate(() => {
+      const m = window.morphotype;
+      const p = m.store.get().project;
+      m.clock.pause({ duration: 2, loop: true });
+      // The Motion section opens with the selection (it remembers being closed).
+      localStorage.setItem('mt.section.motion', '1');
+      m.store.set({ project: { ...p, layers: [], background: { fill: { kind: 'solid', colors: ['#ffffff'], angle: 0 }, grain: 0, tile: null, pattern: null }, timeline: { duration: 2, loop: true } }, selection: [], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+    });
+    await settle(400);
+    await page.keyboard.press('t');
+    await page.mouse.click(vb.x + vb.width / 2, vb.y + vb.height / 2);
+    await settle(300);
+    await page.keyboard.type('Hello', { delay: 20 });
+    await page.keyboard.press('Escape');
+    await settle(400);
+    const textId = await page.evaluate(() => {
+      const st = window.morphotype.store;
+      const p = structuredClone(st.get().project);
+      const t = p.layers.find((l) => l.content?.text === 'Hello');
+      t.style = { effect: 'flat', params: { fill: '#000000' } };
+      t.motion = { loop: 'none', amount: 16, period: 2, phase: 0, enter: 'rise', distance: 150, delay: 0, transition: { type: 'easing', duration: 0.5, ease: [0.16, 1, 0.3, 1], bounce: 0.25, stiffness: 200, damping: 20, mass: 1 }, stagger: 0 };
+      st.set({ project: p, selection: [t.id] });
+      return t.id;
+    });
+    await settle(600);
+    const together = await page.evaluate((id) => ({ objs: window.morphotype.renderer.objs.filter((o) => o.item.id.startsWith(id)).length, tagged: !!window.morphotype.store.get().build.renders.find((r) => r.id === id)?.glyphs }), textId);
+    check(together.objs === 1 && !together.tagged, 'text that moves as one is drawn as one object, with no letter tags');
+    await page.getByRole('radio', { name: 'One by one' }).click();
+    check(await until((st) => layersOf(st).find((l) => l.id === textId)?.motion?.letters === 'letters'), 'Motion > Letters > One by one sets the text moving letter by letter');
+    const letters = await page.evaluate(async (id) => {
+      const m = window.morphotype;
+      for (let k = 0; k < 200 && !m.renderer.objs.some((o) => o.item.id === `${id}#4`); k++) await new Promise((r) => setTimeout(r, 25));
+      const objs = m.renderer.objs.filter((o) => o.item.id.startsWith(`${id}#`));
+      return { n: objs.length, offsets: objs.map((o) => +o.item.motion[0].offset.toFixed(3)), first: objs[0]?.item.bbox, last: objs.at(-1)?.item.bbox, gap: m.store.get().project.layers.find((l) => l.id === id).motion.stagger };
+    }, textId);
+    check(letters.n === 5 && letters.offsets.every((o, i) => Math.abs(o - i * letters.gap) < 1e-6), `the five letters start ${letters.gap} s apart (${letters.offsets.join(', ')})`);
+    // Ink inside each letter's resting box, early on and once all have arrived.
+    const ink = await page.evaluate(({ first, last }) => {
+      const m = window.morphotype;
+      const { width: W, height: H } = m.store.get().project.canvas;
+      const frames = m.renderer.exportFrames(1, false);
+      const count = (img, b) => {
+        let n = 0;
+        for (let y = Math.floor(b[1] + H / 2); y < Math.ceil(b[3] + H / 2); y++)
+          for (let x = Math.floor(b[0] + W / 2); x < Math.ceil(b[2] + W / 2); x++) {
+            const i = (y * img.width + x) * 4;
+            if (img.data[i] + img.data[i + 1] + img.data[i + 2] < 384) n++;
+          }
+        return n;
+      };
+      try {
+        const early = frames.frame(0.12);
+        const late = frames.frame(1.5);
+        return { early: [count(early, first), count(early, last)], late: [count(late, first), count(late, last)] };
+      } finally {
+        frames.close();
+      }
+    }, letters);
+    check(ink.early[0] > 30 && ink.early[1] === 0 && ink.late[0] > 30 && ink.late[1] > 30, `exported frames: early the first letter is rising and the last hasn't started (${ink.early}), later both are in place (${ink.late})`);
+    await page.evaluate(() => window.morphotype.clock.seek(0.16));
+    await settle(500);
+    await page.screenshot({ path: path.join(out, 'new-01c-letter-by-letter.png') });
+    await page.evaluate(() => window.morphotype.store.set({ selection: [] }));
+  }
+
+  // ---- a path of stops: Then moves on through every stop, on the canvas and in video ----
+  {
+    const ballId = await page.evaluate(() => {
+      const m = window.morphotype;
+      const p = m.templates.find((t) => t.name.startsWith('Learn 10')).make();
+      const ball = p.layers.find((l) => l.name === 'Ball');
+      m.clock.pause({ duration: 5, loop: true });
+      m.clock.seek(0);
+      m.store.set({ project: p, selection: [ball.id], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+      return ball.id;
+    });
+    await settle(1200);
+    const ballOf = (st) => layersOf(st).find((l) => l.id === ballId);
+    const ghosts = await page.locator('.move-ghost').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
+    check(ghosts.join('|') === 'Stop 1 of Ball|Stop 2 of Ball|Stop 3 of Ball', `every stop is a numbered dashed copy on the canvas (${ghosts.length})`);
+    check((await page.locator('.move-path polyline').getAttribute('points')).trim().split(/\s+/).length === 4, 'a dashed path joins its place and the three stops');
+    // Where it is on the canvas at a time on the clock (px from its place).
+    const at = (t) =>
+      page.evaluate(
+        ({ id, t }) => {
+          const m = window.morphotype;
+          m.clock.seek(t);
+          const o = m.renderer.objs.find((x) => x.item.id === id);
+          const pl = m.renderer.placed(o);
+          return [Math.round(pl.m[4]), Math.round(pl.m[5])];
+        },
+        { id: ballId, t },
+      );
+    const near = ([x, y], [X, Y]) => Math.abs(x - X) <= 3 && Math.abs(y - Y) <= 3;
+    const visits = [await at(0.9), await at(2), await at(3.1), await at(4.9)];
+    check(near(visits[0], [0, 0]) && near(visits[1], [280, -220]) && near(visits[2], [560, 0]) && near(visits[3], [840, -220]), `the ball plays its three stops in order on the canvas (${visits.map((v) => v.join(',')).join(' → ')})`);
+    await page.evaluate(() => window.morphotype.clock.seek(2.45));
+    await settle(400);
+    await page.screenshot({ path: path.join(out, 'new-01c-path-of-stops.png') });
+    // Drag the third copy with ⇧: it keeps to one axis.
+    const g3 = await page.locator('[aria-label="Stop 3 of Ball"]').boundingBox();
+    await page.keyboard.down('Shift');
+    await page.mouse.move(g3.x + g3.width / 2, g3.y + g3.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(g3.x + g3.width / 2 - 60, g3.y + g3.height / 2 + 8, { steps: 6 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    let st = await state();
+    const s3 = ballOf(st).motion.stops[1];
+    check(s3.x < 800 && s3.y === -220, `dragging a stop's copy moves that stop, ⇧ on one axis (${s3.x}, ${s3.y})`);
+    // The timeline: Then is one clip with a segment per stop.
+    if (await page.getByRole('button', { name: 'Open the timeline' }).count()) await page.getByRole('button', { name: 'Open the timeline' }).click();
+    await page.locator('.tl-step').first().waitFor({ timeout: 5000 });
+    check((await page.locator('.tl-step').count()) === 3, 'Then is a sequence clip with a segment for each stop');
+    const handle = await page.locator('.tl-step').nth(1).locator('.tl-clip-handle').boundingBox();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2 + 40, handle.y + handle.height / 2, { steps: 5 });
+    await page.mouse.up();
+    st = await state();
+    const retimed = ballOf(st).motion;
+    check(retimed.stops[0].transition?.duration > 0.75 && retimed.leaveTransition.duration === 0.7, `dragging a boundary retimes that stop only (${retimed.stops[0].transition?.duration} s)`);
+    await page.getByRole('button', { name: 'Stop 3', exact: true }).click();
+    await page.locator('.tl-editor header b', { hasText: 'Stop 3' }).waitFor({ timeout: 5000 });
+    check(true, 'clicking a segment edits that stop');
+    await page.keyboard.press('Escape');
+    await page.locator('.tl-editor').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    if (!(await page.locator('.add-stop').count())) await page.locator('.section-toggle:text-is("Motion")').click();
+    await page.locator('.add-stop').click();
+    st = await state();
+    check(ballOf(st).motion.stops.length === 3 && (await page.locator('.tl-step').count()) === 4 && (await page.locator('.move-ghost').count()) === 4, '+ Add a stop adds one more Move to… after the last');
+    await page.keyboard.press(`${mod}+z`);
+    await page.keyboard.press(`${mod}+z`);
+    await page.keyboard.press(`${mod}+z`);
+    st = await state();
+    check(ballOf(st).motion.stops.length === 2 && ballOf(st).motion.stops[1].x === 840 && !ballOf(st).motion.stops[0].transition, 'undo takes the stop, the retime and the drag back');
+    // Video: each frame is drawn at its own time, so the ball passes every stop in order.
+    await page.evaluate((id) => {
+      const r = window.morphotype.renderer;
+      window.__ballFrames = [];
+      const placed = r.placed.bind(r);
+      r.placed = (o) => {
+        const pl = placed(o);
+        if (r.exporting && o.item.id === id && pl) window.__ballFrames.push([r.pinned?.t, Math.round(pl.m[4]), Math.round(pl.m[5])]);
+        return pl;
+      };
+    }, ballId);
+    const t0 = Date.now();
+    const video = await download(async () => {}, () => page.getByRole('button', { name: 'Export video' }).first().click());
+    const frames = await page.evaluate(() => window.__ballFrames);
+    const frameAt = (t) => frames.find((f) => Math.abs(f[0] - t) < 1 / 60);
+    const inVideo = [0.9, 2, 3.1, 4.9].map((t) => frameAt(t)?.slice(1) ?? [NaN, NaN]);
+    check(
+      frames.length >= 150 && near(inVideo[0], [0, 0]) && near(inVideo[1], [280, -220]) && near(inVideo[2], [560, 0]) && near(inVideo[3], [840, -220]),
+      `exported video plays the stops in order (${frames.length} frames: ${inVideo.map((v) => v.join(',')).join(' → ')}; ${((Date.now() - t0) / 1000).toFixed(1)} s, ${(video.length / 1024).toFixed(0)} KB)`,
+    );
+  }
 
   // ---- depth, glass and the icon grid ----
   await openTemplate('Frosted 404');

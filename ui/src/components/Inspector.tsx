@@ -1,21 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { compareWithReference, fitWithFeedback, referenceLayer, tunables, type CompareResult } from '../app/compare';
 import { addIconGrid, alignSelected, distributeSelected, editPoints, editWarp, flipSelected, nodeBox, primaryNode, selectedNodes, setBackground, styleOf, unionBox, updateNode } from '../app/actions';
+import { addCentreDot, addFace, variationsOf, type Variant } from '../app/assists';
+import { arrange, DEFAULT_LAYOUT, type Layout, type LayoutKind } from '../app/layout';
 import { run, shortcutOf } from '../app/commands';
 import type { Content, Dash, ModEntry, ModifierKind, Squiggle, SquiggleKind, SymbolKind } from '../engine/types';
 import { backgroundCss, fillCss } from '../render/background';
 import { effectById } from '../render/effects';
 import { luminance, QUICK_COLORS, recolor } from '../render/palette';
 import { useShape, viewBoxOf } from '../render/thumbs';
-import { CANVAS_PRESETS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Depth, depth, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
+import { CANVAS_PRESETS, CAP_OPTIONS, fieldShown, isChoice, isGroup, nodeLabel, MODIFIER_UI, newModifier, style, SYMBOL_DEFAULTS, SYMBOL_UI, pattern, stroke, symbolLayer, tile, uid, type BlendMode, type Depth, depth, type Stroke, type StrokeAlign, type Fill, type FillKind, type Pattern, type PatternKind, type Group, type Node, type ShapeLayer, type Style } from '../state/model';
 import { BG_PRESETS, lookOf, SHAPE_RECIPES, type Recipe } from '../state/recipes';
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
 import { allLayers, findNode } from '../state/tree';
+import { modAnimKey, pruneGeoAnims, symAnimKey } from '../state/geoMotion';
+import type { ParamAnim } from '../state/motion';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
+import { MotionSection } from './MotionPanel';
 import { Icon } from './icons';
 import { EffectThumb } from './StylePanel';
+import { Keyframed, type SetAnimOf } from './Keyframed';
 import { ModifierPicker, ShapePicker } from './pickers';
 import { IconButton, Menu, MenuItem, MenuSep, NumberBox, Popover, Section, Segmented, Select, Slider, Toggle } from './ui';
 
@@ -34,6 +40,8 @@ export function Inspector() {
       <Appearance nodes={nodes} />
       <TransformSection nodes={nodes} />
       {nodes.length === 1 && <NodeEditor node={primary} />}
+      {(nodes.length > 1 || (isGroup(primary) && primary.children.length > 1)) && <LayoutSection />}
+      <MotionSection nodes={nodes} />
       <CompareSection layer={nodes.length === 1 && !isGroup(primary) ? primary : undefined} />
       {nodes.length > 1 && (
         <Section title="Selection" id="multi">
@@ -49,6 +57,39 @@ export function Inspector() {
         </Section>
       )}
     </div>
+  );
+}
+
+/** Row, column, grid or fan for the selection (or a group's children), live. */
+function LayoutSection() {
+  const [L, setL] = useState<Layout>(DEFAULT_LAYOUT);
+  const change = (patch: Partial<Layout>) => {
+    const next = { ...L, ...patch };
+    setL(next);
+    if (!arrange(next)) toast('Select two or more shapes to lay out', 'info');
+  };
+  return (
+    <Section title="Layout" id="layout" defaultOpen={false}>
+      <Segmented<LayoutKind>
+        value={L.kind}
+        onChange={(kind) => change({ kind })}
+        options={[
+          { value: 'row', label: 'Row' },
+          { value: 'column', label: 'Column' },
+          { value: 'grid', label: 'Grid' },
+          { value: 'fan', label: 'Fan', title: 'A hand of cards: turned and spread on an arc' },
+        ]}
+      />
+      <Slider label="Gap" value={L.gap} min={-400} max={400} step={1} reset={DEFAULT_LAYOUT.gap} onChange={(gap) => change({ gap })} />
+      {L.kind === 'grid' && <Slider label="Columns" value={L.cols} min={1} max={12} step={1} reset={3} onChange={(cols) => change({ cols })} />}
+      {L.kind === 'fan' && (
+        <>
+          <Slider label="Spread" value={L.spread} min={0} max={180} step={1} suffix="°" reset={30} onChange={(spread) => change({ spread })} />
+          <Slider label="Curve" value={L.curve} min={0} max={1} step={0.01} reset={0.5} onChange={(curve) => change({ curve })} />
+        </>
+      )}
+      <p className="hint">Changes lay them out again from where they started, so you can try settings freely. Pair Fan with a staggered entrance for a deal of cards.</p>
+    </Section>
   );
 }
 
@@ -458,8 +499,42 @@ function GroupEditor({ g }: { g: Group }) {
           </button>
         </div>
       </Section>
-      {g.merge && <Modifiers mods={g.modifiers} onChange={(fn, key) => set((x) => fn(x.modifiers), key)} owner={g.id} />}
+      {g.merge && <Modifiers mods={g.modifiers} onChange={(fn, key) => set((x) => (fn(x.modifiers), pruneGeoAnims(x)), key)} owner={g.id} anims={geoAnims(g)} />}
     </>
+  );
+}
+
+/** Keyframes on a node's modifier and shape settings: they rebuild its outline on the scene clock. */
+interface GeoAnims {
+  of: Record<string, ParamAnim> | undefined;
+  set: (key: string) => SetAnimOf;
+}
+
+function geoAnims(n: Node): GeoAnims {
+  return {
+    of: n.animate,
+    set: (k) => (fn, init) =>
+      updateNode(
+        n.id,
+        (x) => {
+          const all = (x.animate ??= {});
+          if (!fn) delete all[k];
+          else fn((all[k] ??= structuredClone(init ?? { to: 0, period: 2, phase: 0, mode: 'swing' })));
+          if (!Object.keys(all).length) delete x.animate;
+        },
+        fn ? `ganim:${n.id}:${k}` : '',
+      ),
+  };
+}
+
+/** A number slider, with a keyframe button where the setting can move. */
+function KeyedSlider({ anims, k, label, min, max, step, value, reset, start, onChange }: { anims?: GeoAnims; k: string; label: string; min: number; max: number; step: number; value: number; reset?: number; start?: Partial<ParamAnim>; onChange: (v: number) => void }) {
+  const slider = <Slider label={label} min={min} max={max} step={step} value={value} reset={reset} onChange={onChange} />;
+  if (!anims) return slider;
+  return (
+    <Keyframed label={label} anim={anims.of?.[k]} from={value} range={{ min, max, step }} start={start} set={anims.set(k)}>
+      {slider}
+    </Keyframed>
   );
 }
 
@@ -476,7 +551,7 @@ function LayerEditor({ layer }: { layer: ShapeLayer }) {
         <Toggle label="Reference only" checked={!!layer.guide} onChange={(v) => set((l) => (l.guide = v || undefined))} hint="Shown while you design, left out of PNG, SVG and project previews: for pictures you trace over" />
       </Section>
       <QuickLooks layer={layer} />
-      <Modifiers mods={layer.modifiers} owner={layer.id} layer={layer} onChange={(fn, key) => set((l) => fn(l.modifiers), key)} />
+      <Modifiers mods={layer.modifiers} owner={layer.id} layer={layer} onChange={(fn, key) => set((l) => (fn(l.modifiers), pruneGeoAnims(l)), key)} anims={geoAnims(layer)} />
     </>
   );
 }
@@ -488,7 +563,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
     case 'text':
       return <TextEditor c={c} setC={setC} />;
     case 'symbol':
-      return <SymbolEditor c={c} setC={setC} />;
+      return <SymbolEditor c={c} setC={setC} layer={layer} />;
     case 'path':
       return (
         <Section title="Outline" id="path">
@@ -510,16 +585,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
           <Slider label="Width" value={c.width} min={0.5} max={300} step={0.5} suffix="px" onChange={(v) => setC<'line'>((x) => (x.width = v), 'lw')} />
           <div className="field">
             <span>Ends</span>
-            <Segmented
-              size="sm"
-              value={c.cap}
-              options={[
-                { value: 'round', label: 'Round', title: 'Round ends, like a marker' },
-                { value: 'butt', label: 'Flat', title: 'Cut square at the last point' },
-                { value: 'square', label: 'Square', title: 'Square, half the width past the last point' },
-              ]}
-              onChange={(v) => setC<'line'>((x) => (x.cap = v))}
-            />
+            <Segmented size="sm" value={c.cap} options={CAP_OPTIONS} onChange={(v) => setC<'line'>((x) => (x.cap = v))} />
           </div>
           <Slider label="Size" value={c.size} min={10} max={3000} step={1} onChange={(v) => setC<'line'>((x) => (x.size = v), 'ls')} />
           <LineAlong c={c} setC={setC} />
@@ -543,6 +609,11 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
   }
 }
 
+/** A choice field: buttons for up to three options, a menu for more. */
+export function Choice({ value, options, onChange }: { value: string; options: { value: string; label: string; title?: string }[]; onChange: (v: string) => void }) {
+  return options.length <= 3 ? <Segmented size="sm" value={value} options={options} onChange={onChange} /> : <Select value={value} options={options} onChange={onChange} />;
+}
+
 function SymbolThumbSmall({ spec }: { spec: Of<'symbol'>['symbol'] }) {
   const shape = useShape(`symp:${JSON.stringify(spec)}`, () => ({
     layers: [{ id: 's', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1, sx: 1, sy: 1, modifiers: [], content: { type: 'symbol', symbol: spec, size: 100 } }],
@@ -554,7 +625,67 @@ function SymbolThumbSmall({ spec }: { spec: Of<'symbol'>['symbol'] }) {
   );
 }
 
-function SymbolEditor({ c, setC }: { c: Of<'symbol'>; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
+function VariantThumb({ v }: { v: Variant }) {
+  const shape = useShape(`var:${JSON.stringify(v)}`, () => ({
+    layers: [{ id: 's', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1, sx: 1, sy: 1, modifiers: v.modifiers, content: { type: 'symbol', symbol: v.symbol, size: 100 } }],
+  }));
+  return (
+    <svg viewBox={shape ? viewBoxOf(shape.box, 0.12) : '-50 -50 100 100'} className="thumb-svg" aria-hidden>
+      {shape && <path d={shape.d} />}
+    </svg>
+  );
+}
+
+/** One-click helpers under a shape's controls: variations, a centre dot, a face. */
+function ShapeAssists({ layer }: { layer: ShapeLayer }) {
+  const [variants, setVariants] = useState<Variant[] | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  if (layer.content.type !== 'symbol') return null;
+  const c = layer.content;
+  const roll = () => setVariants(variationsOf(c.symbol, layer.modifiers));
+  const pick = (v: Variant) =>
+    updateNode(layer.id, (n) => {
+      if (isGroup(n) || n.content.type !== 'symbol') return;
+      n.content.symbol = structuredClone(v.symbol);
+      n.modifiers = structuredClone(v.modifiers);
+    });
+  return (
+    <>
+      <div className="button-row">
+        <button ref={btn} className="btn small" onClick={roll} data-tip="New takes on this shape to pick from">
+          <Icon name="wand" size={13} /> Variations
+        </button>
+        <button className="btn small" onClick={() => addCentreDot(layer.id)} data-tip="A dot in a contrasting colour, in the middle">
+          <Icon name="plus" size={13} /> Centre dot
+        </button>
+        <button className="btn small" onClick={() => addFace(layer.id)} data-tip="Eyes and a smile, sized to the shape">
+          <Icon name="sparkle" size={13} /> Face
+        </button>
+      </div>
+      {variants && (
+        <Popover anchor={btn.current} onClose={() => setVariants(null)} width={300} placement="left-start">
+          <div className="picker">
+            <div className="picker-label">Pick one · each is one undo step</div>
+            <div className="picker-grid">
+              {variants.map((v, i) => (
+                <button key={i} className="pick" onClick={() => pick(v)} aria-label={`Variation ${i + 1}`}>
+                  <VariantThumb v={v} />
+                </button>
+              ))}
+            </div>
+            <div className="button-row">
+              <button className="btn small" onClick={roll}>
+                <Icon name="reset" size={13} /> More
+              </button>
+            </div>
+          </div>
+        </Popover>
+      )}
+    </>
+  );
+}
+
+function SymbolEditor({ c, setC, layer }: { c: Of<'symbol'>; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void; layer: ShapeLayer }) {
   const advanced = useStore((s) => s.settings.advanced);
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -581,19 +712,30 @@ function SymbolEditor({ c, setC }: { c: Of<'symbol'>; setC: <T extends Content['
       )}
       <Slider label="Size" value={c.size} min={10} max={1600} step={1} onChange={(v) => setC<'symbol'>((x) => (x.size = v), 'size')} />
       {ui.fields
-        .filter((f) => advanced || !f.advanced)
-        .map((f) => (
-          <Slider
-            key={f.key}
-            label={f.label}
-            min={f.min}
-            max={f.max}
-            step={f.step}
-            value={Number((c.symbol as unknown as Record<string, number>)[f.key] ?? 0)}
-            reset={Number((SYMBOL_DEFAULTS[c.symbol.kind] as unknown as Record<string, number>)[f.key])}
-            onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
-          />
-        ))}
+        .filter((f) => isChoice(f) || advanced || !f.advanced)
+        .map((f) =>
+          isChoice(f) ? (
+            <div className="field" key={f.key}>
+              <span>{f.label}</span>
+              {/* Files from before a choice existed have no value: the engine's default is the first option. */}
+              <Choice value={String((c.symbol as unknown as Record<string, string>)[f.key] ?? f.options[0].value)} options={f.options} onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, string>)[f.key] = v))} />
+            </div>
+          ) : (
+            <KeyedSlider
+              key={f.key}
+              anims={geoAnims(layer)}
+              k={symAnimKey(f.key)}
+              label={f.label}
+              min={f.min}
+              max={f.max}
+              step={f.step}
+              value={Number((c.symbol as unknown as Record<string, number>)[f.key] ?? 0)}
+              reset={Number((SYMBOL_DEFAULTS[c.symbol.kind] as unknown as Record<string, number>)[f.key])}
+              onChange={(v) => setC<'symbol'>((x) => ((x.symbol as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
+            />
+          ),
+        )}
+      <ShapeAssists layer={layer} />
     </Section>
   );
 }
@@ -757,7 +899,7 @@ function QuickLooks({ layer }: { layer: ShapeLayer }) {
   );
 }
 
-export function Modifiers({ mods, onChange, owner, layer }: { mods: ModEntry[]; onChange: (fn: (m: ModEntry[]) => void, key?: string) => void; owner: string; layer?: ShapeLayer }) {
+export function Modifiers({ mods, onChange, owner, layer, anims }: { mods: ModEntry[]; onChange: (fn: (m: ModEntry[]) => void, key?: string) => void; owner: string; layer?: ShapeLayer; anims?: GeoAnims }) {
   const advancedAll = useStore((s) => s.settings.advanced);
   const editing = useStore((s) => s.editing);
   const [picker, setPicker] = useState(false);
@@ -831,13 +973,17 @@ export function Modifiers({ mods, onChange, owner, layer }: { mods: ModEntry[]; 
                 ) : f.toggle ? (
                   <Toggle key={f.key} label={f.label} checked={Number(values[f.key] ?? 0) > 0.5} onChange={(v) => patch(m.uid, (x) => ((x as unknown as Record<string, number>)[f.key] = v ? 1 : 0))} />
                 ) : (
-                  <Slider
+                  <KeyedSlider
                     key={f.key}
+                    anims={anims}
+                    k={modAnimKey(m.uid, f.key)}
                     label={f.label}
                     min={f.min}
                     max={f.max}
                     step={f.step}
                     value={Number(values[f.key] ?? 0)}
+                    // A phase goes round: ramp it a whole turn on from where it is, for a steady flow.
+                    start={f.key === 'phase' ? { to: Number(values[f.key] ?? 0) + f.max, mode: 'ramp' } : undefined}
                     onChange={(v) => patch(m.uid, (x) => ((x as unknown as Record<string, number>)[f.key] = f.integer ? Math.round(v) : v), f.key)}
                   />
                 ),

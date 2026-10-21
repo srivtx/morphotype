@@ -10,7 +10,11 @@ import type { Renderer } from '../render/renderer';
 import { parsePath, serializePath, type Node as GNode } from '../state/geometry';
 import { brushById } from '../state/brushes';
 import { migrate } from '../state/migrate';
-import { group, isGroup, lineLayer, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
+import { clock, timelineOf } from '../state/clock';
+import { isStill, type Motion } from '../state/motion';
+import { anyGeoAnim } from '../state/geoMotion';
+import { geometryFrames, holdLiveGeometry } from './geoMotion';
+import { group, isGroup, lineLayer, newModifier, pathLayer, style, symbolLayer, textLayer, uid, type Background, type Group, type Node, type Project, type ShapeLayer, type Style } from '../state/model';
 import { iconGridLayers } from '../state/icon';
 import { commitEdit, edit, replaceProject, select, store, toast, undo } from '../state/store';
 import { allLayers, ancestors, buildScene, childrenOf, find, findNode, layersOf, removeNodes, topmost, walk } from '../state/tree';
@@ -300,7 +304,8 @@ export function finishDrawing(pts: [number, number, number][]) {
  * it was closed, otherwise a line. Path data is stored in em units around the
  * path's centre so modifiers scale with its size.
  */
-export function finishPen(nodes: GNode[], closed: boolean) {
+/** Turn a pen path into a layer. With `mirrorAt` (an artboard x) it gets a Mirror modifier on that line, keeping the side it was drawn on. */
+export function finishPen(nodes: GNode[], closed: boolean, mirrorAt?: number) {
   if (nodes.length < 2) return;
   const s = store.get();
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
@@ -312,6 +317,8 @@ export function finishPen(nodes: GNode[], closed: boolean) {
   const d = serializePath([{ open: !closed, nodes: nodes.map((n) => ({ ...k(n), hin: n.hin && k(n.hin), hout: n.hout && k(n.hout) })) }]);
   const ink = s.settings.penColor;
   const l = closed ? pathLayer(d, size, 'Shape', { x: cx, y: cy, style: style('flat', { fill: ink }) }) : lineLayer(d, size, s.settings.penWidth, { x: cx, y: cy, style: style('flat', { fill: ink }) });
+  // Modifiers work in em around the layer's position: the line sits (mirrorAt − cx) / size em away.
+  if (mirrorAt !== undefined) l.modifiers = [newModifier('mirror', { offset: (mirrorAt - cx) / size, flip: cx > mirrorAt ? 1 : 0 })];
   addNode(l, drawTarget());
 }
 
@@ -416,11 +423,32 @@ function offsetNode(n: Node, dx: number, dy: number) {
   }
 }
 
+/** Where each copy of the last duplicate came from (copy id → its original's position). */
+let lastDuplicate: Map<string, { x: number; y: number }> | null = null;
+
+const positionOf = (n: Node) => {
+  const l = layersOf(n)[0];
+  return l ? { x: l.x, y: l.y } : null;
+};
+
+/**
+ * Duplicate the selection `offset` px down and right. Duplicate, move the
+ * copy, duplicate again: the new copy takes the same step (rows of circles,
+ * stacks of pills), like Illustrator's Transform Again.
+ */
 export function duplicateSelected(offset = 24) {
   const s = store.get();
   const ids = topmost(s.project.layers, s.selection);
   if (!ids.length) return;
+  let step = { x: offset, y: offset };
+  if (lastDuplicate && ids.length === lastDuplicate.size && ids.every((id) => lastDuplicate!.has(id))) {
+    const n = findNode(s.project.layers, ids[0]);
+    const now = n && positionOf(n);
+    const was = lastDuplicate.get(ids[0]);
+    if (now && was && (now.x !== was.x || now.y !== was.y)) step = { x: now.x - was.x, y: now.y - was.y };
+  }
   const made: string[] = [];
+  const sources = new Map<string, { x: number; y: number }>();
   edit((p) => {
     const map = new Map<string, string>();
     const copies: { at: Node[]; index: number; node: Node }[] = [];
@@ -428,7 +456,9 @@ export function duplicateSelected(offset = 24) {
       const f = find(p.layers, id);
       if (!f) continue;
       const c = cloneWithIds(f.node, map);
-      offsetNode(c, offset, offset);
+      const from = positionOf(f.node);
+      if (from) sources.set(c.id, from);
+      offsetNode(c, step.x, step.y);
       copies.push({ at: f.siblings, index: f.index, node: c });
     }
     remapMorphs(
@@ -442,6 +472,7 @@ export function duplicateSelected(offset = 24) {
       made.push(c.node.id);
     }
   });
+  lastDuplicate = sources;
   select(made);
 }
 
@@ -692,6 +723,23 @@ export function pasteStyle() {
   if (styleClipboard) applyStyle(styleClipboard);
 }
 
+// Motion: how it comes in, Then, its loop and its stagger, from one layer to others.
+let motionClipboard: Motion | null = null;
+export function copyMotion() {
+  const m = primaryNode()?.motion;
+  if (!m || isStill(m)) return toast('Nothing to copy: this layer has no motion yet.');
+  motionClipboard = structuredClone(m);
+  toast('Motion copied');
+}
+export function pasteMotion() {
+  if (!motionClipboard) return toast('Copy a layer’s motion first (⌥⇧⌘C).');
+  const m = motionClipboard;
+  updateSelected((n) => {
+    n.motion = structuredClone(m);
+  });
+  clock.replay(timelineOf(store.get().project));
+}
+
 export function setBackground(fn: (b: Background) => void, key = '') {
   edit((p) => fn(p.background), key ? `bg:${key}` : '');
 }
@@ -841,11 +889,16 @@ export async function breakApart(id: string) {
   }
 }
 
+/** Modifiers that leave a path's points in place, so they can stay on while editing them. */
+const POINT_SAFE = new Set(['mirror', 'round', 'weight', 'outline', 'scallop', 'fuse', 'repeat']);
+
 export async function editPoints(id: string) {
   const l = findNode(store.get().project.layers, id);
   if (!l || isGroup(l)) return;
-  // Pen lines edit as they are; anything else becomes an outline first.
-  const needs = !((l.content.type === 'path' || l.content.type === 'line') && l.modifiers.length === 0);
+  // Pen lines edit as they are, also under modifiers that keep the points
+  // where they are (a mirrored half stays mirrored); anything else becomes an outline first.
+  const keepsPoints = l.modifiers.every((m) => !m.on || POINT_SAFE.has(m.kind));
+  const needs = !((l.content.type === 'path' || l.content.type === 'line') && keepsPoints);
   if (needs) {
     const ok = await convertToOutline(id);
     if (!ok) return;
@@ -1090,7 +1143,7 @@ async function freshRender() {
 export async function exportPNG(scale = store.get().settings.pngScale, transparent = store.get().settings.exportTransparent) {
   try {
     const r = await freshRender();
-    const bytes = await r.exportPNG(scale, transparent);
+    const bytes = await holdLiveGeometry(() => r.exportPNG(scale, transparent));
     const p = store.get().project;
     if (await platform().save(`${slug(p.name)}@${scale}x.png`, bytes, { name: 'PNG image', extensions: ['png'] })) toast('PNG exported');
   } catch (e) {
@@ -1098,10 +1151,81 @@ export async function exportPNG(scale = store.get().settings.pngScale, transpare
   }
 }
 
+/** First recording format this browser can write: MP4 where supported (Safari, the Mac app), else WebM. */
+export function videoFormat(): { mime: string; ext: 'mp4' | 'webm' } | null {
+  if (typeof MediaRecorder === 'undefined') return null;
+  for (const mime of ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) if (MediaRecorder.isTypeSupported(mime)) return { mime, ext: mime.startsWith('video/mp4') ? 'mp4' : 'webm' };
+  return null;
+}
+
+let recording = false;
+
+/**
+ * One pass of the timeline as a video. Fields are built once at export size
+ * and each frame is drawn at its own time on the clock, so the motion is
+ * exact; frames are handed to the recorder in real time (a 6 s timeline takes
+ * about 6 s). Moving geometry is built for every frame first, so recording
+ * only swaps outlines and rebuilds those layers' fields.
+ */
+export async function exportVideo(fps = 30, scale = 1) {
+  const fmt = videoFormat();
+  if (!fmt) return toast('This browser can’t record video. Try the Mac app, Chrome or Safari.', 'error');
+  if (recording) return;
+  recording = true;
+  try {
+    const r = await freshRender();
+    const p = store.get().project;
+    const tl = timelineOf(p);
+    const n = Math.max(1, Math.round(tl.duration * fps));
+    const times = Array.from({ length: n + 1 }, (_, i) => Math.min(i / fps, tl.duration));
+    if (anyGeoAnim(p.layers)) toast('Building moving shapes for each frame…', 'info');
+    const geometry = await geometryFrames(p, times, EXPORT_QUALITY);
+    await holdLiveGeometry(async (show) => {
+      let frames: ReturnType<Renderer['exportFrames']> | null = null;
+      try {
+        frames = r.exportFrames(scale, false);
+        // Encoders want even sizes.
+        const c = document.createElement('canvas');
+        c.width = frames.width - (frames.width % 2);
+        c.height = frames.height - (frames.height % 2);
+        const ctx = c.getContext('2d');
+        if (!ctx) throw new Error('2D canvas unavailable');
+        const stream = c.captureStream(0);
+        const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+        const rec = new MediaRecorder(stream, { mimeType: fmt.mime, videoBitsPerSecond: Math.round(c.width * c.height * fps * 0.25) });
+        const chunks: Blob[] = [];
+        rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+        const stopped = new Promise((res) => (rec.onstop = res));
+        toast(`Recording ${tl.duration.toFixed(1)} s of video…`, 'info');
+        rec.start();
+        const t0 = performance.now();
+        for (const [i, t] of times.entries()) {
+          if (geometry) show(geometry[i]);
+          const img = frames.frame(t);
+          ctx.putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
+          track.requestFrame?.();
+          const wait = t0 + ((i + 1) * 1000) / fps - performance.now();
+          if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+        }
+        rec.stop();
+        await stopped;
+        const bytes = new Uint8Array(await new Blob(chunks, { type: fmt.mime }).arrayBuffer());
+        if (await platform().save(`${slug(p.name)}.${fmt.ext}`, bytes, { name: fmt.ext === 'mp4' ? 'MP4 video' : 'WebM video', extensions: [fmt.ext] })) toast(`${fmt.ext.toUpperCase()} exported`);
+      } finally {
+        frames?.close();
+      }
+    });
+  } catch (e) {
+    toast(`Video export failed: ${errorText(e)}`, 'error');
+  } finally {
+    recording = false;
+  }
+}
+
 export async function exportJPG(scale = 2) {
   try {
     const r = await freshRender();
-    const blob = await r.toBlob(scale, false, 'image/jpeg');
+    const blob = await holdLiveGeometry(() => r.toBlob(scale, false, 'image/jpeg'));
     const p = store.get().project;
     if (await platform().save(`${slug(p.name)}@${scale}x.jpg`, new Uint8Array(await blob.arrayBuffer()), { name: 'JPEG image', extensions: ['jpg'] })) toast('JPG exported');
   } catch (e) {
@@ -1112,7 +1236,7 @@ export async function exportJPG(scale = 2) {
 export async function copyPNG() {
   try {
     const r = await freshRender();
-    const blob = await r.toBlob(2, store.get().settings.exportTransparent);
+    const blob = await holdLiveGeometry(() => r.toBlob(2, store.get().settings.exportTransparent));
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
     toast('Copied image to the clipboard');
   } catch (e) {

@@ -1,5 +1,7 @@
 import type { EngineDocument, EngineLayer, Member, Op, RenderSpec } from '../engine/types';
 import { isGroup, type Group, type Node, type Project, type ShapeLayer, type Style } from './model';
+import { splitsText } from './letters';
+import { isStill, seedOf, staggerSlot, type LetterMode, type MotionLink } from './motion';
 
 export interface Found {
   node: Node;
@@ -121,7 +123,20 @@ export interface SceneObject {
   guide?: boolean;
   /** Render whose outline masks this object (a clipping group's bottom layer). */
   clip?: string;
+  /** Motions moving it, its own first, then its groups'. */
+  motion?: MotionLink[];
+  /** A text whose own motion plays on each letter or word in turn (its render says which outline is which). */
+  letters?: LetterMode;
 }
+
+/** A node's own motion, plus the links its group hands down to its `index`-th child. */
+function ownLink(n: Node): MotionLink | null {
+  return n.motion && !isStill(n.motion) && !(isGroup(n) && !n.merge && n.motion.stagger > 0) ? { motion: n.motion, at: n.id, offset: 0 } : null;
+}
+function childLink(g: Group, child: Node, index: number): MotionLink | null {
+  return g.motion && !isStill(g.motion) && g.motion.stagger > 0 ? { motion: g.motion, at: child.id, offset: staggerSlot(g.motion.order, index, g.children.length, seedOf(g.id)) * g.motion.stagger } : null;
+}
+const withLink = (l: MotionLink | null, outer: MotionLink[]) => (l ? [l, ...outer] : outer);
 
 /** Strip UI-only fields so style edits don't trigger geometry rebuilds. */
 /** Modifiers that move letters around; paused while typing on the canvas so the caret lines up. */
@@ -167,10 +182,12 @@ export function buildScene(p: Project, quality?: number, typing?: string | null)
   walk(p.layers, (n) => {
     if (!isGroup(n)) layers.push(engineLayer(n, isVisible(p.layers, n.id), n.id === typing));
   });
-  const rec = (nodes: Node[], hidden: boolean): RenderSpec[] => {
+  const rec = (nodes: Node[], hidden: boolean, outer: MotionLink[], parent: Group | null): RenderSpec[] => {
     const made: RenderSpec[] = [];
     let base: RenderSpec[] = [];
-    for (const n of nodes) {
+    for (const [i, n] of nodes.entries()) {
+      const links = withLink(ownLink(n), parent ? withLink(childLink(parent, n, i), outer) : outer);
+      const motion = links.length ? links : undefined;
       const off = hidden || !n.visible;
       if (n.op !== 'add') {
         const cut = off ? [] : members(n, n.op);
@@ -181,12 +198,12 @@ export function buildScene(p: Project, quality?: number, typing?: string | null)
         const r: RenderSpec = { id: n.id, members: off ? [] : n.children.flatMap((c) => members(c)), modifiers: n.modifiers };
         if (!off) {
           made.push(r);
-          objects.push({ id: n.id, style: n.style });
+          objects.push({ id: n.id, style: n.style, motion });
         }
         base = off ? [] : [r];
       } else if (isGroup(n)) {
         const first = objects.length;
-        const sub = rec(n.children, off);
+        const sub = rec(n.children, off, links, n);
         made.push(...sub);
         base = sub;
         // A clipping group: its bottom layer's outline masks everything above it.
@@ -200,14 +217,16 @@ export function buildScene(p: Project, quality?: number, typing?: string | null)
           continue;
         }
         const r: RenderSpec = { id: n.id, members: [n.id] };
+        const letters = splitsText(n) ? n.motion!.letters : undefined;
+        if (letters) r.letters = true;
         made.push(r);
-        objects.push({ id: n.id, style: n.style, guide: n.guide || undefined });
+        objects.push({ id: n.id, style: n.style, guide: n.guide || undefined, motion, letters });
         base = [r];
       }
     }
     return made;
   };
-  renders.push(...rec(p.layers, false));
+  renders.push(...rec(p.layers, false, [], null));
   // Objects were collected depth-first in paint order already.
   return { doc: { layers, renders, quality }, objects };
 }

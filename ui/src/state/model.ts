@@ -1,5 +1,7 @@
 import type { Content, EngineLayer, GlyphPart, LineCap, ModEntry, Modifier, ModifierKind, Op, SymbolKind, SymbolSpec, TextMorph } from '../engine/types';
 import { defaultParams, effectById, type ParamValues } from '../render/effects';
+import type { Motion, ParamAnim } from './motion';
+import type { Timeline } from './clock';
 
 export interface ProjectFont {
   id: string;
@@ -48,6 +50,8 @@ export interface Style {
   depth?: Depth | null;
   /** Soft edges, in artboard px: a blur of the outline (cheap, from the distance field). */
   soften?: number;
+  /** Settings that change over time on the scene clock, by param key. */
+  animate?: Record<string, ParamAnim>;
 }
 
 export function stroke(width = 6, color = '#0a0a0a', align: StrokeAlign = 'outside'): Stroke {
@@ -61,6 +65,10 @@ export interface ShapeLayer extends EngineLayer {
   style: Style;
   /** A reference to trace over: shown while designing, left out of every export. */
   guide?: boolean;
+  /** Loop and entrance, played on the scene clock. */
+  motion?: Motion;
+  /** Shape and modifier settings that change over time, rebuilt on the scene clock (see geoMotion.ts). */
+  animate?: Record<string, ParamAnim>;
 }
 
 /**
@@ -83,6 +91,10 @@ export interface Group {
   style: Style;
   modifiers: ModEntry[];
   children: Node[];
+  /** Moves the whole group, or each child in turn (see Motion.stagger). */
+  motion?: Motion;
+  /** Merged groups: modifier settings that change over time (see geoMotion.ts). */
+  animate?: Record<string, ParamAnim>;
 }
 
 export type Node = ShapeLayer | Group;
@@ -185,6 +197,8 @@ export interface Project {
   /** Pictures used by Photo materials; only present in saved files (see assets.ts). */
   images?: { id: string; data: string; w: number; h: number; name?: string }[];
   type?: TypeProject;
+  /** Length and looping of the scene clock (animated materials and motion). */
+  timeline?: Timeline;
 }
 
 let counter = 0;
@@ -198,6 +212,8 @@ export function uid(prefix = 'l'): string {
 export const MODIFIER_DEFAULTS: Record<ModifierKind, Modifier> = {
   weight: { kind: 'weight', amount: 0.03 },
   round: { kind: 'round', radius: 0.03 },
+  mirror: { kind: 'mirror', axis: 'x', flip: 0, offset: 0 },
+  scallop: { kind: 'scallop', count: 12, depth: 1, width: 1, inward: 0 },
   outline: { kind: 'outline', width: 0.04 },
   ink: { kind: 'ink', amount: 0.015, scale: 0.5, seed: 1 },
   slant: { kind: 'slant', angle: 12 },
@@ -236,9 +252,16 @@ export interface NumberField {
 export interface ChoiceField {
   key: string;
   label: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; title?: string }[];
   show?: Record<string, string>;
 }
+
+/** How an open stroke ends: pen lines, smiles and spirals. */
+export const CAP_OPTIONS: { value: LineCap; label: string; title: string }[] = [
+  { value: 'round', label: 'Round', title: 'Round ends, like a marker' },
+  { value: 'butt', label: 'Flat', title: 'Cut square at the last point' },
+  { value: 'square', label: 'Square', title: 'Square, half the width past the last point' },
+];
 
 /** Whether a field applies given the modifier's current values. */
 export function fieldShown(f: Field, values: Record<string, unknown>): boolean {
@@ -277,6 +300,35 @@ export const WARP_STYLES: { value: string; label: string }[] = [
 export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
   weight: { label: 'Weight', blurb: 'Bolder or thinner strokes', group: 'Shape', fields: [{ key: 'amount', label: 'Amount', min: -0.1, max: 0.2, step: 0.001 }] },
   round: { label: 'Round corners', blurb: 'Soft, friendly corners', group: 'Shape', fields: [{ key: 'radius', label: 'Radius', min: 0, max: 0.2, step: 0.001 }] },
+  mirror: {
+    label: 'Mirror',
+    blurb: 'Symmetric halves: draw one side, get both',
+    group: 'Shape',
+    fields: [
+      {
+        key: 'axis',
+        label: 'Halves',
+        options: [
+          { value: 'x', label: 'Left · right' },
+          { value: 'y', label: 'Top · bottom' },
+          { value: 'both', label: 'Both' },
+        ],
+      },
+      { key: 'flip', label: 'Keep the other half', min: 0, max: 1, step: 1, toggle: true },
+      { key: 'offset', label: 'Move the line', min: -1, max: 1, step: 0.001 },
+    ],
+  },
+  scallop: {
+    label: 'Scallops',
+    blurb: 'Round bumps or bites all along the edge',
+    group: 'Shape',
+    fields: [
+      { key: 'count', label: 'Bumps', min: 3, max: 64, step: 1, integer: true },
+      { key: 'depth', label: 'Depth', min: 0, max: 1, step: 0.01 },
+      { key: 'width', label: 'Width', min: 0.5, max: 2, step: 0.01 },
+      { key: 'inward', label: 'Bite in', min: 0, max: 1, step: 1, toggle: true },
+    ],
+  },
   outline: { label: 'Outline', blurb: 'Hollow, inline strokes', group: 'Shape', fields: [{ key: 'width', label: 'Width', min: 0.002, max: 0.2, step: 0.001 }] },
   pixelate: {
     label: 'Pixels',
@@ -468,21 +520,21 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   polygon: { kind: 'polygon', sides: 6, rounding: 0.1 },
   star: { kind: 'star', points: 5, inner: 0.45, rounding: 0.1 },
   sparkle: { kind: 'sparkle', pinch: 0.3 },
-  flower: { kind: 'flower', petals: 4, depth: 0.35 },
+  flower: { kind: 'flower', petals: 4, depth: 0.35, petal: 'wave', hole: 0 },
   burst: { kind: 'burst', rays: 12, ring: 0.12, ray_width: 0.1, inner: 0.26 },
   heart: { kind: 'heart' },
   moon: { kind: 'moon', phase: 0.4 },
   bolt: { kind: 'bolt' },
   arrow: { kind: 'arrow', head: 0.45, shaft: 0.3 },
   plus: { kind: 'plus', thickness: 0.3 },
-  spiral: { kind: 'spiral', turns: 2.5, weight: 0.55 },
+  spiral: { kind: 'spiral', turns: 2.5, weight: 0.55, cap: 'round' },
   pin: { kind: 'pin', corner: 3 },
   cursor: { kind: 'cursor' },
   bubble: { kind: 'bubble', tail: 0.3, roundness: 2.6 },
   blob: { kind: 'blob', lobes: 8, depth: 0.08, seed: 0, wobble: 0 },
   eyes: { kind: 'eyes', gap: 0.34, width: 0.14, height: 0.26 },
   catHead: { kind: 'catHead', ears: 0.3 },
-  smile: { kind: 'smile', curve: 0.5, weight: 0.35 },
+  smile: { kind: 'smile', curve: 0.5, weight: 0.35, cap: 'round' },
   rays: { kind: 'rays', rays: 12, short: 0.55, inner: 0.18, jitter: 0, seed: 0 },
   pill: { kind: 'pill', aspect: 3 },
   quarter: { kind: 'quarter' },
@@ -496,7 +548,7 @@ export const SYMBOL_DEFAULTS: Record<SymbolKind, SymbolSpec> = {
   asterisk: { kind: 'asterisk', arms: 8, weight: 0.12, inner: 0 },
 };
 
-export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Badge' | 'Mascot'; fields: NumberField[] }> = {
+export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Badge' | 'Mascot'; fields: Field[] }> = {
   circle: { label: 'Circle', group: 'Basic', fields: [] },
   ring: { label: 'Ring', group: 'Basic', fields: [{ key: 'thickness', label: 'Thickness', min: 0.01, max: 0.49, step: 0.005 }] },
   squircle: {
@@ -565,8 +617,20 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
     label: 'Flower',
     group: 'Badge',
     fields: [
+      {
+        key: 'petal',
+        label: 'Petal',
+        options: [
+          { value: 'wave', label: 'Wavy' },
+          { value: 'round', label: 'Round' },
+          { value: 'pill', label: 'Pill' },
+          { value: 'oval', label: 'Oval' },
+          { value: 'pointed', label: 'Pointed' },
+        ],
+      },
       { key: 'petals', label: 'Petals', min: 2, max: 16, step: 1, integer: true },
-      { key: 'depth', label: 'Depth', min: 0, max: 0.8, step: 0.005 },
+      { key: 'depth', label: 'Gaps', min: 0, max: 0.8, step: 0.005 },
+      { key: 'hole', label: 'Centre hole', min: 0, max: 0.8, step: 0.005 },
     ],
   },
   burst: {
@@ -618,6 +682,7 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
     fields: [
       { key: 'turns', label: 'Turns', min: 0.5, max: 6, step: 0.05 },
       { key: 'weight', label: 'Weight', min: 0.1, max: 0.95, step: 0.01 },
+      { key: 'cap', label: 'Ends', options: CAP_OPTIONS },
     ],
   },
   pin: { label: 'Pin', group: 'Mascot', fields: [{ key: 'corner', label: 'Corner', min: 0, max: 5, step: 0.05 }] },
@@ -656,6 +721,7 @@ export const SYMBOL_UI: Record<SymbolKind, { label: string; group: 'Basic' | 'Ba
     fields: [
       { key: 'curve', label: 'Curve', min: -1, max: 1, step: 0.01 },
       { key: 'weight', label: 'Thickness', min: 0.05, max: 1, step: 0.01 },
+      { key: 'cap', label: 'Ends', options: CAP_OPTIONS },
     ],
   },
   rays: {

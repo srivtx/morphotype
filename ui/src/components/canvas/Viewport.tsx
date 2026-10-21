@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { penDown, penDrag, penHover, penUp } from './PenTool';
+import { MIRROR_X, penDown, penDrag, penDragging, penHover, penMirror, penNodes, penUp } from './PenTool';
+import { sizeTargets, snapPoint, spacingTargets, type SnapTargets, type SpacingTargets } from '../../state/snap';
 import { duplicateSelected, editPoints, editText, endTextEdit, finishDrawing, getRenderer, nodeBox, setRenderer, startText } from '../../app/actions';
 import type { Box } from '../../engine/types';
 import { Renderer, sceneItem, type SceneItem } from '../../render/renderer';
+import { liveOutlines, onLiveOutlines } from '../../app/geoMotion';
+import { clock, timelineOf } from '../../state/clock';
+import { motionReach } from '../../state/motion';
+import { pieceLinks, piecesOf } from '../../state/letters';
 import { apply, invert, type Pt, type Xform } from '../../state/geometry';
 import { isGroup, type Node, type ShapeLayer } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, toast, useStore } from '../../state/store';
 import { allLayers, ancestors, buildScene, find, findNode, isLocked, isVisible, layersOf, topmost } from '../../state/tree';
 import { boxesIntersect, hitLayer, resolveTarget, unionOf } from './hit';
+import { MoveGhosts } from './MoveGhosts';
 import { Overlay, type Guide, type Handle } from './Overlay';
 import { TextEditor } from './TextEditor';
 import { Toolbar } from './Toolbar';
@@ -29,11 +35,53 @@ export function syncScene(r: Renderer) {
   const s = store.get();
   const { objects } = buildScene(s.project);
   const renders = new Map((s.build?.renders ?? []).map((x) => [x.id, x]));
+  // Layers with moving geometry: their outlines at the clock's time.
+  const live = liveOutlines();
+  for (const [id, out] of live ?? []) renders.set(id, out);
   const items: SceneItem[] = [];
+  const tl = timelineOf(s.project);
+  const loopLength = tl.loop ? tl.duration : undefined;
+  const reachSpan = tl.duration;
+  // Motion turns and scales about each moving node's rest centre.
+  const pivots = new Map<string, [number, number]>();
+  const pivot = (id: string): [number, number] => {
+    let c = pivots.get(id);
+    if (!c) {
+      const n = findNode(s.project.layers, id);
+      const b = n && nodeBox(n);
+      c = b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
+      pivots.set(id, c);
+    }
+    return c;
+  };
+  const reachTimes = Array.from({ length: 97 }, (_, i) => (i / 96) * reachSpan);
   for (const o of objects) {
     const out = renders.get(o.id);
-    if (out) items.push(sceneItem(o.id, out, o.style, o.guide, o.clip ? renders.get(o.clip)?.d : null));
+    if (!out) continue;
+    const clipD = o.clip ? renders.get(o.clip)?.d : null;
+    const links = o.motion?.map((l) => ({ motion: l.motion, pivot: pivot(l.at), offset: l.offset }));
+    // A text moving letter by letter: one object per letter (or word), each about its own centre, in turn.
+    const pieces = o.letters && links ? piecesOf(out, o.letters) : null;
+    if (pieces?.length && links) {
+      pieceLinks(links, pieces, o.id).forEach((motion, i) => {
+        const item = sceneItem(`${o.id}#${i}`, pieces[i], o.style, o.guide, clipD);
+        item.frame = out.bbox;
+        item.motion = motion;
+        if (live?.has(o.id)) item.live = true;
+        if (item.clipD) item.motionReach = motionReach(motion, pieces[i].bbox, reachTimes, loopLength);
+        items.push(item);
+      });
+      continue;
+    }
+    const item = sceneItem(o.id, out, o.style, o.guide, clipD);
+    if (live?.has(o.id)) item.live = true;
+    if (links) {
+      item.motion = links;
+      if (item.clipD && out.bbox) item.motionReach = motionReach(item.motion, out.bbox, reachTimes, loopLength);
+    }
+    items.push(item);
   }
+  r.timeline = tl;
   r.setScene(items);
   r.setBackground(s.project.background);
 }
@@ -56,6 +104,8 @@ export function Viewport() {
   const canvasSize = project.canvas;
   const settings = useStore((s) => s.settings);
   const tool = useStore((s) => s.tool);
+  // Snap guides belong to the gesture or tool that made them.
+  useEffect(() => setGuides([]), [tool]);
   const editing = useStore((s) => s.editing);
   const rerender = useCallback(() => setTick((n) => n + 1), []);
 
@@ -135,7 +185,20 @@ export function Viewport() {
   useEffect(() => {
     const r = rendererRef.current;
     if (r) syncScene(r);
-  }, [build, project.layers, project.background]);
+  }, [build, project.layers, project.background, project.timeline]);
+
+  // Play, pause and scrubbing redraw.
+  useEffect(() => clock.subscribe(() => rendererRef.current?.invalidate()), []);
+
+  // Moving geometry: new outlines many times a second.
+  useEffect(
+    () =>
+      onLiveOutlines(() => {
+        const r = rendererRef.current;
+        if (r) syncScene(r);
+      }),
+    [],
+  );
 
   useEffect(() => {
     const r = rendererRef.current;
@@ -260,6 +323,7 @@ export function Viewport() {
     const H = s.project.canvas.height;
     const xs: number[] = [];
     const ys: number[] = [];
+    const others: Box[] = [];
     if (set.snapArtboard) {
       xs.push(-W / 2, 0, W / 2);
       ys.push(-H / 2, 0, H / 2);
@@ -268,22 +332,30 @@ export function Viewport() {
       for (const o of s.build?.layers ?? []) {
         if (!o.bbox || moving.has(o.id) || !isVisible(s.project.layers, o.id)) continue;
         const b = o.bbox;
+        others.push(b);
         xs.push(b[0], (b[0] + b[2]) / 2, b[2]);
         ys.push(b[1], (b[1] + b[3]) / 2, b[3]);
       }
     }
     const nb: Box = [box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy];
-    const best = (cands: number[], mine: number[]) => {
+    // Each of the box's start / centre / end lines against the lines it may land on:
+    // edges and centres anywhere, plus equal spacing within its row or column.
+    const best = (pairs: [number, number[]][]) => {
       let out: { d: number; at: number } | null = null;
-      for (const m of mine)
+      for (const [m, cands] of pairs)
         for (const c of cands) {
           const d = c - m;
           if (Math.abs(d) <= tol && (!out || Math.abs(d) < Math.abs(out.d))) out = { d, at: c };
         }
       return out;
     };
-    const gx = best(xs, [nb[0], (nb[0] + nb[2]) / 2, nb[2]]);
-    const gy = best(ys, [nb[1], (nb[1] + nb[3]) / 2, nb[3]]);
+    const lines = (lo: number, hi: number, all: number[], sp: SpacingTargets): [number, number[]][] => [
+      [lo, [...all, ...sp.start]],
+      [(lo + hi) / 2, [...all, ...sp.centre]],
+      [hi, [...all, ...sp.end]],
+    ];
+    const gx = best(lines(nb[0], nb[2], xs, spacingTargets(nb, others, 'x')));
+    const gy = best(lines(nb[1], nb[3], ys, spacingTargets(nb, others, 'y')));
     const guides: Guide[] = [];
     if (gx) {
       dx += gx.d;
@@ -296,6 +368,97 @@ export function Viewport() {
     if (set.snapGrid && !gx) dx = Math.round((box[0] + dx) / set.gridSize) * set.gridSize - box[0];
     if (set.snapGrid && !gy) dy = Math.round((box[1] + dy) / set.gridSize) * set.gridSize - box[1];
     return { dx, dy, guides };
+  };
+
+  /**
+   * Snap a pen point: onto placed points and lines through them, artboard and
+   * layer edges and centres, the mirror line, or the grid. A handle being
+   * dragged also snaps level with its own point, for clean arcs. ⌘ skips it.
+   */
+  const snapPen = (a: Pt, e: { metaKey: boolean; ctrlKey: boolean }): Pt => {
+    const s = store.get();
+    const set = s.settings;
+    if (!set.snap || e.metaKey || e.ctrlKey) {
+      setGuides([]);
+      return a;
+    }
+    const W = s.project.canvas.width;
+    const H = s.project.canvas.height;
+    const t: SnapTargets = { xs: [], ys: [], points: [...penNodes()] };
+    if (set.snapArtboard) t.xs.push(-W / 2, 0, W / 2), t.ys.push(-H / 2, 0, H / 2);
+    if (penMirror()) t.xs.push(MIRROR_X);
+    if (set.snapObjects)
+      for (const o of s.build?.layers ?? []) {
+        if (!o.bbox || !isVisible(s.project.layers, o.id)) continue;
+        const b = o.bbox;
+        t.xs.push(b[0], (b[0] + b[2]) / 2, b[2]);
+        t.ys.push(b[1], (b[1] + b[3]) / 2, b[3]);
+      }
+    const held = penDragging();
+    if (held) {
+      // Not onto the point itself (that would fold the handle away), only level with it.
+      t.points = t.points.filter((q) => q !== held);
+      t.xs.push(held.x);
+      t.ys.push(held.y);
+    }
+    const res = snapPoint(a, t, 6 / rendererRef.current!.view.zoom, set.snapGrid ? set.gridSize : 0);
+    setGuides(res.guides);
+    return res.p;
+  };
+
+  /**
+   * Snap a resize handle: the edges it moves land on other layers' edges and
+   * centres, the artboard's, or where the box would match another layer's
+   * width or height. Rotated single layers resize in their own frame, so
+   * they don't snap. ⌘ skips it.
+   */
+  const snapScale = (d: Extract<Drag, { kind: 'scale' }>, a: Pt, e: { metaKey: boolean; ctrlKey: boolean }, fromCenter: boolean, uniform: boolean): Pt => {
+    const s = store.get();
+    const set = s.settings;
+    const only = d.single ? findNode(s.project.layers, d.single.id) : null;
+    if (!set.snap || e.metaKey || e.ctrlKey || (only && !isGroup(only) && only.rotation % 360 !== 0)) {
+      setGuides([]);
+      return a;
+    }
+    const [ix, iy] = d.handle;
+    const b = d.box;
+    const W = s.project.canvas.width;
+    const H = s.project.canvas.height;
+    const xs: number[] = set.snapArtboard ? [-W / 2, 0, W / 2] : [];
+    const ys: number[] = set.snapArtboard ? [-H / 2, 0, H / 2] : [];
+    const widths: number[] = [];
+    const heights: number[] = [];
+    if (set.snapObjects)
+      for (const o of s.build?.layers ?? []) {
+        if (!o.bbox || d.layers.has(o.id) || !isVisible(s.project.layers, o.id)) continue;
+        const ob = o.bbox;
+        xs.push(ob[0], (ob[0] + ob[2]) / 2, ob[2]);
+        ys.push(ob[1], (ob[1] + ob[3]) / 2, ob[3]);
+        widths.push(ob[2] - ob[0]);
+        heights.push(ob[3] - ob[1]);
+      }
+    // From the centre (⌥) a size w puts the edge w/2 out; otherwise w from the opposite edge.
+    const [cx, cy] = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+    const sizeX = fromCenter ? sizeTargets(cx, ix, widths.map((w) => w / 2)) : sizeTargets(ix < 0 ? b[2] : b[0], ix, widths);
+    const sizeY = fromCenter ? sizeTargets(cy, iy, heights.map((h) => h / 2)) : sizeTargets(iy < 0 ? b[3] : b[1], iy, heights);
+    const tol = 6 / rendererRef.current!.view.zoom;
+    if (uniform && ix && iy) {
+      // Proportional from a corner: two snaps would fight over one scale, so
+      // the closer axis snaps and the other follows the ratio.
+      const sx = snapPoint(a, { xs: [...xs, ...sizeX], ys: [], points: [] }, tol);
+      const sy = snapPoint(a, { xs: [], ys: [...ys, ...sizeY], points: [] }, tol);
+      const dx = sx.guides.length ? Math.abs(sx.p.x - a.x) : Infinity;
+      const dy = sy.guides.length ? Math.abs(sy.p.y - a.y) : Infinity;
+      if (dx === Infinity && dy === Infinity) return setGuides([]), a;
+      const A = { x: fromCenter ? cx : ix < 0 ? b[2] : b[0], y: fromCenter ? cy : iy < 0 ? b[3] : b[1] };
+      const Hd = { x: (ix < 0 ? b[0] : b[2]) - A.x, y: (iy < 0 ? b[1] : b[3]) - A.y };
+      const f = dx <= dy ? (sx.p.x - A.x) / (Hd.x || 1) : (sy.p.y - A.y) / (Hd.y || 1);
+      setGuides(dx <= dy ? sx.guides : sy.guides);
+      return { x: A.x + Hd.x * f, y: A.y + Hd.y * f };
+    }
+    const res = snapPoint(a, { xs: ix ? [...xs, ...sizeX] : [], ys: iy ? [...ys, ...sizeY] : [], points: [] }, tol);
+    setGuides(res.guides);
+    return { x: ix ? res.p.x : a.x, y: iy ? res.p.y : a.y };
   };
 
   // ---------- pointer ----------
@@ -329,7 +492,7 @@ export function Viewport() {
     if (s.tool === 'pen') {
       e.preventDefault();
       if (s.editing) store.set({ editing: null });
-      if (!penDown(a, r.view.zoom, e.shiftKey)) drag.current = { kind: 'pen' };
+      if (!penDown(e.shiftKey ? a : snapPen(a, e), r.view.zoom, e.shiftKey)) drag.current = { kind: 'pen' };
       return;
     }
     if (s.tool === 'draw') {
@@ -404,8 +567,8 @@ export function Viewport() {
     const d = drag.current;
     const p = local(e);
     const a = r.toArt(p.x, p.y);
-    if (d?.kind === 'pen') return void penDrag(a, r.view.zoom);
-    if (!d && store.get().tool === 'pen') return void penHover(a, e.shiftKey);
+    if (d?.kind === 'pen') return void penDrag(snapPen(a, e), r.view.zoom, e.altKey);
+    if (!d && store.get().tool === 'pen') return void penHover(e.shiftKey ? a : snapPen(a, e), e.shiftKey);
     if (d?.kind === 'draw') {
       // Coalesced events keep fast strokes smooth; points closer than ~1.5 screen px are skipped.
       const pts = strokePts.current;
@@ -488,7 +651,7 @@ export function Viewport() {
       const text = !!only && !isGroup(only) && only.content.type === 'text';
       // Figma convention: ⇧ keeps proportions. Text never squashes from a corner.
       const uniform = corner ? text || (s.settings.keepRatio ? !e.shiftKey : e.shiftKey) : e.shiftKey;
-      applyScale(d, a, uniform, e.altKey);
+      applyScale(d, snapScale(d, a, e, e.altKey, uniform), uniform, e.altKey);
       setHint({ x: p.x, y: p.y, text: `${uniform ? 'Proportional' : '⇧ keeps proportions'} · ⌥ from centre` });
     } else if (d.kind === 'rotate') {
       let ang = ((Math.atan2(a.y - d.center.y, a.x - d.center.x) - d.startAngle) * 180) / Math.PI;
@@ -604,7 +767,7 @@ export function Viewport() {
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (d?.kind === 'pen') return void penUp();
+    if (d?.kind === 'pen') return void (penUp(), setGuides([]));
     if (d?.kind === 'draw') {
       const pts = strokePts.current;
       strokePts.current = [];
@@ -686,6 +849,7 @@ export function Viewport() {
         <path ref={previewRef} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
       </svg>
       {r && <Overlay renderer={r} tick={tick} guides={guides} marquee={marquee} editing={editing} onHandle={beginHandle} onCursor={setCursor} measure={altHeld && !drag.current} />}
+      {r && !editing && <MoveGhosts renderer={r} tick={tick} />}
       {hint && (
         <div className="drag-hint" style={{ left: hint.x + 16, top: hint.y + 18 }}>
           {hint.text}

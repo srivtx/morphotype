@@ -213,6 +213,9 @@ pub struct RenderSpec {
     /// Em for the render's modifiers; defaults to the first member's.
     #[serde(default)]
     pub em: Option<f64>,
+    /// Say which letter and word each outline belongs to (text moving letter by letter).
+    #[serde(default)]
+    pub letters: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -262,6 +265,171 @@ pub struct RenderOut {
     /// segment runs from the previous point. Lets materials colour along it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spine: Option<Vec<f32>>,
+    /// Asked for with [`RenderSpec::letters`]: for each subpath of `d`, the
+    /// letter it belongs to (letters numbered in reading order)…
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glyphs: Option<Vec<u32>>,
+    /// …and each letter's word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<u32>>,
+}
+
+/// A shape's separate pieces, as contour indices: each solid contour with its
+/// holes, and small pieces sitting above or below a larger one in the same
+/// column (the dot of an i, accents) with it.
+fn piece_groups(poly: &Shape) -> Vec<Vec<usize>> {
+    let n = poly.contours.len();
+    let areas: Vec<f64> = poly.contours.iter().map(|c| crate::geom::signed_area(c)).collect();
+    // Each hole belongs to the smallest solid that contains it.
+    let mut owner: Vec<usize> = (0..n).collect();
+    for i in 0..n {
+        if areas[i] >= 0.0 {
+            continue;
+        }
+        let p = crate::geom::interior_point(&poly.contours[i]);
+        let probe = poly.contours[i].first().copied().unwrap_or(p);
+        let mut best: Option<usize> = None;
+        for j in 0..n {
+            if areas[j] <= 0.0 || crate::geom::winding(&poly.contours[j], probe) == 0 {
+                continue;
+            }
+            if best.is_none_or(|b| areas[j] < areas[b]) {
+                best = Some(j);
+            }
+        }
+        if let Some(b) = best {
+            owner[i] = b;
+        }
+    }
+    let solids: Vec<usize> = (0..n).filter(|&i| areas[i] > 0.0).collect();
+    // Union-find over solids for the dot-of-an-i rule.
+    let mut parent: HashMap<usize, usize> = solids.iter().map(|&i| (i, i)).collect();
+    fn find(p: &mut HashMap<usize, usize>, i: usize) -> usize {
+        let q = p[&i];
+        if q == i {
+            return i;
+        }
+        let r = find(p, q);
+        p.insert(i, r);
+        r
+    }
+    let boxes: HashMap<usize, Rect> = solids.iter().map(|&i| (i, crate::geom::Shape::new(vec![poly.contours[i].clone()]).bbox())).collect();
+    for (a_i, &a) in solids.iter().enumerate() {
+        for &b in &solids[a_i + 1..] {
+            let (ra, rb) = (boxes[&a], boxes[&b]);
+            let (small, big, sa, sb) = if areas[a] < areas[b] { (ra, rb, areas[a], areas[b]) } else { (rb, ra, areas[b], areas[a]) };
+            // Dots and accents are much shorter than their letter.
+            if sa > sb * 0.6 || small.height() > big.height() * 0.5 {
+                continue;
+            }
+            let overlap = small.x1.min(big.x1) - small.x0.max(big.x0);
+            let gap = (small.y0 - big.y1).max(big.y0 - small.y1);
+            if overlap > small.width() * 0.5 && gap < big.height() * 0.5 {
+                let (x, y) = (find(&mut parent, a), find(&mut parent, b));
+                parent.insert(x, y);
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..n {
+        let solid = if areas[i] > 0.0 { i } else { owner[i] };
+        if areas[solid] <= 0.0 {
+            continue;
+        }
+        let root = find(&mut parent, solid);
+        groups.entry(root).or_default().push(i);
+    }
+    groups.into_values().collect()
+}
+
+/// Modifiers that move points but keep every contour, in order: a text's
+/// glyphs can still be told apart after them.
+fn moves_points_only(m: &Modifier) -> bool {
+    matches!(
+        m,
+        Modifier::Slant { .. }
+            | Modifier::Stretch { .. }
+            | Modifier::Wave { .. }
+            | Modifier::Arc { .. }
+            | Modifier::Wobble { .. }
+            | Modifier::Melt { .. }
+            | Modifier::Perspective { .. }
+            | Modifier::Isometric { .. }
+            | Modifier::FitCircle { .. }
+            | Modifier::Warp { .. }
+    )
+}
+
+/// Which letter each drawn contour of `poly` belongs to (contours `poly_d`
+/// skips are skipped here too), and each letter's word. With the text's own
+/// glyph tags that's exact; otherwise letters are its pieces by shape, in
+/// reading order, and a gap wider than a fifth of `em` starts a new word.
+fn letter_parts(poly: &Shape, tags: Option<&[(usize, u32)]>, em: f64) -> (Vec<u32>, Vec<u32>) {
+    let n = poly.contours.len();
+    // Letter (and its word) of every contour, before renumbering.
+    let mut of = vec![(0usize, 0u32); n];
+    match tags {
+        Some(tags) => {
+            let mut at = 0;
+            for (g, &(count, word)) in tags.iter().enumerate() {
+                for c in of.iter_mut().skip(at).take(count) {
+                    *c = (g, word);
+                }
+                at += count;
+            }
+        }
+        None => {
+            let groups = piece_groups(poly);
+            let boxes: Vec<Rect> = groups.iter().map(|g| Shape::new(g.iter().map(|&i| poly.contours[i].clone()).collect()).bbox()).collect();
+            let row = (em * 0.5).max(1e-6);
+            let mut order: Vec<usize> = (0..groups.len()).collect();
+            order.sort_by(|&a, &b| {
+                let (ca, cb) = (boxes[a].center(), boxes[b].center());
+                (ca.y / row).round().total_cmp(&(cb.y / row).round()).then(ca.x.total_cmp(&cb.x))
+            });
+            let mut word = 0u32;
+            let mut word_of = Vec::with_capacity(order.len());
+            let mut placed = vec![false; n];
+            for (k, &g) in order.iter().enumerate() {
+                if k > 0 {
+                    let (p, q) = (boxes[order[k - 1]], boxes[g]);
+                    let new_row = (p.center().y / row).round() != (q.center().y / row).round();
+                    if new_row || q.x0 - p.x1 > em * 0.2 {
+                        word += 1;
+                    }
+                }
+                word_of.push(word);
+                for &i in &groups[g] {
+                    of[i] = (k, word);
+                    placed[i] = true;
+                }
+            }
+            // A contour in no piece (a stray hole) joins the nearest one.
+            for i in (0..n).filter(|&i| !placed[i]) {
+                let c = Shape::new(vec![poly.contours[i].clone()]).bbox().center();
+                let near = (0..order.len()).min_by(|&a, &b| boxes[order[a]].center().dist(c).total_cmp(&boxes[order[b]].center().dist(c)));
+                if let Some(k) = near {
+                    of[i] = (k, word_of[k]);
+                }
+            }
+        }
+    }
+    // Number the letters that draw something, and their words, from 0.
+    let drawn: Vec<usize> = (0..n).filter(|&i| poly.contours[i].len() >= 3).collect();
+    let mut letters: Vec<usize> = drawn.iter().map(|&i| of[i].0).collect();
+    letters.sort_unstable();
+    letters.dedup();
+    let glyphs = drawn.iter().map(|&i| letters.binary_search(&of[i].0).unwrap_or(0) as u32).collect();
+    let word_of: HashMap<usize, u32> = drawn.iter().map(|&i| of[i]).collect();
+    let mut word_ids: HashMap<u32, u32> = HashMap::new();
+    let words = letters
+        .iter()
+        .map(|g| {
+            let next = word_ids.len() as u32;
+            *word_ids.entry(word_of[g]).or_insert(next)
+        })
+        .collect();
+    (glyphs, words)
 }
 
 /// Flatten centre lines into `[x, y, t, joined]` quads, at most ~384 points.
@@ -389,12 +557,23 @@ pub struct TextLayout {
 /// Centre lines of single-line renders, by render id.
 type Spines = HashMap<String, Vec<Vec<Pt>>>;
 
+/// Per render asking for letters: each subpath's letter, and each letter's word.
+type Letters = HashMap<String, (Vec<u32>, Vec<u32>)>;
+
+/// A text's glyphs in outline order: how many contours each has, and its word.
+type GlyphTags = Vec<(usize, u32)>;
+
+/// Every render's geometry (with its smallest member em), per-layer info, and per-render extras.
+type SceneBuild = (Vec<(String, Geo, f64)>, Vec<LayerOut>, Spines, Letters);
+
 struct Local {
     geo: Geo,
     em: f64,
     frames: Vec<(String, Rect)>,
     /// A pen line's centre lines (after squiggles), for colour along the line.
     spine: Option<Vec<Vec<Pt>>>,
+    /// Text: which contours make each glyph, while modifiers keep them apart.
+    glyphs: Option<GlyphTags>,
 }
 
 fn rect_arr(r: Rect) -> Option<[f64; 4]> {
@@ -624,14 +803,27 @@ impl Engine {
         align: Align,
         morph: Option<&TextMorph>,
         ligatures: bool,
-    ) -> Result<Geo, String> {
+    ) -> Result<(Geo, GlyphTags), String> {
         let morph = morph.filter(|m| m.t > 1e-6 && self.fonts.contains_key(&m.font));
         let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
         let lines = self.lay_out(text, font, axes, tracking, line_height, align, morph, ligatures)?;
         let mut poly = Shape::default();
         let mut curves: Option<CurveShape> = if morph.is_none() { Some(Vec::new()) } else { None };
+        let mut tags = Vec::new();
+        let mut words = 0u32;
         for line in &lines {
+            // Word of each byte of the line: runs of non-space, numbered on from the last line's.
+            let mut word_at = vec![0u32; line.text.len() + 1];
+            let mut in_word = false;
+            for (bi, ch) in line.text.char_indices() {
+                if !ch.is_whitespace() && !in_word {
+                    words += 1;
+                }
+                in_word = !ch.is_whitespace();
+                word_at[bi..bi + ch.len_utf8()].fill(words.saturating_sub(1));
+            }
             for g in &line.glyphs {
+                let start = poly.contours.len();
                 let m = Affine::translate(g.pen + g.xo, line.baseline - g.yo);
                 match morph {
                     None => {
@@ -654,9 +846,10 @@ impl Engine {
                         poly.extend(mm.poly.at(t).transformed(&m));
                     }
                 }
+                tags.push((poly.contours.len() - start, word_at.get(g.cluster).copied().unwrap_or(0)));
             }
         }
-        Ok(Geo { poly, curves })
+        Ok((Geo { poly, curves }, tags))
     }
 
     /// Caret positions of a text layer in its local units (before modifiers
@@ -735,10 +928,12 @@ impl Engine {
         }
         let em = layer.em();
         let mut spine: Option<Vec<Vec<Pt>>> = None;
+        let mut glyphs: Option<GlyphTags> = None;
         let (geo, em) = match &layer.content {
             Content::Text { text, font, size, tracking, line_height, align, axes, morph, ligatures } => {
-                let mut g = self.text_geo(text, font, axes, *tracking, *line_height, *align, morph.as_ref(), *ligatures)?;
+                let (mut g, tags) = self.text_geo(text, font, axes, *tracking, *line_height, *align, morph.as_ref(), *ligatures)?;
                 g.transform(&Affine::scale(*size, *size));
+                glyphs = Some(tags);
                 (g, em)
             }
             Content::Symbol { symbol, size } => {
@@ -817,7 +1012,10 @@ impl Engine {
         let geo = apply_all_frames(geo, &layer.modifiers, &Ctx { em, quality }, &mut frames);
         // Warps would bend the outline away from the centre line: no spine then.
         let spine = if layer.modifiers.iter().any(|m| m.on) { None } else { spine };
-        let out = Rc::new(Local { geo, em, frames, spine });
+        // Glyphs stay told apart through modifiers that only move points.
+        let n = geo.poly.contours.len();
+        let glyphs = glyphs.filter(|g| layer.modifiers.iter().all(|m| !m.on || moves_points_only(&m.m)) && g.iter().map(|t| t.0).sum::<usize>() == n);
+        let out = Rc::new(Local { geo, em, frames, spine, glyphs });
         if self.layers.len() > 256 {
             self.layers.clear();
         }
@@ -828,15 +1026,17 @@ impl Engine {
     /// Build every layer, then every render. Returns each render's geometry
     /// (with the smallest member em, for curve fitting) plus per-layer info.
     pub fn build_scene(&mut self, doc: &Document) -> (Vec<(String, Geo, f64)>, Vec<LayerOut>) {
-        let (r, l, _) = self.build_scene_spines(doc);
+        let (r, l, _, _) = self.build_scene_spines(doc);
         (r, l)
     }
 
     /// [`Engine::build_scene`] plus, per render made of a single pen line, its
-    /// centre lines in document coordinates.
-    fn build_scene_spines(&mut self, doc: &Document) -> (Vec<(String, Geo, f64)>, Vec<LayerOut>, Spines) {
+    /// centre lines in document coordinates, and per render asking for
+    /// letters, which letter and word each outline is.
+    fn build_scene_spines(&mut self, doc: &Document) -> SceneBuild {
         let quality = doc.quality.unwrap_or(PREVIEW_QUALITY).clamp(24.0, 1024.0);
         let mut built: HashMap<&str, (Geo, f64)> = HashMap::new();
+        let mut layer_glyphs: HashMap<&str, GlyphTags> = HashMap::new();
         let mut layer_spines: HashMap<&str, Vec<Vec<Pt>>> = HashMap::new();
         let mut outs = Vec::with_capacity(doc.layers.len());
         for layer in &doc.layers {
@@ -852,6 +1052,9 @@ impl Engine {
                         out.d = Some(svg::poly_d(&g.poly, 1));
                         out.frames = local.frames.iter().filter_map(|(uid, r)| rect_arr(*r).map(|b| FrameOut { uid: uid.clone(), bbox: b })).collect();
                         built.insert(layer.id.as_str(), (g, local.em * layer.scale_em()));
+                        if let Some(g) = &local.glyphs {
+                            layer_glyphs.insert(layer.id.as_str(), g.clone());
+                        }
                         if let Some(sp) = &local.spine {
                             layer_spines.insert(layer.id.as_str(), sp.iter().map(|l| l.iter().map(|p| m.apply(*p)).collect()).collect());
                         }
@@ -872,6 +1075,7 @@ impl Engine {
         let ops: HashMap<&str, Op> = doc.layers.iter().map(|l| (l.id.as_str(), l.op)).collect();
         let mut renders = Vec::with_capacity(specs.len());
         let mut spines = HashMap::new();
+        let mut letters = HashMap::new();
         for spec in specs {
             if let ([only], false) = (&spec.members[..], spec.modifiers.iter().any(|m| m.on)) {
                 if let Some(sp) = layer_spines.get(only.id()) {
@@ -910,13 +1114,25 @@ impl Engine {
                 let em = spec.em.unwrap_or(first_em.unwrap_or(min_em)).max(1.0);
                 acc = apply_all(acc, &spec.modifiers, &Ctx { em, quality });
             }
+            if spec.letters {
+                // One added text and nothing that merges outlines: its own glyphs; otherwise pieces by shape.
+                let op_of = |m: &Member| match m {
+                    Member::With { op, .. } => *op,
+                    Member::Id(id) => ops.get(id.as_str()).copied().unwrap_or_default(),
+                };
+                let tags = match &spec.members[..] {
+                    [only] if op_of(only) == Op::Add && !spec.modifiers.iter().any(|m| m.on) => layer_glyphs.get(only.id()),
+                    _ => None,
+                };
+                letters.insert(spec.id.clone(), letter_parts(&acc.poly, tags.map(|t| &t[..]), min_em));
+            }
             renders.push((spec.id.clone(), acc, min_em));
         }
-        (renders, outs, spines)
+        (renders, outs, spines, letters)
     }
 
     pub fn build(&mut self, doc: &Document) -> BuildOut {
-        let (renders, layers, spines) = self.build_scene_spines(doc);
+        let (renders, layers, spines, mut letters) = self.build_scene_spines(doc);
         let mut bbox = Rect::EMPTY;
         let mut points = 0;
         let renders = renders
@@ -926,7 +1142,8 @@ impl Engine {
                 bbox = bbox.union(&b);
                 points += geo.poly.point_count();
                 let spine = spines.get(&id).map(|sp| spine_out(sp));
-                RenderOut { id, d: svg::poly_d(&geo.poly, 2), bbox: rect_arr(b), points: geo.poly.point_count(), spine }
+                let (glyphs, words) = letters.remove(&id).unzip();
+                RenderOut { id, d: svg::poly_d(&geo.poly, 2), bbox: rect_arr(b), points: geo.poly.point_count(), spine, glyphs, words }
             })
             .collect();
         BuildOut { renders, bbox: rect_arr(bbox), layers, points }
@@ -1004,74 +1221,14 @@ impl Engine {
     pub fn split(&mut self, doc: &Document, id: &str) -> Result<Vec<PieceOut>, String> {
         let (layer, poly, curves, _) = self.layer_curves(doc, id)?;
         let exact = curves.filter(|c| c.len() == poly.contours.len());
-        let n = poly.contours.len();
-        let areas: Vec<f64> = poly.contours.iter().map(|c| crate::geom::signed_area(c)).collect();
-        // Each hole belongs to the smallest solid that contains it.
-        let mut owner: Vec<usize> = (0..n).collect();
-        for i in 0..n {
-            if areas[i] >= 0.0 {
-                continue;
-            }
-            let p = crate::geom::interior_point(&poly.contours[i]);
-            let probe = poly.contours[i].first().copied().unwrap_or(p);
-            let mut best: Option<usize> = None;
-            for j in 0..n {
-                if areas[j] <= 0.0 || crate::geom::winding(&poly.contours[j], probe) == 0 {
-                    continue;
-                }
-                if best.is_none_or(|b| areas[j] < areas[b]) {
-                    best = Some(j);
-                }
-            }
-            if let Some(b) = best {
-                owner[i] = b;
-            }
-        }
-        let solids: Vec<usize> = (0..n).filter(|&i| areas[i] > 0.0).collect();
-        if solids.is_empty() {
+        let groups = piece_groups(&poly);
+        if groups.is_empty() {
             return Err("This layer has no outline to break apart.".into());
-        }
-        // Union-find over solids for the dot-of-an-i rule.
-        let mut parent: HashMap<usize, usize> = solids.iter().map(|&i| (i, i)).collect();
-        fn find(p: &mut HashMap<usize, usize>, i: usize) -> usize {
-            let q = p[&i];
-            if q == i {
-                return i;
-            }
-            let r = find(p, q);
-            p.insert(i, r);
-            r
-        }
-        let boxes: HashMap<usize, Rect> = solids.iter().map(|&i| (i, crate::geom::Shape::new(vec![poly.contours[i].clone()]).bbox())).collect();
-        for (a_i, &a) in solids.iter().enumerate() {
-            for &b in &solids[a_i + 1..] {
-                let (ra, rb) = (boxes[&a], boxes[&b]);
-                let (small, big, sa, sb) = if areas[a] < areas[b] { (ra, rb, areas[a], areas[b]) } else { (rb, ra, areas[b], areas[a]) };
-                // Dots and accents are much shorter than their letter.
-                if sa > sb * 0.6 || small.height() > big.height() * 0.5 {
-                    continue;
-                }
-                let overlap = small.x1.min(big.x1) - small.x0.max(big.x0);
-                let gap = (small.y0 - big.y1).max(big.y0 - small.y1);
-                if overlap > small.width() * 0.5 && gap < big.height() * 0.5 {
-                    let (x, y) = (find(&mut parent, a), find(&mut parent, b));
-                    parent.insert(x, y);
-                }
-            }
-        }
-        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for i in 0..n {
-            let solid = if areas[i] > 0.0 { i } else { owner[i] };
-            if areas[solid] <= 0.0 {
-                continue;
-            }
-            let root = find(&mut parent, solid);
-            groups.entry(root).or_default().push(i);
         }
         let em = layer.em();
         let m = layer.transform();
         let mut out = Vec::new();
-        for idx in groups.values() {
+        for idx in &groups {
             let shape = Shape::new(idx.iter().map(|&i| poly.contours[i].clone()).collect());
             let c = shape.bbox().center();
             let mut cs: CurveShape = match &exact {
@@ -1887,6 +2044,38 @@ mod tests {
         let pieces = e.split(&d, "t").unwrap();
         assert_eq!(pieces.len(), 3, "{pieces:?}");
         assert!(pieces[0].x < pieces[1].x && pieces[1].x < pieces[2].x);
+    }
+
+    #[test]
+    fn letters_by_glyph_and_word() {
+        let mut e = engine();
+        let text_of = |s: &str, mods: &str, letters: bool| {
+            doc(&format!(
+                r#"{{"layers":[{{"id":"t","modifiers":[{mods}],"content":{{"type":"text","text":"{s}","font":"archivo","size":100}}}}],
+                "renders":[{{"id":"t","members":["t"],"letters":{letters}}}]}}"#
+            ))
+        };
+        let text = |mods: &str, letters: bool| text_of("Hi oB\\nij", mods, letters);
+        let subpaths = |r: &RenderOut| r.d.matches('M').count();
+        // Still text says nothing extra.
+        let plain = e.build(&text("", false));
+        assert!(plain.renders[0].glyphs.is_none() && plain.renders[0].words.is_none());
+        // H, i (stem and dot), o (with its hole), B, i, j: three words over two lines.
+        for mods in ["", r#"{"kind":"arc","bend":0.5},{"kind":"slant","angle":12}"#] {
+            let out = e.build(&text(mods, true));
+            let r = &out.renders[0];
+            let (g, w) = (r.glyphs.as_ref().unwrap(), r.words.as_ref().unwrap());
+            assert_eq!(g.len(), subpaths(r), "{mods}");
+            assert_eq!(w, &[0, 0, 1, 1, 2, 2], "{mods}");
+            assert_eq!(g.iter().filter(|&&k| k == 1).count(), 2, "the i's dot goes with it: {g:?}");
+            assert!(g.windows(2).all(|p| p[0] <= p[1]), "{g:?}");
+        }
+        // A modifier that merges outlines: letters found by shape instead.
+        let out = e.build(&text_of("Hi oB", r#"{"kind":"weight","amount":0.02}"#, true));
+        let r = &out.renders[0];
+        let g = r.glyphs.as_ref().unwrap();
+        assert_eq!(g.len(), subpaths(r));
+        assert_eq!(r.words.as_ref().unwrap(), &[0, 0, 1, 1], "{g:?}");
     }
 
     #[test]

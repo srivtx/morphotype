@@ -5,6 +5,7 @@
 use crate::field::{extract, Grid};
 use crate::geom::{normalize_winding, pt, Pt, Rect, Shape};
 use crate::noise::noise2;
+use crate::stroke::LineCap;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{PI, TAU};
 
@@ -49,16 +50,27 @@ pub enum Symbol {
     CatHead { #[serde(default = "d::<30>")] ears: f64 },
     /// Chat bubble with a tail (mascot app icons).
     Bubble { #[serde(default = "d::<30>")] tail: f64, #[serde(default = "d::<260>")] roundness: f64 },
-    /// Thick spiral stroke with round ends.
-    Spiral { #[serde(default = "d::<250>")] turns: f64, #[serde(default = "d::<55>")] weight: f64 },
-    /// Rounded petals with pinched valleys.
-    Flower { #[serde(default = "d::<400>")] petals: f64, #[serde(default = "d::<35>")] depth: f64 },
+    /// Thick spiral stroke, round-ended unless `cap` says otherwise.
+    Spiral { #[serde(default = "d::<250>")] turns: f64, #[serde(default = "d::<55>")] weight: f64, #[serde(default)] cap: LineCap },
+    /// Petals around a centre: wavy (pinched valleys), round discs, pills,
+    /// ovals or pointed leaves; `depth` opens the gaps between them, `hole`
+    /// punches out the middle (a fraction of the width).
+    Flower {
+        #[serde(default = "d::<400>")]
+        petals: f64,
+        #[serde(default = "d::<35>")]
+        depth: f64,
+        #[serde(default)]
+        petal: Petal,
+        #[serde(default)]
+        hole: f64,
+    },
     Arrow { #[serde(default = "d::<45>")] head: f64, #[serde(default = "d::<30>")] shaft: f64 },
     Bolt,
     /// Crescent; `phase` 0 = thin sliver, 1 = nearly full.
     Moon { #[serde(default = "d::<40>")] phase: f64 },
-    /// A smiling mouth: a thick arc with round ends. Negative `curve` frowns.
-    Smile { #[serde(default = "d::<50>")] curve: f64, #[serde(default = "d::<35>")] weight: f64 },
+    /// A smiling mouth: a thick arc, round-ended unless `cap` says otherwise. Negative `curve` frowns.
+    Smile { #[serde(default = "d::<50>")] curve: f64, #[serde(default = "d::<35>")] weight: f64, #[serde(default)] cap: LineCap },
     /// Quarter disc filling the box; the square corner is bottom-left. Modular logos.
     Quarter,
     /// Half disc, flat side down, in a 2:1 box.
@@ -120,7 +132,43 @@ pub enum Symbol {
     },
 }
 
+/// Petal shape for [`Symbol::Flower`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Petal {
+    /// One wavy outline with pinched valleys.
+    #[default]
+    Wave,
+    /// Overlapping discs: daisies, quatrefoils.
+    Round,
+    /// Capsules from the centre out.
+    Pill,
+    Oval,
+    /// Leaves pointed at both ends.
+    Pointed,
+}
+
 const SEG: usize = 256;
+
+/// Closes one end of a thick stroke drawn as a single outline: from `a`, the
+/// side the outline arrives on, over to `b`, the other side. `past` points
+/// away from the stroke, so the cap bulges outwards whichever way the
+/// outline runs.
+fn stroke_end(pts: &mut Vec<Pt>, a: Pt, b: Pt, past: Pt, cap: LineCap) {
+    let c = (a + b) * 0.5;
+    let half = (a - c).len();
+    let past = past.normalized() * half;
+    match cap {
+        LineCap::Butt => {}
+        LineCap::Square => pts.extend([a + past, b + past]),
+        LineCap::Round => {
+            for k in 1..16 {
+                let t = PI * k as f64 / 16.0;
+                pts.push(c + (a - c) * t.cos() + past * t.sin());
+            }
+        }
+    }
+}
 
 fn ellipse(c: Pt, rx: f64, ry: f64, n: usize) -> Vec<Pt> {
     (0..n)
@@ -389,7 +437,7 @@ pub fn build(sym: &Symbol) -> Shape {
             }
             Shape::new(vec![pts])
         }
-        Symbol::Spiral { turns, weight } => {
+        Symbol::Spiral { turns, weight, cap } => {
             let turns = turns.clamp(0.5, 6.0);
             let r0 = 0.05;
             let spacing = (0.5 - r0) / (turns + 0.5);
@@ -413,23 +461,14 @@ pub fn build(sym: &Symbol) -> Shape {
                 left.push(p + nrm * half);
                 right.push(p - nrm * half);
             }
-            let cap = |p: Pt, from: Pt, out: &mut Vec<Pt>| {
-                let d = from - p;
-                let a0 = d.y.atan2(d.x);
-                for k in 1..12 {
-                    let a = a0 + PI * k as f64 / 12.0;
-                    out.push(pt(p.x + half * a.cos(), p.y + half * a.sin()));
-                }
-            };
             let mut pts = left.clone();
-            let (end, _) = centre(total);
-            cap(end, *left.last().unwrap(), &mut pts);
+            stroke_end(&mut pts, *left.last().unwrap(), *right.last().unwrap(), centre(total).1, *cap);
             pts.extend(right.iter().rev());
-            let (start, _) = centre(0.0);
-            cap(start, right[0], &mut pts);
+            stroke_end(&mut pts, right[0], left[0], -centre(0.0).1, *cap);
             Shape::new(vec![pts])
         }
-        Symbol::Flower { petals, depth } => {
+        Symbol::Flower { petals, depth, petal, hole } if *petal != Petal::Wave || *hole > 0.0 => flower(petals.round().clamp(2.0, 16.0) as usize, depth.clamp(0.0, 0.8), *petal, hole.clamp(0.0, 0.8) * 0.5),
+        Symbol::Flower { petals, depth, .. } => {
             let n = petals.round().clamp(2.0, 16.0);
             let dep = depth.clamp(0.0, 0.8);
             let pts = (0..SEG * 2)
@@ -474,7 +513,7 @@ pub fn build(sym: &Symbol) -> Shape {
             }
             Shape::new(vec![pts])
         }
-        Symbol::Smile { curve, weight } => {
+        Symbol::Smile { curve, weight, cap } => {
             let c = curve.clamp(-1.0, 1.0);
             let w = weight.clamp(0.05, 1.0) * 0.3;
             let h = (0.08 + c.abs() * 1.3).min(1.45);
@@ -491,19 +530,14 @@ pub fn build(sym: &Symbol) -> Shape {
             for k in 0..=n {
                 pts.push(at(r + w / 2.0, mid - h + 2.0 * h * k as f64 / n as f64));
             }
-            let cap = |pts: &mut Vec<Pt>, a: f64, from_out: bool| {
-                let e = at(r, a);
-                let dir = if from_out { a } else { a + PI };
-                for k in 1..16 {
-                    let t = dir + PI * k as f64 / 16.0 * if from_out == (sign > 0.0) { 1.0 } else { -1.0 } * sign;
-                    pts.push(pt(e.x + w / 2.0 * t.cos(), e.y + w / 2.0 * t.sin()));
-                }
-            };
-            cap(&mut pts, mid + h, true);
+            // The arc runs with the angle, so past its ends is the tangent
+            // forwards at `mid + h` and backwards at `mid - h`.
+            let (a1, a0) = (mid + h, mid - h);
+            stroke_end(&mut pts, at(r + w / 2.0, a1), at(r - w / 2.0, a1), pt(-a1.sin(), a1.cos()), *cap);
             for k in 0..=n {
                 pts.push(at(r - w / 2.0, mid + h - 2.0 * h * k as f64 / n as f64));
             }
-            cap(&mut pts, mid - h, false);
+            stroke_end(&mut pts, at(r - w / 2.0, a0), at(r + w / 2.0, a0), pt(a0.sin(), -a0.cos()), *cap);
             Shape::new(vec![pts])
         }
         Symbol::Quarter => {
@@ -663,6 +697,61 @@ pub fn build(sym: &Symbol) -> Shape {
     s
 }
 
+/// [`Symbol::Flower`] as a distance field: `n` petals reaching radius 0.5,
+/// first one at the top, with a hole of radius `hole`.
+fn flower(n: usize, dep: f64, petal: Petal, hole: f64) -> Shape {
+    let s = (PI / n as f64).sin();
+    let dirs: Vec<Pt> = (0..n).map(|k| {
+        let a = k as f64 / n as f64 * TAU - PI / 2.0;
+        pt(a.cos(), a.sin())
+    }).collect();
+    // A point in petal k's frame: along its ray (u) and across it (w).
+    let local = |p: Pt, d: Pt| (p.dot(d), p.cross(d));
+    // Half-width of ovals and leaves: neighbours just touch around depth 0.6,
+    // and a petal is never wider than 0.8 × its half length.
+    let across = (0.25 * (PI / n as f64).tan() * (1.6 - 1.5 * dep)).clamp(0.02, 0.2);
+    let petals = |p: Pt| -> f64 {
+        match petal {
+            Petal::Wave => {
+                let a = p.y.atan2(p.x);
+                let r = 0.5 * (1.0 - dep * ((a + PI / 2.0) * n as f64 * 0.5).sin().abs().powf(1.6));
+                p.len() - r
+            }
+            Petal::Round => {
+                // Discs on a ring with a core filling the middle; at depth 0.8 neighbours just touch.
+                let k = s * (1.8 - dep);
+                let ring = 0.5 / (1.0 + k);
+                let r = 0.5 - ring;
+                dirs.iter().map(|&d| p.dist(d * ring) - r).fold(p.len() - ring, f64::min)
+            }
+            Petal::Pill => {
+                let k = s * (1.0 - dep).max(0.15);
+                let hw = 0.5 * k / (1.0 + k);
+                dirs.iter().map(|&d| {
+                    let (u, w) = local(p, d);
+                    pt(u - u.clamp(0.0, 0.5 - hw), w).len() - hw
+                }).fold(f64::MAX, f64::min)
+            }
+            Petal::Oval => dirs.iter().map(|&d| {
+                let (u, w) = local(p, d);
+                ((((u - 0.25) / 0.25).powi(2) + (w / across).powi(2)).sqrt() - 1.0) * across
+            }).fold(f64::MAX, f64::min),
+            Petal::Pointed => {
+                // A lens: where two circles through both tips overlap. As wide
+                // as an oval it looks blunt, so leaves are narrower.
+                let across = across * 0.75;
+                let r = (0.0625 + across * across) / (2.0 * across);
+                dirs.iter().map(|&d| {
+                    let (u, w) = local(p, d);
+                    let q = pt(u - 0.25, w.abs() + (r - across));
+                    q.len() - r
+                }).fold(f64::MAX, f64::min)
+            }
+        }
+    };
+    field_shape(Rect { x0: -0.5, y0: -0.5, x1: 0.5, y1: 0.5 }, 1.0 / 400.0, |p| petals(p).max(hole - p.len()))
+}
+
 /// Zero level of a distance function sampled over `bounds`.
 fn field_shape(bounds: Rect, cell: f64, f: impl Fn(Pt) -> f64) -> Shape {
     let g = Grid::covering(bounds, cell * 3.0, cell);
@@ -690,8 +779,8 @@ mod tests {
             r#"[{"kind":"circle"},{"kind":"ring"},{"kind":"squircle"},{"kind":"roundRect"},{"kind":"polygon","rounding":0.3},
             {"kind":"star","rounding":0.2},{"kind":"sparkle"},{"kind":"burst"},{"kind":"pin"},{"kind":"cursor"},{"kind":"blob","wobble":1},
             {"kind":"eyes"},{"kind":"heart"},{"kind":"plus"},{"kind":"catHead"},{"kind":"bubble"},{"kind":"spiral"},
-            {"kind":"flower"},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1},
-            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3},{"kind":"folder"},{"kind":"quarter"},{"kind":"half"},{"kind":"cove"},{"kind":"pill"},{"kind":"pill","aspect":0.4},{"kind":"folder","corner":0},
+            {"kind":"flower"},{"kind":"flower","petal":"round","petals":6},{"kind":"flower","petal":"pill","petals":8,"hole":0.3},{"kind":"flower","petal":"oval","petals":2},{"kind":"flower","petal":"pointed","petals":16,"depth":0.8},{"kind":"flower","hole":0.4},{"kind":"arrow"},{"kind":"bolt"},{"kind":"moon"},{"kind":"moon","phase":1},
+            {"kind":"smile"},{"kind":"smile","curve":-0.6},{"kind":"smile","curve":0.0},{"kind":"smile","cap":"butt"},{"kind":"smile","curve":-0.4,"cap":"square"},{"kind":"spiral","cap":"butt"},{"kind":"rays"},{"kind":"rays","jitter":1,"seed":3},{"kind":"folder"},{"kind":"quarter"},{"kind":"half"},{"kind":"cove"},{"kind":"pill"},{"kind":"pill","aspect":0.4},{"kind":"folder","corner":0},
             {"kind":"wavy"},{"kind":"wavy","scallop":1,"waves":12,"depth":0.2},{"kind":"lens"},{"kind":"cloud"},{"kind":"cloud","puffs":5,"seed":2},
             {"kind":"globe"},{"kind":"globe","aspect":1.8,"meridians":4},{"kind":"asterisk"},{"kind":"asterisk","arms":24,"weight":0.02,"inner":0.2}]"#,
         )
@@ -702,6 +791,61 @@ mod tests {
             assert!(sh.area() > 0.0, "{s:?} area {}", sh.area());
             let b = sh.bbox();
             assert!(b.width() <= 1.05 && b.height() <= 1.05, "{s:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn stroke_symbol_ends_bulge_out() {
+        // Two round ends add one disc of the stroke's width to the flat-ended
+        // outline and two square ends add a w×w square, so the extra areas
+        // compare as π : 4. A cap that bites into the stroke takes area away.
+        let shapes = [("smile", r#""curve":0.5"#), ("smile", r#""curve":-0.8,"weight":0.9"#), ("smile", r#""curve":0"#), ("spiral", r#""turns":3"#)];
+        for (kind, params) in shapes {
+            let area = |cap: &str| {
+                let s: Symbol = serde_json::from_str(&format!(r#"{{"kind":"{kind}",{params},"cap":"{cap}"}}"#)).unwrap();
+                build(&s).area()
+            };
+            let (butt, round, square) = (area("butt"), area("round"), area("square"));
+            assert!(round > butt, "{kind} {params}: round {round} ≤ flat {butt}");
+            let ratio = (square - butt) / (round - butt);
+            assert!((ratio - 4.0 / PI).abs() < 0.01, "{kind} {params}: square/round extra {ratio}");
+        }
+        // Files saved before caps were a choice keep round ends.
+        let old: Symbol = serde_json::from_str(r#"{"kind":"smile"}"#).unwrap();
+        assert!(matches!(old, Symbol::Smile { cap: LineCap::Round, .. }));
+    }
+
+    #[test]
+    fn flower_petals_count_and_hole() {
+        for petal in [Petal::Wave, Petal::Round, Petal::Pill, Petal::Oval, Petal::Pointed] {
+            for n in [3.0, 6.0, 8.0] {
+                let sh = build(&Symbol::Flower { petals: n, depth: 0.35, petal, hole: 0.0 });
+                // Tips: outline points farther out than both neighbours, on the outer contour.
+                let outer = sh.contours.iter().max_by(|a, b| crate::geom::signed_area(a).abs().total_cmp(&crate::geom::signed_area(b).abs())).unwrap();
+                let c = crate::geom::resample(outer, 720);
+                let r = |i: usize| c[i % 720].len();
+                let tips = (0..720).filter(|&i| r(i) > 0.45 && (1..=12).all(|d| r(i) >= r(i + d) && r(i) > r(i + 720 - d))).count();
+                assert_eq!(tips, n as usize, "{petal:?} × {n}");
+                let b = sh.bbox();
+                assert!((b.y0 + 0.5).abs() < 0.01, "{petal:?} × {n}: the first petal reaches the top, {b:?}");
+                assert!(crate::geom::shape_winding(&sh, pt(0.0, 0.0)) != 0, "{petal:?} × {n}: solid middle");
+                let holed = build(&Symbol::Flower { petals: n, depth: 0.35, petal, hole: 0.3 });
+                assert!(crate::geom::shape_winding(&holed, pt(0.0, 0.0)) == 0 && crate::geom::shape_winding(&holed, pt(0.0, -0.2)) != 0, "{petal:?} × {n}: hole");
+            }
+        }
+    }
+
+    #[test]
+    fn smile_is_symmetric() {
+        for cap in [LineCap::Round, LineCap::Butt, LineCap::Square] {
+            for curve in [0.5, -0.6, 0.0, 1.0] {
+                let b = build(&Symbol::Smile { curve, weight: 0.35, cap }).bbox();
+                assert!((b.x0 + b.x1).abs() < 1e-3, "{cap:?} {curve}: {b:?}");
+                if cap == LineCap::Round {
+                    // Chord of 0.9 including the caps.
+                    assert!((b.width() - 0.9).abs() < 2e-3, "{curve}: {}", b.width());
+                }
+            }
         }
     }
 

@@ -6,6 +6,8 @@ export type Align = 'left' | 'center' | 'right';
 export type Modifier =
   | { kind: 'weight'; amount: number }
   | { kind: 'round'; radius: number }
+  | { kind: 'mirror'; axis: 'x' | 'y' | 'both'; flip: number; offset: number }
+  | { kind: 'scallop'; count: number; depth: number; width: number; inward: number }
   | { kind: 'outline'; width: number }
   | { kind: 'ink'; amount: number; scale: number; seed: number }
   | { kind: 'slant'; angle: number }
@@ -66,12 +68,12 @@ export type SymbolSpec =
   | { kind: 'plus'; thickness: number }
   | { kind: 'catHead'; ears: number }
   | { kind: 'bubble'; tail: number; roundness: number }
-  | { kind: 'spiral'; turns: number; weight: number }
-  | { kind: 'flower'; petals: number; depth: number }
+  | { kind: 'spiral'; turns: number; weight: number; cap?: LineCap }
+  | { kind: 'flower'; petals: number; depth: number; petal?: 'wave' | 'round' | 'pill' | 'oval' | 'pointed'; hole?: number }
   | { kind: 'arrow'; head: number; shaft: number }
   | { kind: 'bolt' }
   | { kind: 'moon'; phase: number }
-  | { kind: 'smile'; curve: number; weight: number }
+  | { kind: 'smile'; curve: number; weight: number; cap?: LineCap }
   | { kind: 'rays'; rays: number; short: number; inner: number; jitter: number; seed: number }
   | { kind: 'quarter' }
   | { kind: 'half' }
@@ -169,6 +171,8 @@ export interface RenderSpec {
   members: Member[];
   modifiers?: ModEntry[];
   em?: number;
+  /** Say which letter and word each outline belongs to (see RenderOut.glyphs). */
+  letters?: boolean;
 }
 
 export interface EngineDocument {
@@ -193,6 +197,10 @@ export interface RenderOut {
   points: number;
   /** A single pen line's centre line: `[x, y, t, joined]` per point (t 0…1 along it). */
   spine?: number[];
+  /** Asked for with RenderSpec.letters: the letter (in reading order) of each subpath of `d`… */
+  glyphs?: number[];
+  /** …and each letter's word. */
+  words?: number[];
 }
 
 export interface BuildOut {
