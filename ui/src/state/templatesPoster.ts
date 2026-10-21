@@ -46,6 +46,7 @@ function tube(d: string, size: number, width: number, x: number, y: number, st: 
 
 const flat = (c: string): Style => style('flat', { fill: c });
 const puffy = (body: string, shade: string, extra: Record<string, number | string> = {}) => style('inflate', { body, shade, ...extra });
+const vinyl = (body: string, shade: string, extra: Record<string, number | string> = {}) => style('vinyl', { body, shade, ...extra });
 const SILVER = { c1: '#15171c', c2: '#6f747e', c3: '#d9dde5', c4: '#ffffff', rimColor: '#ffffff', liquid: 0.25, bands: 1.4 };
 const chrome = (extra: Record<string, number | string> = {}) => style('chrome', { ...SILVER, ...extra });
 
@@ -81,7 +82,7 @@ export const POSTER_TEMPLATES: Template[] = [
       const blob = shape('blob', 300, -400, -190, puffy('#c98cff', '#7b2fd6', { bevel: 90, gloss: 0.55, surface: 1, marks: '#f3e6ff', marksAmount: 0.85, marksSize: 55, marksWidth: 1.4 }), 'Topo blob', { lobes: 3, depth: 0.15, seed: 2, wobble: 0.4 }, { loop: 'float', amount: 14, period: 4 });
       blob.rotation = -18;
       blob.style.animate = { marksFlow: anim(1.6, 4, 'swing'), bevel: anim(60, 4, 'swing') };
-      const spikes = shape('rays', 330, 0, 0, chrome({ bevel: 9, softness: 0 }), 'Spikes', { rays: 14, short: 0.45, inner: 0.16, jitter: 0.6, seed: 3 });
+      const spikes = shape('rays', 330, 0, 0, chrome({ form: 1, bevel: 120, softness: 7 }), 'Spikes', { rays: 14, short: 0.45, inner: 0.16, jitter: 0.6, seed: 3 });
       const ball = shape('circle', 74, 0, 0, chrome({ c1: '#4a4f58', c2: '#9aa0aa', bevel: 40, liquid: 0, bands: 1 }), 'Ball');
       const star = group([spikes, ball], { name: 'Chrome star', motion: newMotion({ loop: 'spin', amount: 1, period: 8 }) });
       [spikes, ball].forEach((c) => ((c.x = 400), (c.y = -170)));
@@ -101,20 +102,20 @@ export const POSTER_TEMPLATES: Template[] = [
   ),
   scene(
     'Animated · Inflatable',
-    'Inflated pool-toy tubes over thin black type: a glossy "#" drawing itself on, a pink arrow, a silver star puffing up and down (Puffy with a moving Puff)',
+    'Inflated pool-toy tubes over thin black type, in Inflatable vinyl: a pinched "#" wiping off and drawing back on, a pink arrow, a ringed silver star whose pinch breathes',
     (() => {
       const title = words('INFLATABLE\nABSTRACT', 'inter', 158, 0, -10, flat('#0a0a0a'), 'Title', undefined, -0.035, 0.9);
-      const hash = tube('M -0.16 -0.46 L -0.16 0.46 M 0.16 -0.46 L 0.16 0.46 M -0.46 -0.15 L 0.46 -0.15 M -0.46 0.17 L 0.46 0.17', 270, 46, -440, -215, puffy('#62ff3a', '#139c1e', { bevel: 22, gloss: 1, rimTint: 0.2, shadow: 0.25 }), 'Hash', { period: 4 });
+      const hash = tube('M -0.16 -0.46 L -0.16 0.46 M 0.16 -0.46 L 0.16 0.46 M -0.46 -0.15 L 0.46 -0.15 M -0.46 0.17 L 0.46 0.17', 270, 46, -440, -215, vinyl('#4dff2e', '#0e8f1a', { rings: 2, ringGap: 40, pinch: 0.5, shadow: 0.25 }), 'Hash', { period: 4 });
       hash.rotation = -10;
       // Wipes back to its first bar, never quite gone.
       hash.animate![lineAnimKey('end')].to = 0.25;
-      const arrow = tube('M -0.42 0.5 L -0.42 0 C -0.42 -0.12 -0.36 -0.16 -0.2 -0.16 L 0.18 -0.16', 330, 44, -400, 230, puffy('#ff74d9', '#c4128c', { bevel: 22, gloss: 0.9, shadow: 0.25 }), 'Arrow');
-      const head = shape('polygon', 150, -290, 177, puffy('#ff8a3d', '#d43d00', { bevel: 40, gloss: 0.9, shadow: 0.25 }), 'Arrow head', { sides: 3, rounding: 0.18 });
+      const arrow = tube('M -0.42 0.5 L -0.42 0 C -0.42 -0.12 -0.36 -0.16 -0.2 -0.16 L 0.18 -0.16', 330, 44, -400, 230, vinyl('#ff5ec4', '#b0106e', { shadow: 0.25 }), 'Arrow');
+      const head = shape('polygon', 150, -290, 177, vinyl('#ff7a2e', '#c23a00', { bevel: 60, seam: 0.5, shadow: 0.25 }), 'Arrow head', { sides: 3, rounding: 0.18 });
       head.rotation = 90;
       const arrowSet = group([arrow, head], { name: 'Arrow', motion: newMotion({ loop: 'float', amount: 10, period: 2 }) });
-      const star = shape('sparkle', 240, 430, -230, puffy('#f4f6fa', '#7d8496', { bevel: 50, gloss: 1.2, rimTint: 0.5, shadow: 0.3 }), 'Silver star', { pinch: 0.45 }, { loop: 'pulse', amount: 12, period: 2 });
-      star.style.animate = { bevel: anim(22, 2, 'swing') };
-      const wave = tube('M -0.5 0 L 0.5 0', 360, 36, 370, 270, puffy('#5b8cff', '#1f3fc4', { bevel: 18, gloss: 1, shadow: 0.25 }), 'Blue wave', { period: 4, phase: 0.4 });
+      const star = shape('sparkle', 240, 430, -230, vinyl('#e9ecf2', '#5d6474', { rings: 1, ringGap: 30, pinch: 0.7, through: 0.2, shadow: 0.3 }), 'Silver star', { pinch: 0.45 }, { loop: 'pulse', amount: 12, period: 2 });
+      star.style.animate = { pinch: anim(0.2, 2, 'swing') };
+      const wave = tube('M -0.5 0 L 0.5 0', 360, 36, 370, 270, vinyl('#3d6bff', '#1b2fb0', { wrinkles: 0.5, shadow: 0.25 }), 'Blue wave', { period: 4, phase: 0.4 });
       if (wave.content.type === 'line') wave.content.squiggle = { kind: 'zigzag', amplitude: 30, spacing: 46, smooth: 1, round: 0, loops: 1.2, perSegment: false, flatEnds: false, flip: false };
       const tag = shape('roundRect', 200, 270, 165, { ...flat('#86ff4a'), stroke: stroke(3, '#0a0a0a', 'inside') }, 'Tag', { radius: 0.16, aspect: 2.6 });
       const vol = words('VOL.2', 'inter', 50, 270, 163, flat('#0a0a0a'), 'Vol', undefined, -0.02);
