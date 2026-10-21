@@ -7,6 +7,7 @@ import { TYPE_TERMS } from './TypeGuide';
 import { Tour } from '../Tour';
 import { engine } from '../../engine/client';
 import type { GlyphPreview, ModEntry } from '../../engine/types';
+import { KerningPanel, KerningStage, type FontKerning } from './KerningEditor';
 import { platform } from '../../platform';
 import { uid, type TypeProject } from '../../state/model';
 import { lookOf, SHAPE_RECIPES } from '../../state/recipes';
@@ -104,7 +105,11 @@ function metricsOf(t: TypeProject) {
 export function TypeMode() {
   const type = useStore((s) => s.project.type);
   const ready = useStore((s) => s.ready);
+  const tab = useStore((s) => s.typeTab);
   const { map, busy } = usePreviews(type);
+  // Compiled only once the engine has the fonts it needs.
+  const family = useCompiledFont(ready ? type : undefined);
+  const kerning = useKerningTable(ready ? type : undefined, tab === 'kerning');
   if (!ready) return <div className="workspace type-mode" />;
   if (!type) return <TypeStart />;
   return (
@@ -113,11 +118,11 @@ export function TypeMode() {
         <GlyphGrid t={type} previews={map} />
       </aside>
       <section className="type-center">
-        <GlyphCanvas t={type} previews={map} busy={busy} />
-        <Tester t={type} />
+        {tab === 'kerning' ? <KerningStage t={type} previews={map} table={kerning} m={metricsOf(type)} /> : <GlyphCanvas t={type} previews={map} busy={busy} />}
+        <Tester t={type} family={family} />
       </section>
       <aside className="panel right">
-        <FontPanel t={type} previews={map} />
+        <FontPanel t={type} previews={map} family={family} kerning={kerning} />
       </aside>
       <TypeTour />
     </main>
@@ -355,14 +360,17 @@ function GlyphCanvas({ t, previews, busy }: { t: TypeProject; previews: Map<stri
   );
 }
 
-/** Live preview with the real compiled font. */
-function Tester({ t }: { t: TypeProject }) {
+/**
+ * The font compiled for real and registered with the page, recompiled after
+ * edits settle. Returns its CSS family name once the first build is in.
+ */
+function useCompiledFont(t: TypeProject | undefined) {
   const [family, setFamily] = useState<string | null>(null);
-  const [size, setSize] = useState(64);
   const counter = useRef(0);
   const faceRef = useRef<FontFace | null>(null);
-  const key = geoKey(t) + t.charset;
+  const key = t ? geoKey(t) + t.charset + JSON.stringify([t.kerning, t.kernClasses, t.classKerning]) : '';
   useEffect(() => {
+    if (!t) return;
     let live = true;
     const timer = setTimeout(async () => {
       try {
@@ -387,6 +395,43 @@ function Tester({ t }: { t: TypeProject }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+  return family;
+}
+
+/**
+ * The font's own kerning for the kerning editor, measured once the editor
+ * is open and again when the look, the characters or a redrawn glyph change it.
+ */
+function useKerningTable(t: TypeProject | undefined, on: boolean) {
+  const [table, setTable] = useState<FontKerning | null>(null);
+  // Redrawn glyphs keep no kerning of the base font's.
+  const key = t ? JSON.stringify([globalKey(t), t.charset, Object.entries(t.glyphs).filter(([, g]) => g.d || g.hideBase || g.parts?.some((p) => p.visible)).map(([c]) => c)]) : '';
+  const done = useRef('');
+  useEffect(() => {
+    if (!t || !on || done.current === key) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      engine.kerningTable({ ...specOf(t), kerning: {} }).then(
+        (k) => {
+          if (!live) return;
+          done.current = key;
+          setTable({ upm: k.unitsPerEm, pairs: new Map(k.pairs) });
+        },
+        (e: Error) => live && toast(e.message, 'error'),
+      );
+    }, 150);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, on]);
+  return table;
+}
+
+/** Live preview with the real compiled font. */
+function Tester({ t, family }: { t: TypeProject; family: string | null }) {
+  const [size, setSize] = useState(64);
   return (
     <div className="tester">
       <div className="tester-head">
@@ -407,14 +452,12 @@ function Tester({ t }: { t: TypeProject }) {
   );
 }
 
-type PanelTab = 'font' | 'glyph' | 'export';
-
-function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, GlyphPreview> }) {
-  const [tab, setTab] = useState<PanelTab>('font');
+function FontPanel({ t, previews, family, kerning }: { t: TypeProject; previews: Map<string, GlyphPreview>; family: string | null; kerning: FontKerning | null }) {
+  const tab = useStore((s) => s.typeTab);
   const glyph = useStore((s) => s.glyph);
   const partSel = useStore((s) => s.glyphPart);
   useEffect(() => {
-    if (partSel) setTab('glyph');
+    if (partSel) store.set({ typeTab: 'glyph' });
   }, [partSel]);
   return (
     <>
@@ -423,10 +466,11 @@ function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
           [
             ['font', 'Font'],
             ['glyph', `Glyph ${glyph}`],
+            ['kerning', 'Kerning'],
             ['export', 'Use & export'],
           ] as const
         ).map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => store.set({ typeTab: id })}>
             {label}
           </button>
         ))}
@@ -434,6 +478,7 @@ function FontPanel({ t, previews }: { t: TypeProject; previews: Map<string, Glyp
       <div className="panel-scroll">
         {tab === 'font' && <FontTab t={t} />}
         {tab === 'glyph' && <GlyphTab t={t} previews={previews} />}
+        {tab === 'kerning' && <KerningPanel t={t} table={kerning} family={family} />}
         {tab === 'export' && <ExportTab t={t} />}
       </div>
     </>

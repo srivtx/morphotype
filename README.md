@@ -38,6 +38,7 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 - Font-wide looks and modifiers, per-glyph point editing, widths and modifiers, and tracing images into glyphs.
 - Glyph layers: build glyphs from shapes and other glyphs (components), cut with them, give a glyph its own look, or bake the finished glyph into editable points.
 - A live tester using the real compiled font.
+- A **kerning editor**: type a pair or click two letters in a line of text, see it large in your font, drag the right letter or nudge it with ← → (⇧ for 10 units), and search every kerned pair. Advanced adds **kerning classes**: group letters that kern alike (the right sides of T V W, the left sides of o c e, or let it suggest groups from the font), kern one pair for the whole class, and make single-pair exceptions. Exports pack kerning into class-based GPOS tables with the exceptions alongside, so files stay small.
 - Export as `.ttf`, `.woff`, or a **web font kit** (TTF, WOFF, `@font-face` CSS and a specimen page). On the Mac app you can also install the font, and **Use in Design** adds it to your fonts under its own name, with a summary of how it differs from the font it started from.
 
 **Export**: PNG at 1×, 2× or 4× (optionally transparent), JPG, copy to clipboard, SVG with one path per object, fonts, and `.morpho` project files that embed imported fonts.
@@ -158,7 +159,7 @@ The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk
 
 ## Known limitations
 
-- Exported fonts carry the base font's kerning (blended with the morph target's), but no other OpenType features such as ligatures or alternates, and kerning can't be edited yet. Metrics come from the base font(s).
+- Exported fonts carry the base font's kerning (blended with the morph target's), plus your own pair and class kerning, but no other OpenType features such as ligatures or alternates. Kerning is written to GPOS only (no legacy `kern` table), and kerning classes aren't read back from imported fonts: the editor starts from each pair's measured value, and Suggest groups letters that kern alike. Metrics come from the base font(s).
 - Content outside the artboard isn't rendered (like a clipped frame), though you can still select and move it.
 - WOFF2 imports aren't supported yet; import the TTF or OTF instead.
 - Morphing between structurally very different glyphs, such as a two-storey and a single-storey "a", can pinch mid-way. Moving the blend toward either end resolves it.

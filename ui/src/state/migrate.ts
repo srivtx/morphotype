@@ -67,6 +67,7 @@ function normalize(p: Project): Project {
   p.layers.forEach(fix);
   p.background ??= background();
   p.fonts ??= [];
+  if (p.type) p.type.kerning ??= {};
   return p;
 }
 

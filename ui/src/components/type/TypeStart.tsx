@@ -25,7 +25,7 @@ export function TypeStart() {
   const [look, setLook] = useState(defaults.modifiers?.length ? 'From your text' : 'Plain');
   const [charset, setCharset] = useState(DEFAULT_CHARSET);
   const choices = fonts.filter((f) => f.source !== 'custom');
-  const clash = nameClash({ id: '', family, base, blank, style: 'Regular', axes: {}, morph: null, modifiers: [], tracking: 0, charset, glyphs: {}, sample: '' });
+  const clash = nameClash({ id: '', family, base, blank, style: 'Regular', axes: {}, morph: null, modifiers: [], tracking: 0, charset, glyphs: {}, kerning: {}, sample: '' });
   const create = () => {
     if (clash) return;
     const recipe = SHAPE_RECIPES.find((r) => r.name === look);
