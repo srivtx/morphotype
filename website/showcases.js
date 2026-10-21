@@ -5,7 +5,7 @@ export const SHOWCASES = [
   "id": "shape-shifter",
   "title": "Shape shifter",
   "no": 1,
-  "material": "Font morph \u00b7 Liquid chrome",
+  "material": "Font morph",
   "settings": [
    {
     "label": "Morph blend",
@@ -48,12 +48,12 @@ export const SHOWCASES = [
     "tracks": [
      {
       "kind": "param",
-      "label": "Morph \u00b7 Blend",
+      "label": "Morph · Blend",
       "period": 4
      },
      {
       "kind": "flow",
-      "label": "Liquid chrome \u00b7 Animate 0.35",
+      "label": "Liquid chrome · Animate 0.35",
       "title": "Material"
      }
     ]
@@ -131,7 +131,7 @@ export const SHOWCASES = [
      },
      {
       "kind": "param",
-      "label": "Shape \u00b7 Wobble",
+      "label": "Shape · Wobble",
       "period": 2
      }
     ]
@@ -142,7 +142,7 @@ export const SHOWCASES = [
   "id": "crystal",
   "title": "Crystal",
   "no": 3,
-  "material": "Lens glass \u00b7 facets",
+  "material": "Cut glass",
   "settings": [
    {
     "label": "Refraction",
@@ -360,7 +360,7 @@ export const SHOWCASES = [
      },
      {
       "kind": "param",
-      "label": "Stretch \u00b7 Width",
+      "label": "Stretch · Width",
       "period": 1
      }
     ]
@@ -498,7 +498,7 @@ export const SHOWCASES = [
     "tracks": [
      {
       "kind": "enter",
-      "label": "Rise \u00b7 3 letters in turn",
+      "label": "Rise · 3 letters in turn",
       "start": 0.1,
       "end": 1.08,
       "children": 3
@@ -670,7 +670,7 @@ export const SHOWCASES = [
     "tracks": [
      {
       "kind": "enter",
-      "label": "Grow \u00b7 4 in turn",
+      "label": "Grow · 4 in turn",
       "start": 0.1,
       "end": 1.2695232629975233,
       "children": 4
