@@ -23,7 +23,7 @@ Font export quality is measured by `crates/morpho-core/tests/font_audit.rs`: it 
 
 ```
 text ─► shape (rustybuzz) ─► glyph outlines (em units, cached per font/axes/glyph)
-                         └─► morph? glyph pairs (cached correspondence) at t
+                         └─► morph? glyph pairs (cached correspondence; curves blended point for point) at t
 symbol params ─► polylines (line symbols: constant-width strokes merged in a distance field)
 traced/imported path ─► parse SVG path data
 brush stroke points ─► swept-circle distance field ─► outline
@@ -64,6 +64,7 @@ Key algorithms:
 - **Type metrics under modifiers.** In a font, Weight grows each glyph on every side, so its points are pulled back onto the baseline and the x-height (lowercase) or cap height: shifted outside those lines, squeezed between them. Slant leans each glyph around half the x-height, so sidebearings stay balanced as in a drawn italic.
 - **Glyph layers.** A glyph is its base or redrawn outline plus parts: library shapes, paths, or other glyphs as components (resolved recursively, at most three deep). Parts add by concatenation and cut or mask through the same SDF boolean as layers, then the font look runs unless the glyph opts out. Finished glyphs are cached by their spec, character and quality, so editing one glyph, or recompiling the live tester, rebuilds only what changed.
 - **Morph correspondence.** Contours are paired solid-to-solid and hole-to-hole by minimum cost (exact search up to 7 contours, greedy above). Unpaired contours grow from or shrink to their own centroid. Pairs are aligned with a rigid start-point shift, then refined with banded dynamic time warping on position and tangent. Both contours are sampled at a shared parameter set that includes every original vertex of either contour, so t = 0 and t = 1 are exact.
+- **Curve morph.** Font glyphs morph curve to curve on that same pairing and warp path (`CurveMorph`). Each contour is cut at the other's nodes (nodes within 5 % of the perimeter of each other are matched instead), so both get the same pieces. Corners, explicit points on both sides and extremes both share stay on-curve points; each run between them is refit on both sides as one TrueType spline (off-curve points with implied on-curve points between them) with the fewest spans that fit both within 0.0005 em, or kept piece by piece where none does. On-curve and control points are then interpolated directly, and points within 0.01 em of the baseline, x-height or cap height in both fonts (less than any overshoot) land exactly on the blended zone. A morph of Inter and Playfair Display Black at 50 % has 3,395 points across A–Z, a–z and 0–9 (Inter alone has 1,750; Playfair 3,186), against 11,287 from resampling and refitting a polyline, and sits on its blended zones. Where a pair can't be made compatible, or its area strays more than 12 % from the polyline morph's, the glyph falls back to the polyline morph and is refit. This point-compatible structure is the prerequisite for variable font (`fvar`/`gvar`) export: each glyph's two sides become the master outlines and their difference the deltas.
 - **Curve fitting.** Schneider's algorithm, with corners detected on an RDP-simplified copy and nearly straight fits emitted as lines.
 - **Warp.** A bicubic Bezier patch over the input's bounding box. With evenly spaced control points it reproduces the identity, so a preset (Arch, Flag, Bulge…) is just a table of control-point offsets scaled by `bend`, and hand-dragged points add to it. The UI mirrors the same table to draw the net.
 - **Break apart.** Contours are grouped as solids with the holes they contain. Small pieces stacked above or below a larger one (the dot of an i, accents) stay with it, and the pieces come back in reading order.
@@ -132,7 +133,7 @@ Motion and animated materials never touch geometry; only keyframed shape and mod
 ## Roadmap
 
 1. **Kerning editor**: kerning now carries over from both sources; add a class-based editor and class-based (format 2) pair tables for smaller files.
-2. **Variable font export**: export the morph axis (and weight/round) as a real `fvar`/`gvar` variable font. The morph correspondence is already point-compatible, which is the hard part.
+2. **Variable font export**: export the morph axis (and weight/round) as a real `fvar`/`gvar` variable font. The curve morph already makes both glyphs point-compatible, which is the hard part; glyphs that fall back to the polyline morph would need it too (or ship as static outlines).
 3. **WOFF2 import** via a pure-Rust Brotli decoder.
 4. **More effects**: video loop export for animated chrome and neon; an ASCII material, now possible with the backdrop pass.
 5. **Metal path**: if profiling on Apple silicon shows WebGL overhead, move the SDF and effects to `wgpu`, which the Rust core can call directly.
