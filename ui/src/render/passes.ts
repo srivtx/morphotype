@@ -106,7 +106,9 @@ void main() {
 
 /**
  * Height field from the SDF. Profiles: 0 round (circular bulge), 1 linear
- * chamfer, 2 smooth (s-curve). `u_bevel` is in texture pixels.
+ * chamfer, 2 smooth (s-curve), 3 tube (every part a full half-round as wide
+ * as it is, up to the bevel: spikes become cones, strokes become tubes).
+ * `u_bevel` is in texture pixels.
  */
 export const HEIGHT_FS = /* glsl */ `#version 300 es
 precision highp float;
@@ -114,13 +116,43 @@ uniform sampler2D u_sdf;
 uniform float u_bevel;
 uniform float u_profile;
 out vec4 o;
+float sdfAt(vec2 p) { return texture(u_sdf, p / vec2(textureSize(u_sdf, 0))).r; }
+/**
+ * Half the width of the part a pixel lies in: the depth of the middle line
+ * (medial axis) straight inward from it. Walking away from the nearest edge,
+ * depth grows one for one until that line, then stops growing, so bisect for
+ * where it stops. Capped at the bevel.
+ */
+float halfWidth(vec2 p, float a) {
+  // A wide stencil, so the stair steps of slanted edges don't wobble the direction.
+  float e = clamp(a * 0.5, 1.0, 3.0);
+  vec2 g = vec2(sdfAt(p + vec2(e, 0.0)) - sdfAt(p - vec2(e, 0.0)), sdfAt(p + vec2(0.0, e)) - sdfAt(p - vec2(0.0, e)));
+  if (dot(g, g) < 1e-6) return a;
+  vec2 dir = -normalize(g);
+  float tol = 0.6 + 0.01 * a;
+  float hi = max(u_bevel - a, 0.0);
+  if (-sdfAt(p + dir * hi) >= a + hi - tol) return a + hi;
+  float lo = 0.0;
+  for (int i = 0; i < 14; i++) {
+    float m = 0.5 * (lo + hi);
+    if (-sdfAt(p + dir * m) >= a + m - tol) lo = m; else hi = m;
+  }
+  return a + lo;
+}
 void main() {
   float d = texelFetch(u_sdf, ivec2(gl_FragCoord.xy), 0).r;
   float x = clamp(-d / max(u_bevel, 1.0), 0.0, 1.0);
   float h;
   if (u_profile < 0.5) h = sqrt(max(1.0 - (1.0 - x) * (1.0 - x), 0.0));
   else if (u_profile < 1.5) h = x;
-  else h = x * x * (3.0 - 2.0 * x);
+  else if (u_profile < 2.5) h = x * x * (3.0 - 2.0 * x);
+  else if (d >= 0.0) h = 0.0;
+  else {
+    // A circle of radius r (the part's half width) seen from above, s in from its edge.
+    float r = min(halfWidth(gl_FragCoord.xy, -d), max(u_bevel, 1.0));
+    float s = min(-d, r);
+    h = sqrt(max(2.0 * s * r - s * s, 0.0)) / max(u_bevel, 1.0);
+  }
   o = vec4(h, 0.0, 0.0, 0.0);
 }`;
 

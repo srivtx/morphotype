@@ -12,7 +12,7 @@ export type ParamDef =
 export type ParamValues = Record<string, number | string>;
 
 export interface HeightSpec {
-  /** 0 round, 1 chamfer, 2 smooth. */
+  /** 0 round, 1 chamfer, 2 smooth, 3 tube (each part rounded across its own width, up to the bevel). */
   profile: number;
   bevel: number;
   softness: number;
@@ -58,6 +58,15 @@ const col = (key: string, label: string, def: string, advanced = false): ParamDe
 const choice = (key: string, label: string, options: string[], def: number): ParamDef => ({ key, label, type: 'number', min: 0, max: options.length - 1, step: 1, default: def, options });
 
 const n = (p: ParamValues, k: string) => Number(p[k] ?? 0);
+
+/**
+ * How a 3D material rounds the shape (param `form`): Bevel rounds a band
+ * along the outline; Tube rounds every part across its own width, so thin
+ * spikes become cones and strokes become tubes, and wide parts still get a
+ * Bevel-wide shoulder.
+ */
+const FORMS = ['Bevel', 'Tube'];
+const formProfile = (p: ParamValues) => (n(p, 'form') > 0.5 ? 3 : 0);
 
 export const COMMON_GLSL = /* glsl */ `
 uniform sampler2D u_mask;
@@ -158,6 +167,7 @@ const chrome: EffectDef = {
     col('c3', 'Light', '#7cc8ff'),
     col('c4', 'Highlight', '#ffffff'),
     num('bevel', 'Bevel', 2, 200, 1, 46),
+    choice('form', 'Form', FORMS, 0),
     num('softness', 'Softness', 0, 80, 1, 10, true),
     num('depth', 'Depth', 0.1, 4, 0.05, 1.3, true),
     num('liquid', 'Liquid', 0, 1.5, 0.01, 0.6),
@@ -167,7 +177,7 @@ const chrome: EffectDef = {
     num('rim', 'Rim', 0, 12, 0.1, 2.2, true),
     col('rimColor', 'Rim colour', '#bfe3ff', true),
   ],
-  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  height: (p) => ({ profile: formProfile(p), bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
   animated: (p) => n(p, 'speed') > 0,
   reach: () => 4,
   glsl: /* glsl */ `
@@ -264,6 +274,7 @@ const inflate: EffectDef = {
     col('body', 'Body', '#eef2ff'),
     col('shade', 'Shade', '#8f9ee6'),
     num('bevel', 'Puff', 4, 300, 1, 90),
+    choice('form', 'Form', FORMS, 0),
     num('softness', 'Softness', 0, 80, 1, 14, true),
     num('depth', 'Depth', 0.1, 3, 0.05, 0.9, true),
     num('gloss', 'Gloss', 0, 1.5, 0.01, 0.45),
@@ -278,7 +289,7 @@ const inflate: EffectDef = {
     num('marksWidth', 'Line width', 0.2, 16, 0.1, 1.6),
     num('marksFlow', 'Flow', -10, 10, 0.01, 0),
   ],
-  height: (p) => ({ profile: 0, bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  height: (p) => ({ profile: formProfile(p), bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
   reach: (p) => n(p, 'shadowOffset') + n(p, 'shadowSoft') * 4,
   glsl: /* glsl */ `
 uniform vec3 u_body, u_shade, u_marks;
@@ -639,11 +650,17 @@ const flat: EffectDef = {
     num('shadowBlur', 'Shadow blur', 0, 100, 0.5, 14, true),
     col('shadowColor', 'Shadow colour', '#000000', true),
     num('texture', 'Print texture', 0, 1, 0.01, 0),
+    num('bloom', 'Glow', 0, 2, 0.01, 0),
+    num('bloomRadius', 'Glow radius', 2, 400, 1, 46),
+    num('bloomEdge', 'Glowing edge', 0, 1, 0.01, 0.5, true),
   ],
-  reach: (p) => n(p, 'outline') + Math.max(Math.abs(n(p, 'shadowX')), Math.abs(n(p, 'shadowY'))) + n(p, 'shadowBlur') * 2,
+  reach: (p) =>
+    Math.max(n(p, 'outline') + Math.max(Math.abs(n(p, 'shadowX')), Math.abs(n(p, 'shadowY'))) + n(p, 'shadowBlur') * 2, n(p, 'bloom') > 0 ? n(p, 'bloomRadius') * 3.5 : 0),
   glsl: /* glsl */ `
 uniform vec3 u_fill, u_fill2, u_outlineColor, u_shadowColor;
-uniform float u_gradient, u_angle, u_gradType, u_gradX, u_gradY, u_gradSize, u_gradStart, u_gradEnd, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture;
+uniform float u_gradient, u_angle, u_gradType, u_gradX, u_gradY, u_gradSize, u_gradStart, u_gradEnd, u_outline, u_shadowX, u_shadowY, u_shadowBlur, u_shadowOpacity, u_texture, u_bloom, u_bloomRadius, u_bloomEdge;
+/** Share of a blurred straight edge still lit at distance x (in blur widths): a logistic fit to the Gaussian's tail. */
+float edgeBlur(float x) { return 1.0 / (1.0 + exp(1.702 * x)); }
 vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   // Blur 0 gives a hard offset shadow, as in flat "neo-brutalist" graphics.
@@ -666,6 +683,16 @@ vec4 effect(vec2 uv) {
     vec2 p = artPx(uv);
     colr *= 1.0 - u_texture * (0.1 * fbm3(p / 40.0) + 0.06 * hash12(floor(p * u_k)));
     c *= 1.0 - u_texture * 0.35 * smoothstep(0.62, 0.8, fbm(p / 5.0)) * smoothstep(-6.0, 0.0, dt / u_k);
+  }
+  if (u_bloom > 0.0) {
+    // Glow: the shape blurred at two sizes, a tight halo and a wide haze, in
+    // a lighter fill colour; partly added light, so it brightens dark canvases.
+    float d = dt / u_k, r = max(u_bloomRadius, 1.0);
+    float g = (0.6 * edgeBlur(d / (r * 0.22)) + 0.4 * edgeBlur(d / r)) * 2.0 * u_bloom;
+    vec3 gc = mix(colr, vec3(1.0), 0.18 + 0.3 * exp(-max(d, 0.0) / (r * 0.15)) * u_bloomEdge);
+    f = over(vec4(gc * min(g, 1.5), clamp(g * 0.8, 0.0, 1.0)), f);
+    // Lit from inside: the fill pales toward its edge.
+    colr = mix(colr, mix(colr, vec3(1.0), 0.55), u_bloomEdge * min(u_bloom, 1.0) * exp(min(d, 0.0) / (r * 0.18)));
   }
   return over(vec4(colr * c, c), f);
 }`,
@@ -874,12 +901,36 @@ const photo: EffectDef = {
     num('brightness', 'Brightness', -1, 1, 0.01, 0),
     num('saturation', 'Saturation', 0, 2, 0.01, 1, true),
     num('grain', 'Grain', 0, 1, 0.01, 0),
+    choice('screen', 'Print screen', ['Smooth', 'Halftone dots', 'Gritty dither', 'Line screen'], 0),
+    num('screenSize', 'Screen size', 1, 40, 0.5, 6),
   ],
   reach: () => 1,
   glsl: /* glsl */ `
 uniform sampler2D u_photo;
-uniform float u_hasPhoto, u_imgAspect, u_zoom, u_x, u_y, u_duotone, u_contrast, u_brightness, u_saturation, u_grain;
+uniform float u_hasPhoto, u_imgAspect, u_zoom, u_x, u_y, u_duotone, u_contrast, u_brightness, u_saturation, u_grain, u_screen, u_screenSize;
 uniform vec3 u_dark, u_light;
+/**
+ * Printed with a screen: how much ink lands at this pixel for a tone (0 none,
+ * 1 solid). Dots grow with the tone, dither fills a share of random pixels
+ * (gritty, like a cheap photocopy), lines thicken.
+ */
+float screened(vec2 p, float tone) {
+  float s = max(u_screenSize, 1.0);
+  float aa = 0.75 / u_k;
+  if (u_screen < 1.5) {
+    vec2 q = mat2(0.7071, -0.7071, 0.7071, 0.7071) * p / s;
+    float r = length(fract(q) - 0.5) * s;
+    return 1.0 - smoothstep(-aa, aa, r - sqrt(clamp(tone, 0.0, 1.0)) * 0.56 * s);
+  }
+  if (u_screen < 2.5) {
+    // Clumped noise: a fine speck on a coarser mottle, so it reads as grit, not TV static.
+    vec2 c = floor(p * u_k / max(s * 0.35, 1.0));
+    float th = hash12(c) * 0.6 + vnoise(p / (s * 1.6)) * 0.4;
+    return step(th, tone);
+  }
+  float y = abs(fract(p.y / s) - 0.5) * s;
+  return 1.0 - smoothstep(-aa, aa, y - clamp(tone, 0.0, 1.0) * 0.5 * s);
+}
 vec4 effect(vec2 uv) {
   float cov = cover(sdfPx(uv));
   vec2 box = (u_bbox.zw - u_bbox.xy) * u_region.zw;
@@ -898,6 +949,14 @@ vec4 effect(vec2 uv) {
   l = clamp(dot(c, vec3(0.299, 0.587, 0.114)), 0.0, 1.0);
   c = mix(c, mix(u_dark, u_light, smoothstep(0.0, 1.0, l)), u_duotone);
   c += (hash12(floor(artPx(uv) * u_k)) - 0.5) * u_grain * 0.25;
+  if (u_screen > 0.5) {
+    // A screened print: each colour channel on its own, or for a duotone two
+    // flat inks (the highlight ink printed over the shadow ink).
+    vec2 p = artPx(uv);
+    vec3 rgb = vec3(screened(p, c.r), screened(p + 0.37 * u_screenSize, c.g), screened(p - 0.29 * u_screenSize, c.b));
+    vec3 two = mix(u_dark, u_light, screened(p, l));
+    c = mix(rgb, two, u_duotone);
+  }
   return vec4(clamp(c, 0.0, 1.0) * cov, cov);
 }`,
 };
@@ -1730,6 +1789,235 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
+const vinyl: EffectDef = {
+  id: 'vinyl',
+  name: 'Inflatable vinyl',
+  description: 'Glossy blow-up plastic: every part rounded into a tube, saturated colour lit through the skin, crisp studio highlights, pinched rings and wrinkles. Can be clear plastic that shows what is under it.',
+  backdrop: true,
+  params: [
+    col('body', 'Colour', '#4dff2e'),
+    col('shade', 'Shadow colour', '#0e8f1a'),
+    num('bevel', 'Puff', 4, 400, 1, 140),
+    choice('form', 'Form', FORMS, 1),
+    num('softness', 'Smooth joins', 0, 80, 1, 8, true),
+    num('depth', 'Depth', 0.1, 3, 0.05, 1, true),
+    num('gloss', 'Gloss', 0, 1.5, 0.01, 1),
+    num('sharp', 'Crisp highlights', 0, 1, 0.01, 0.75),
+    num('lightAngle', 'Light angle', -180, 180, 1, -115),
+    num('through', 'Light through', 0, 1, 0.01, 0.5),
+    num('rim', 'Reflections', 0, 1.5, 0.01, 0.7),
+    col('env', 'Reflected room', '#ffffff', true),
+    choice('rings', 'Pinched rings', ['None', 'Round the centre', 'Across the tubes'], 0),
+    num('ringGap', 'Ring spacing', 6, 400, 1, 46),
+    num('pinch', 'Pinch', 0, 1, 0.01, 0.6),
+    num('wrinkles', 'Wrinkles', 0, 1, 0.01, 0.2),
+    num('wrinkleSize', 'Wrinkle size', 2, 200, 0.5, 22, true),
+    num('seam', 'Edge seam', 0, 1, 0.01, 0.35),
+    num('clear', 'Clear plastic', 0, 1, 0.01, 0),
+    num('shadow', 'Shadow', 0, 1, 0.01, 0.35),
+    num('shadowOffset', 'Shadow offset', 0, 120, 1, 22, true),
+    num('shadowSoft', 'Shadow blur', 1, 200, 1, 34, true),
+  ],
+  height: (p) => ({ profile: formProfile(p), bevel: n(p, 'bevel'), softness: n(p, 'softness') }),
+  reach: (p) => n(p, 'shadowOffset') + n(p, 'shadowSoft') * 4,
+  glsl: /* glsl */ `
+uniform vec3 u_body, u_shade, u_env;
+uniform float u_depth, u_gloss, u_sharp, u_lightAngle, u_through, u_rim, u_rings, u_ringGap, u_pinch, u_wrinkles, u_wrinkleSize, u_seam, u_clear, u_shadow, u_shadowOffset, u_shadowSoft;
+/** How far the shape runs from p (art px) in one direction, by sphere tracing its distance field. */
+float run(vec2 uv, vec2 dir) {
+  float t = 0.0;
+  for (int i = 0; i < 14; i++) {
+    float d = sdfArt(uv + offsetUv(dir * t));
+    if (d > 0.0) break;
+    t += max(-d, 1.5);
+  }
+  return t;
+}
+/**
+ * Pinched rings: where along the tube a pixel is (art px) and the tube's
+ * direction there. Round the centre, rings are circles about the middle (for
+ * stars and bursts); across the tubes, each part runs along whichever axis
+ * the shape is longer in at that pixel (for hashes, letters, frames).
+ */
+vec2 ringAxis(vec2 uv, out float along) {
+  vec2 p = artPx(uv);
+  if (u_rings < 1.5) {
+    vec2 c = p - artPx((u_bbox.xy + u_bbox.zw) * 0.5);
+    along = length(c);
+    return c / max(along, 1e-3);
+  }
+  float lx = run(uv, vec2(1.0, 0.0)) + run(uv, vec2(-1.0, 0.0));
+  float ly = run(uv, vec2(0.0, 1.0)) + run(uv, vec2(0.0, -1.0));
+  along = lx > ly ? p.x : p.y;
+  return lx > ly ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+}
+/** Ridged noise: thin creases where crumpled plastic folds. */
+float crease(vec2 q) { return 1.0 - abs(2.0 * fbm3(q) - 1.0); }
+vec4 effect(vec2 uv) {
+  float sd = sdfArt(uv - offsetUv(vec2(0.0, u_shadowOffset)));
+  float sh = exp(-max(sd, 0.0) / max(u_shadowSoft, 1.0)) * u_shadow * 0.55;
+  // The shadow takes a little of the plastic's colour (light passes through it).
+  vec4 shadow = vec4(u_shade * 0.3 * sh, sh);
+  float dt = sdfPx(uv);
+  float d = dt / u_k;
+  float cov = cover(dt);
+  if (cov <= 0.0) return shadow;
+  vec3 n = normalAt(uv, u_depth);
+  float h = H(uv);
+  // Pinched rings: a groove across the tube every Ring spacing; the skin
+  // bulges between them, so the normal tips along the tube into each groove.
+  float groove = 0.0;
+  if (u_rings > 0.5 && u_pinch > 0.0) {
+    float along;
+    vec2 ax = ringAxis(uv, along);
+    float gap = max(u_ringGap, 1.0);
+    float f = (fract(along / gap + 0.5) - 0.5) * gap;
+    float w = gap * 0.14;
+    groove = exp(-f * f / (w * w)) * u_pinch;
+    // No bull's-eye in the middle of a star: rings start a ring out.
+    if (u_rings < 1.5) groove *= smoothstep(gap * 0.5, gap * 2.2, along);
+    // Slope of the groove's flank along the tube (a Gaussian's derivative), deeper on fatter parts.
+    float slope = 2.0 * f / (w * w) * groove * w * 1.4 * smoothstep(0.0, 0.35, h);
+    n = normalize(n + vec3(ax * slope, 0.0));
+  }
+  // Wrinkles: ridged creases, strongest near the outline and in the grooves where the skin bunches.
+  if (u_wrinkles > 0.0) {
+    vec2 q = artPx(uv) / max(u_wrinkleSize, 0.5);
+    float e = 0.35;
+    float c0 = crease(q);
+    vec2 g = vec2(crease(q + vec2(e, 0.0)) - c0, crease(q + vec2(0.0, e)) - c0) / e;
+    float amt = u_wrinkles * (0.2 + 0.8 * (1.0 - smoothstep(0.05, 0.6, h)) + groove) * 0.12;
+    n = normalize(n - vec3(g * amt, 0.0));
+  }
+  float la = radians(u_lightAngle);
+  vec3 L = normalize(vec3(cos(la) * 0.85, sin(la) * 0.85, 0.45));
+  float ndl = dot(n, L);
+  // Three tones across the form: the deep shadow colour, the body, and a pale
+  // lit side. Thin plastic is lit through, so the shadow side stays rich, never grey.
+  float t = ndl * 0.5 + 0.5;
+  vec3 pale = mix(u_body, vec3(1.0), 0.5);
+  vec3 c = mix(u_shade, u_body, smoothstep(0.18, 0.78, t));
+  c = mix(c, pale, smoothstep(0.78, 1.0, t) * 0.75);
+  vec3 rich = clamp(u_body * u_body * 1.35, 0.0, 1.0);
+  c = mix(c, rich, u_through * 0.6 * (1.0 - smoothstep(0.2, 0.6, t)) * smoothstep(0.15, 0.6, 1.0 - n.z));
+  // Seen edge-on the light crosses more coloured skin: the sides of every tube deepen.
+  c = mix(c, mix(u_shade, rich, u_through), smoothstep(0.15, 0.85, 1.0 - n.z) * 0.45);
+  // Grooves catch shade.
+  c *= 1.0 - groove * 0.4;
+  // Clear plastic: what's under it, bent by the surface and tinted; thicker
+  // (more colour) where the skin is seen edge-on.
+  if (u_clear > 0.0) {
+    vec3 under = behind(uv + offsetUv(-n.xy * 22.0)).rgb;
+    float edgeOn = pow(1.0 - n.z, 1.5);
+    vec3 t = under * mix(vec3(1.0), u_body, 0.45) * (1.0 - 0.35 * edgeOn) + u_body * edgeOn * 0.5;
+    c = mix(c, t, u_clear);
+  }
+  // Clearcoat: a little of the room reflected face-on, much more edge-on.
+  vec3 R = reflect(vec3(0.0, 0.0, -1.0), n);
+  float fres = 0.04 + 0.96 * pow(1.0 - clamp(n.z, 0.0, 1.0), 4.0);
+  // The room: bright above the horizon, the floor below in the plastic's own shadow colour.
+  vec3 room = mix(u_shade * 0.55, u_env, smoothstep(-0.3, 0.3, -R.y));
+  c = mix(c, room, clamp(fres * u_rim, 0.0, 0.6));
+  // Studio softbox: a crisp-edged rectangle of light mirrored in the gloss.
+  vec3 T1 = normalize(vec3(-L.y, L.x, 0.0) + 1e-5);
+  vec3 T2 = cross(L, T1);
+  // Crisp across, fading toward its ends, like a strip light seen in a curved surface.
+  float across = abs(dot(R, T1)) / 0.24, lengthwise = dot(R, T2) / 0.5;
+  float edgeW = mix(0.7, 0.08, u_sharp);
+  float soft = (1.0 - smoothstep(1.0 - edgeW, 1.0 + edgeW, across)) * exp(-lengthwise * lengthwise * 1.5) * step(0.0, dot(R, L));
+  // A small hard light too, and a bounce from the floor along the lower rims.
+  float pt = pow(max(dot(R, normalize(L + vec3(0.25, -0.1, 0.3))), 0.0), mix(60.0, 400.0, u_sharp));
+  float bounce = smoothstep(0.3, 0.9, R.y) * smoothstep(0.2, 0.6, 1.0 - n.z);
+  c += (u_env * (soft * (0.6 + 0.3 * dot(R, L)) + pt * 0.9) + u_env * bounce * 0.25 * u_rim) * u_gloss;
+  // The welded seam: a fine groove just inside the outline, in the deep colour.
+  float seamD = d + 2.5;
+  c = mix(c, u_shade * 0.8, u_seam * 0.6 * exp(-seamD * seamD / 1.4));
+  return over(vec4(clamp(c, 0.0, 1.0) * cov, cov), shadow);
+}`,
+};
+
+const paper: EffectDef = {
+  id: 'paper',
+  name: 'Folded paper',
+  description: 'A sheet of paper folded into panels, with crisp creases worn pale, soft crumples, mottling and fibres. Turn the paper off and lay it over a whole poster to fold the design itself.',
+  params: [
+    col('color', 'Paper', '#f1eadb'),
+    num('paperAlpha', 'Paper opacity', 0, 1, 0.01, 1),
+    num('foldsX', 'Folds across', 0, 8, 1, 1),
+    num('foldsY', 'Folds down', 0, 8, 1, 2),
+    num('crease', 'Crease depth', 0, 1, 0.01, 0.55),
+    num('wear', 'Worn creases', 0, 1, 0.01, 0.5),
+    num('crumple', 'Crumple', 0, 1, 0.01, 0.3),
+    num('crumpleSize', 'Crumple size', 20, 1000, 1, 220, true),
+    num('mottle', 'Mottling', 0, 1, 0.01, 0.35),
+    num('grain', 'Grain', 0, 1, 0.01, 0.45),
+    num('lightAngle', 'Light angle', -180, 180, 1, -125),
+    num('strength', 'Light and shade', 0, 2, 0.01, 1),
+    num('seed', 'Seed', 0, 100, 1, 5, true),
+  ],
+  reach: () => 1,
+  glsl: /* glsl */ `
+uniform vec3 u_color;
+uniform float u_paperAlpha, u_foldsX, u_foldsY, u_crease, u_wear, u_crumple, u_crumpleSize, u_mottle, u_grain, u_lightAngle, u_strength, u_seed;
+/**
+ * One set of parallel folds across axis x of the box (q 0..1, size in px):
+ * adds the slope of the panels either side of each crease to grad and
+ * returns how close the pixel is to a crease (1 on it). Folds sit evenly
+ * spaced, nudged and tilted a little each, and alternate mountain and valley.
+ */
+float folds(vec2 q, vec2 size, float count, float seed, inout float grad) {
+  float line = 0.0;
+  for (int i = 1; i <= 8; i++) {
+    float fi = float(i);
+    if (fi > count) break;
+    float at = fi / (count + 1.0) + (hash11(fi * 7.3 + seed) - 0.5) * 0.06 / (count + 1.0);
+    float tilt = (hash11(fi * 3.1 + seed * 1.7) - 0.5) * 0.02;
+    // A folded sheet never lies quite straight: the crease wanders a pixel or two.
+    float x = (q.x - at - tilt * (q.y - 0.5)) * size.x + (vnoise(vec2(q.y * size.y / 90.0, fi + seed)) - 0.5) * 2.5;
+    float side = mod(fi + floor(seed), 2.0) < 0.5 ? 1.0 : -1.0;
+    // A ridge (or groove) along the crease that flattens out into the panels:
+    // sharp light and shade at the fold, a faint warp further away.
+    grad += side * x / (x * x + 6.0);
+    line = max(line, exp(-x * x / 2.2));
+  }
+  return line;
+}
+vec4 effect(vec2 uv) {
+  float cov = cover(sdfPx(uv));
+  if (cov <= 0.0) return vec4(0.0);
+  vec2 q = boxUv(uv);
+  vec2 size = (u_bbox.zw - u_bbox.xy) * u_region.zw;
+  vec2 p = artPx(uv);
+  float gx = 0.0, gy = 0.0;
+  float line = folds(q, size, u_foldsX, u_seed, gx);
+  line = max(line, folds(q.yx, size.yx, u_foldsY, u_seed + 31.0, gy));
+  vec2 grad = vec2(gx, gy) * u_crease;
+  // Crumples: soft dents and bumps (slope of a slow noise).
+  if (u_crumple > 0.0) {
+    vec2 c = p / u_crumpleSize + u_seed;
+    float e = 0.02;
+    float c0 = fbm3(c);
+    grad += vec2(fbm3(c + vec2(e, 0.0)) - c0, fbm3(c + vec2(0.0, e)) - c0) / e * 0.05 * u_crumple;
+  }
+  vec3 n = normalize(vec3(-grad, 1.0));
+  float la = radians(u_lightAngle);
+  vec3 L = normalize(vec3(cos(la) * 0.7, sin(la) * 0.7, 0.7));
+  // Light and shade relative to a flat sheet: positive lightens, negative darkens.
+  float lit = (dot(n, L) - L.z) * 2.0 * u_strength;
+  // Creases: fibres crack and show pale along the ridge (its slope already lights one side, shades the other).
+  lit += line * u_wear * 0.35 * u_crease;
+  // Mottling (uneven stock, old stains) and fibres and specks.
+  lit += (fbm3(p / 140.0 + u_seed * 3.0) - 0.5) * 0.16 * u_mottle;
+  float fib = vnoise(vec2(p.x / 9.0, p.y / 1.6) + u_seed) - 0.5;
+  lit += ((hash12(floor(p * u_k) + u_seed) - 0.5) * 0.08 + fib * 0.05) * u_grain;
+  // The paper itself, then the light and shade on top as white or black.
+  vec4 base = vec4(u_color * u_paperAlpha, u_paperAlpha);
+  float a = clamp(abs(lit), 0.0, 1.0);
+  vec4 o = over(vec4(vec3(lit > 0.0 ? a : 0.0), a), base);
+  return o * cov;
+}`,
+};
+
 const keycap: EffectDef = {
   id: 'keycap',
   name: 'Keycap',
@@ -1881,7 +2169,7 @@ vec4 effect(vec2 uv) {
 }`,
 };
 
-export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic, keycap, patternFx, ribbon];
+export const EFFECTS: EffectDef[] = [flat, chrome, glass, inflate, sticker, aura, holo, extrude, icon, neon, distressed, emboss, halftone, riso, dither, photo, frost, lens, thermal, prism, colorDots, plush, glow, grainy, mosaic, keycap, vinyl, paper, patternFx, ribbon];
 
 export function effectById(id: string): EffectDef {
   return EFFECTS.find((e) => e.id === id) ?? flat;
@@ -1975,4 +2263,16 @@ export const PRESETS: Preset[] = [
   { name: 'Colour dots', effect: 'colordots', params: {}, bg: '#000000', tags: 'halftone gradient dot screen led' },
   { name: 'Plush pink', effect: 'plush', params: {}, bg: '#3ecf3e', tags: 'fuzzy toy fabric fur' },
   { name: 'Plush moss', effect: 'plush', params: { color: '#5ccf3a', shade: '#1f6b12' }, bg: '#151515', tags: 'fuzzy toy fabric fur green' },
+  { name: 'Lime vinyl', effect: 'vinyl', params: {}, bg: '#f2f2f0', tags: 'inflatable balloon blow-up pvc plastic 3d tube green' },
+  { name: 'Bubblegum vinyl', effect: 'vinyl', params: { body: '#ff5ec4', shade: '#b0106e' }, bg: '#f2f2f0', tags: 'inflatable balloon pink plastic 3d tube' },
+  { name: 'Pinched hash', effect: 'vinyl', params: { rings: 2, ringGap: 44, pinch: 0.5 }, bg: '#ffffff', tags: 'inflatable segments ribbed pool toy 3d' },
+  { name: 'Silver inflatable', effect: 'vinyl', params: { body: '#e9ecf2', shade: '#5d6474', rings: 1, ringGap: 38, pinch: 0.7, through: 0.2 }, bg: '#ffffff', tags: 'inflatable star metallic balloon foil rings' },
+  { name: 'Ribbed tube', effect: 'vinyl', params: { body: '#3d6bff', shade: '#1b2fb0', rings: 2, ringGap: 22, pinch: 0.5, wrinkles: 0.6 }, bg: '#ffffff', tags: 'inflatable hose corrugated ruffle blue' },
+  { name: 'Clear vinyl', effect: 'vinyl', params: { body: '#dfe8ff', shade: '#9db0e8', clear: 0.9, wrinkles: 0.8, wrinkleSize: 16, bevel: 80, softness: 6 }, bg: '#ffffff', tags: 'inflatable transparent bubble wrap clear plastic see-through' },
+  { name: 'Chrome spikes', effect: 'chrome', params: { c1: '#15171c', c2: '#6f747e', c3: '#d9dde5', c4: '#ffffff', rimColor: '#ffffff', liquid: 0.25, bands: 1.4, form: 1, bevel: 120, softness: 7 }, bg: '#e9e9eb', tags: 'metal silver star cones spiky 3d y2k tube' },
+  { name: 'Puffy tube', effect: 'inflate', params: { body: '#ffd0ef', shade: '#e01f8a', form: 1, bevel: 200, softness: 6, gloss: 0.7 }, bg: '#ffffff', tags: '3d tube balloon pink round' },
+  { name: 'Lime glow', effect: 'flat', params: { fill: '#b6ff1f', bloom: 1, bloomRadius: 50 }, bg: '#050505', tags: 'glow bloom neon light soft halo y2k' },
+  { name: 'Red glow', effect: 'flat', params: { fill: '#ff3b3b', bloom: 1, bloomRadius: 60 }, bg: '#050505', tags: 'glow bloom neon star light halo' },
+  { name: 'Folded poster', effect: 'paper', params: { paperAlpha: 0, foldsX: 1, foldsY: 3 }, bg: '#3a22b8', tags: 'paper fold crease overlay poster texture print' },
+  { name: 'Paper sheet', effect: 'paper', params: {}, bg: '#2b2b2b', tags: 'paper fold crease card cream texture' },
 ];
