@@ -319,7 +319,14 @@ fn font_export_audit() {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(format!("{dir}/{}.ttf", c.label.replace([' ', '%'], "-")), &bytes).unwrap();
         }
-        let a = audit(&bytes, cap, xh);
+        // A morph blends the zones towards its target's, so it is measured
+        // against its own (blended) metrics.
+        let a = if c.spec.contains("\"morph\"") {
+            let f = Face::parse(&bytes, 0).unwrap();
+            audit(&bytes, f.capital_height().unwrap() as f64, f.x_height().unwrap() as f64)
+        } else {
+            audit(&bytes, cap, xh)
+        };
         // Every pair shapes to exactly the kerning the engine meant to write.
         let face = Face::parse(&bytes, 0).unwrap();
         let chars = drawn_chars(&face);
@@ -382,6 +389,10 @@ fn font_export_audit() {
                 check(a.kern_pairs == sa.kern_pairs, format!("{l}: kerning lost"));
             }
             "morph 50%" => {
+                // Curves are blended point for point, not resampled and refit.
+                check(a.points <= sa.points * 2, format!("{l}: {} points vs {} in the source", a.points, sa.points));
+                check(a.baseline_err <= 2.0, format!("{l}: flat letters sit {:.1} units off the baseline", a.baseline_err));
+                check(a.cap_err <= 2.0 && a.x_err <= 2.0, format!("{l}: cap/x-height off the blended metrics by {:.1}/{:.1}", a.cap_err, a.x_err));
                 check(a.kern_pairs >= sa.kern_pairs / 2, format!("{l}: kerning lost ({} pairs)", a.kern_pairs));
             }
             "morph missing" => {
