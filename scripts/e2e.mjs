@@ -785,6 +785,44 @@ try {
   const ttf = await download(async () => {}, () => page.getByRole('button', { name: '.ttf' }).click());
   check(ttf.readUInt32BE(0) === 0x00010000, `TTF export (${(ttf.length / 1024).toFixed(0)} KB)`);
   await page.screenshot({ path: path.join(out, 'type-02-star.png') });
+  // Kerning: nudge a pair in the Font tab and the exported font changes.
+  /** A pair's kerning in a font file, in em, as the browser lays it out. */
+  const kernOf = (bytes, pair) =>
+    page.evaluate(
+      async ({ b64, pair }) => {
+        const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const name = `kern-check-${Math.random().toString(36).slice(2)}`;
+        const face = new FontFace(name, bin.buffer);
+        await face.load();
+        document.fonts.add(face);
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = `1000px "${name}"`;
+        ctx.fontKerning = 'normal';
+        const w = (t) => ctx.measureText(t).width;
+        const k = (w(pair) - w(pair[0]) - w(pair[1])) / 1000;
+        document.fonts.delete(face);
+        return k;
+      },
+      { b64: Buffer.from(bytes).toString('base64'), pair },
+    );
+  await page.getByRole('tab', { name: 'Font', exact: true }).click();
+  await page.getByLabel('Kerning pair').fill('AV');
+  await page.waitForSelector('.kern-preview');
+  await page.locator('.section:has(.kern-row) .hint', { hasText: 'own kerning' }).waitFor({ timeout: 10_000 });
+  const kernBefore = await kernOf(ttf, 'AV');
+  check(kernBefore < -0.01, `exported fonts carry the base font's kerning (AV ${kernBefore.toFixed(3)} em)`);
+  for (let i = 0; i < 3; i++) await page.getByRole('button', { name: /Tighter/ }).click();
+  s = await state();
+  const kernSet = s.project.type.kerning.AV;
+  check(Math.abs(kernSet - (kernBefore - 0.015)) < 0.002, `nudging kerns the pair by hand (${kernSet} em)`);
+  check((await page.locator('.kern-list .chip-btn', { hasText: 'AV' }).count()) === 1, 'hand-kerned pairs are listed');
+  await settle(1200);
+  await page.screenshot({ path: path.join(out, 'type-02b-kerning.png') });
+  await page.getByRole('tab', { name: /Use & export/ }).click();
+  const kerned = await download(async () => {}, () => page.getByRole('button', { name: '.ttf' }).click());
+  const kernAfter = await kernOf(kerned, 'AV');
+  check(Math.abs(kernAfter - kernSet) < 0.0025 && kernAfter < kernBefore - 0.01, `a kerning override changes the exported font (AV ${kernBefore.toFixed(3)} → ${kernAfter.toFixed(3)} em)`);
+  check(Math.abs((await kernOf(kerned, 'To')) - (await kernOf(ttf, 'To'))) < 0.0015, 'other pairs keep their kerning');
   await page.getByRole('button', { name: /Use in Design/ }).click();
   await page.waitForSelector('.use-font');
   await page.screenshot({ path: path.join(out, 'type-03-use.png') });

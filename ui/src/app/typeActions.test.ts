@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { reservedNames, versionOf } from './typeActions';
+import { kernPair, reservedNames, specOf, versionOf } from './typeActions';
+import type { TypeProject } from '../state/model';
 
 describe('font naming', () => {
   it('reads Reserved Font Names from a copyright notice', () => {
@@ -14,5 +15,22 @@ describe('font naming', () => {
     expect(versionOf()).toBe('1.000');
     expect(versionOf(4)).toBe('1.004');
     expect(versionOf(1234)).toBe('2.234');
+  });
+});
+
+describe('kerning', () => {
+  it('reads a pair from typed text', () => {
+    expect(kernPair('AV')).toBe('AV');
+    expect(kernPair(' T o ')).toBe('To');
+    expect(kernPair('Type')).toBe('Ty');
+    expect(kernPair('A')).toBeNull();
+    expect(kernPair('')).toBeNull();
+    expect(kernPair('★é')).toBe('★é');
+    expect(kernPair('𝒜V')).toBe('𝒜V');
+  });
+
+  it('passes overrides to the engine', () => {
+    const t: TypeProject = { family: 'K', style: 'Regular', base: 'inter', axes: {}, morph: null, modifiers: [], tracking: 0, charset: 'AV', glyphs: {}, kerning: { AV: -0.1 }, sample: '' };
+    expect(specOf(t).kerning).toEqual({ AV: -0.1 });
   });
 });

@@ -6,6 +6,7 @@
 
 use crate::fit::cubic_to_quads;
 use crate::geom::{CurveContour, Pt, Seg};
+use std::collections::BTreeMap;
 
 pub struct FontMeta {
     pub family: String,
@@ -517,16 +518,18 @@ fn glyph_names(codepoints: &[Option<u32>]) -> Vec<u8> {
     idx.0
 }
 
-/// GPOS with one `kern` feature (DFLT and latn scripts) holding pair
-/// adjustments. Pairs are (left glyph, right glyph, x-advance of the left).
-/// Subtables are split to keep their 16-bit offsets in range and reached
-/// through Extension lookups, so any number of pairs fits.
-fn gpos_table(pairs: &[(u16, u16, i16)]) -> Vec<u8> {
-    let mut by_left: std::collections::BTreeMap<u16, Vec<(u16, i16)>> = Default::default();
+type Row = BTreeMap<u16, i16>;
+/// Kerning pairs: (left glyph, right glyph, x-advance of the left).
+type Pairs = Vec<(u16, u16, i16)>;
+
+/// PairPos format 1 subtables: one PairSet per left glyph, each subtable
+/// well under 64 KB. Values may be 0, to stop a later class subtable from
+/// kerning the pair.
+fn pair_pos_1(pairs: &[(u16, u16, i16)]) -> Vec<Vec<u8>> {
+    let mut by_left: BTreeMap<u16, Vec<(u16, i16)>> = Default::default();
     for &(l, r, v) in pairs {
         by_left.entry(l).or_default().push((r, v));
     }
-    // PairPos format 1 subtables, each well under 64 KB.
     let mut subtables: Vec<Vec<u8>> = Vec::new();
     let mut chunk: Vec<(u16, Vec<(u16, i16)>)> = Vec::new();
     let mut size = 0usize;
@@ -535,24 +538,21 @@ fn gpos_table(pairs: &[(u16, u16, i16)]) -> Vec<u8> {
             return;
         }
         let n = chunk.len();
+        let lefts: Vec<u16> = chunk.iter().map(|c| c.0).collect();
+        let cov = coverage(&lefts);
         let head = 10 + 2 * n;
-        let cov_len = 4 + 2 * n;
         let mut w = W(Vec::new());
         w.u16(1); // posFormat
         w.u16(head as u16); // coverage right after the header
         w.u16(0x0004); // valueFormat1: XAdvance
         w.u16(0); // valueFormat2
         w.u16(n as u16);
-        let mut off = head + cov_len;
+        let mut off = head + cov.len();
         for (_, set) in chunk.iter() {
             w.u16(off as u16);
             off += 2 + 4 * set.len();
         }
-        w.u16(1); // coverage format 1
-        w.u16(n as u16);
-        for (l, _) in chunk.iter() {
-            w.u16(*l);
-        }
+        w.0.extend_from_slice(&cov);
         for (_, set) in chunk.iter_mut() {
             set.sort_by_key(|p| p.0);
             w.u16(set.len() as u16);
@@ -565,7 +565,7 @@ fn gpos_table(pairs: &[(u16, u16, i16)]) -> Vec<u8> {
         chunk.clear();
     };
     for (l, set) in by_left {
-        let add = 6 + 4 * set.len();
+        let add = 8 + 4 * set.len();
         if size + add > 60_000 {
             flush(&mut chunk);
             size = 0;
@@ -574,7 +574,371 @@ fn gpos_table(pairs: &[(u16, u16, i16)]) -> Vec<u8> {
         chunk.push((l, set));
     }
     flush(&mut chunk);
+    subtables
+}
 
+/// Coverage table of sorted glyphs: a list or ranges, whichever is smaller.
+fn coverage(glyphs: &[u16]) -> Vec<u8> {
+    let mut ranges: Vec<(u16, u16, u16)> = Vec::new();
+    for (i, &g) in glyphs.iter().enumerate() {
+        match ranges.last_mut() {
+            Some(r) if r.1 + 1 == g => r.1 = g,
+            _ => ranges.push((g, g, i as u16)),
+        }
+    }
+    let mut w = W(Vec::new());
+    if 6 * ranges.len() < 2 * glyphs.len() {
+        w.u16(2);
+        w.u16(ranges.len() as u16);
+        for (s, e, i) in ranges {
+            w.u16(s);
+            w.u16(e);
+            w.u16(i);
+        }
+    } else {
+        w.u16(1);
+        w.u16(glyphs.len() as u16);
+        for &g in glyphs {
+            w.u16(g);
+        }
+    }
+    w.0
+}
+
+/// ClassDef table of (glyph, class) sorted by glyph, classes above 0 (all
+/// other glyphs are class 0): an array or ranges, whichever is smaller.
+fn class_def(classes: &[(u16, u16)]) -> Vec<u8> {
+    let mut ranges: Vec<(u16, u16, u16)> = Vec::new();
+    for &(g, c) in classes {
+        match ranges.last_mut() {
+            Some(r) if r.1 + 1 == g && r.2 == c => r.1 = g,
+            _ => ranges.push((g, g, c)),
+        }
+    }
+    let span = match (classes.first(), classes.last()) {
+        (Some(a), Some(b)) => (b.0 - a.0) as usize + 1,
+        _ => 0,
+    };
+    let mut w = W(Vec::new());
+    if span > 0 && 2 * span < 6 * ranges.len() {
+        w.u16(1);
+        w.u16(classes[0].0);
+        w.u16(span as u16);
+        let mut it = classes.iter().peekable();
+        for g in classes[0].0..=classes[classes.len() - 1].0 {
+            w.u16(match it.peek() {
+                Some(&&(cg, c)) if cg == g => {
+                    it.next();
+                    c
+                }
+                _ => 0,
+            });
+        }
+    } else {
+        w.u16(2);
+        w.u16(ranges.len() as u16);
+        for (s, e, c) in ranges {
+            w.u16(s);
+            w.u16(e);
+            w.u16(c);
+        }
+    }
+    w.0
+}
+
+/// Entries where two sparse rows differ (a missing entry is 0).
+fn row_diff(a: &Row, b: &Row) -> usize {
+    let (mut ia, mut ib) = (a.iter().peekable(), b.iter().peekable());
+    let mut d = 0;
+    loop {
+        match (ia.peek(), ib.peek()) {
+            (None, None) => return d,
+            (Some(_), None) => return d + ia.count(),
+            (None, Some(_)) => return d + ib.count(),
+            (Some(x), Some(y)) => {
+                if x.0 == y.0 {
+                    d += (x.1 != y.1) as usize;
+                    ia.next();
+                    ib.next();
+                } else if x.0 < y.0 {
+                    d += 1;
+                    ia.next();
+                } else {
+                    d += 1;
+                    ib.next();
+                }
+            }
+        }
+    }
+}
+
+/// Class kerning: right glyphs grouped by their columns and left glyphs by
+/// their rows, where sharing a class costs fewer bytes than the pairs it
+/// gets wrong. Returns format 1 subtables for those exceptions (and for
+/// left glyphs left out of the classes) followed by format 2 subtables.
+/// `f` weighs a new class against exceptions; `thorough` groups the
+/// format 2 subtables more tightly, at more cost.
+fn class_pairs(rows: &BTreeMap<u16, Row>, f: f64, thorough: bool) -> Option<Vec<Vec<u8>>> {
+    let mut cols: BTreeMap<u16, Row> = Default::default();
+    for (&l, row) in rows {
+        for (&r, &v) in row {
+            cols.entry(r).or_default().insert(l, v);
+        }
+    }
+    // Right classes, densest columns first so they lead their class.
+    let distinct_rows = rows.values().collect::<std::collections::BTreeSet<_>>().len();
+    let new_col = 2.0 * distinct_rows as f64 * f;
+    let mut rights: Vec<(u16, &Row)> = cols.iter().map(|(&g, c)| (g, c)).collect();
+    rights.sort_by_key(|(g, c)| (std::cmp::Reverse(c.len()), *g));
+    let mut reps: Vec<(u16, &Row)> = Vec::new();
+    let mut class2: BTreeMap<u16, u16> = Default::default();
+    for (g, col) in rights {
+        // Class 0 (no class) gets every pair of the glyph wrong.
+        let mut best = (col.len(), 0usize);
+        for (i, rep) in reps.iter().enumerate() {
+            let d = row_diff(col, rep.1);
+            if d < best.0 {
+                best = (d, i + 1);
+                if d == 0 {
+                    break;
+                }
+            }
+        }
+        if 4.0 * best.0 as f64 > new_col {
+            reps.push((g, col));
+            class2.insert(g, reps.len() as u16);
+        } else if best.1 > 0 {
+            class2.insert(g, best.1 as u16);
+        }
+    }
+    let n2 = reps.len() + 1;
+    if n2 * 2 > 50_000 {
+        return None;
+    }
+    let mut members = vec![0usize; n2];
+    for &c in class2.values() {
+        members[c as usize] += 1;
+    }
+    let cls = |r: u16| class2.get(&r).copied().unwrap_or(0) as usize;
+    // Pairs a left glyph gets wrong with the class row `q`.
+    let wrong = |row: &Row, q: &[i16]| -> usize {
+        let mut cnt = vec![0usize; n2];
+        let mut right = 0;
+        for (&r, &v) in row {
+            let c = cls(r);
+            cnt[c] += 1;
+            right += (q[c] == v) as usize;
+        }
+        row.len() - right + (0..n2).filter(|&c| q[c] != 0).map(|c| members[c] - cnt[c]).sum::<usize>()
+    };
+    // Left classes, by their rows across the right classes.
+    let new_row = 2.0 * n2 as f64 * f;
+    let mut lefts: Vec<(u16, &Row)> = rows.iter().map(|(&g, r)| (g, r)).collect();
+    lefts.sort_by_key(|(g, r)| (std::cmp::Reverse(r.len()), *g));
+    let mut classes: Vec<(Vec<i16>, Vec<u16>)> = Vec::new();
+    let mut loose: Vec<u16> = Vec::new();
+    for (g, row) in lefts {
+        let mut own = vec![0i16; n2];
+        for (c, rep) in reps.iter().enumerate() {
+            own[c + 1] = row.get(&rep.0).copied().unwrap_or(0);
+        }
+        let mut best = (4.0 * row.len() as f64, None);
+        for (i, (q, _)) in classes.iter().enumerate() {
+            let cost = 4.0 * wrong(row, q) as f64;
+            if cost < best.0 {
+                best = (cost, Some(i));
+            }
+        }
+        if new_row + 4.0 * (wrong(row, &own) as f64) < best.0 {
+            classes.push((own, vec![g]));
+        } else if let Some(i) = best.1 {
+            classes[i].1.push(g);
+        } else {
+            loose.push(g);
+        }
+    }
+    // Pairs the classes get wrong, and every pair of loose left glyphs.
+    let mut exceptions: Vec<(u16, u16, i16)> = Vec::new();
+    for &l in &loose {
+        exceptions.extend(rows[&l].iter().map(|(&r, &v)| (l, r, v)));
+    }
+    for (q, ls) in &classes {
+        for &l in ls {
+            let row = &rows[&l];
+            exceptions.extend(row.iter().filter(|&(&r, &v)| q[cls(r)] != v).map(|(&r, &v)| (l, r, v)));
+            exceptions.extend(class2.iter().filter(|&(r, &c)| q[c as usize] != 0 && !row.contains_key(r)).map(|(&r, _)| (l, r, 0)));
+        }
+    }
+    let class2: Vec<(u16, u16)> = class2.into_iter().collect();
+    let mut out = pair_pos_1(&exceptions);
+    out.extend(if thorough { group_merging(&classes, &class2, n2)? } else { group_in_order(&classes, &class2, n2)? });
+    Some(out)
+}
+
+type ClassRows = [(Vec<i16>, Vec<u16>)];
+/// Left classes (indices) in one format 2 subtable, and its bytes.
+type Group = (Vec<usize>, Vec<u8>);
+/// Bytes saved by merging two subtables, and the merged subtable.
+type Merge = Option<(isize, Vec<u8>)>;
+
+/// Bytes a subtable adds to GPOS: itself, its Extension and its offset.
+fn subtable_cost(t: &[u8]) -> usize {
+    t.len() + 10
+}
+
+/// Format 2 subtables, each with its own right classes: left classes join
+/// the subtable where they add the fewest bytes, biggest first, or start
+/// their own when that is cheaper.
+fn group_in_order(classes: &ClassRows, class2: &[(u16, u16)], n2: usize) -> Option<Vec<Vec<u8>>> {
+    let mut order: Vec<usize> = (0..classes.len()).collect();
+    order.sort_by_key(|&i| (std::cmp::Reverse(classes[i].1.len()), i));
+    let mut groups: Vec<Group> = Vec::new();
+    for i in order {
+        let alone = class_subtable(classes, &[i], class2, n2)?;
+        let mut best: Option<(usize, isize, Vec<u8>)> = None;
+        for (k, g) in groups.iter().enumerate() {
+            let idx: Vec<usize> = g.0.iter().copied().chain([i]).collect();
+            let Some(t) = class_subtable(classes, &idx, class2, n2) else { continue };
+            // Adding a class can even shrink a subtable (its ClassDefs may pack better).
+            let extra = subtable_cost(&t) as isize - subtable_cost(&g.1) as isize;
+            if t.len() < 60_000 && extra < subtable_cost(&alone) as isize && best.as_ref().is_none_or(|b| extra < b.1) {
+                best = Some((k, extra, t));
+            }
+        }
+        match best {
+            Some((k, _, t)) => {
+                groups[k].0.push(i);
+                groups[k].1 = t;
+            }
+            None => groups.push((vec![i], alone)),
+        }
+    }
+    Some(groups.into_iter().map(|g| g.1).collect())
+}
+
+/// Like `group_in_order`, but starting from one subtable per left class
+/// and always merging the two that save the most bytes: smaller, slower.
+fn group_merging(classes: &ClassRows, class2: &[(u16, u16)], n2: usize) -> Option<Vec<Vec<u8>>> {
+    let mut groups: Vec<Group> = (0..classes.len()).map(|i| Some((vec![i], class_subtable(classes, &[i], class2, n2)?))).collect::<Option<_>>()?;
+    let merged = |a: &Group, b: &Group| -> Merge {
+        let idx: Vec<usize> = a.0.iter().chain(&b.0).copied().collect();
+        let t = class_subtable(classes, &idx, class2, n2)?;
+        (t.len() < 60_000).then(|| (subtable_cost(&a.1) as isize + subtable_cost(&b.1) as isize - subtable_cost(&t) as isize, t))
+    };
+    let n = groups.len();
+    let mut gain: Vec<Vec<Merge>> = vec![vec![None; n]; n];
+    for i in 0..n {
+        for j in i + 1..n {
+            gain[i][j] = merged(&groups[i], &groups[j]);
+        }
+    }
+    let mut alive = vec![true; n];
+    loop {
+        let mut best: Option<(isize, usize, usize)> = None;
+        for i in (0..n).filter(|&i| alive[i]) {
+            for j in (i + 1..n).filter(|&j| alive[j]) {
+                if let Some((g, _)) = &gain[i][j] {
+                    if *g > 0 && best.is_none_or(|b| *g > b.0) {
+                        best = Some((*g, i, j));
+                    }
+                }
+            }
+        }
+        let Some((_, i, j)) = best else { break };
+        let (_, t) = gain[i][j].take().unwrap();
+        let moved = std::mem::take(&mut groups[j].0);
+        groups[i].0.extend(moved);
+        groups[i].1 = t;
+        alive[j] = false;
+        for k in (0..n).filter(|&k| k != i && alive[k]) {
+            let (a, b) = (i.min(k), i.max(k));
+            gain[a][b] = merged(&groups[a], &groups[b]);
+        }
+    }
+    Some(groups.into_iter().zip(alive).filter(|g| g.1).map(|g| g.0 .1).collect())
+}
+
+/// One PairPos format 2 subtable for some left classes (row, glyphs): right
+/// classes that kern the same for all of them share a class here, and the
+/// biggest left class is class 0, which needs no ClassDef entries. None if
+/// its offsets don't fit in 16 bits.
+fn class_subtable(classes: &ClassRows, idx: &[usize], class2: &[(u16, u16)], n2: usize) -> Option<Vec<u8>> {
+    let mut idx = idx.to_vec();
+    idx.sort_by_key(|&i| (std::cmp::Reverse(classes[i].1.len()), i));
+    let mut local = vec![0u16; n2];
+    let mut columns: Vec<Vec<i16>> = Vec::new();
+    let mut seen: std::collections::HashMap<Vec<i16>, u16> = Default::default();
+    for (c, slot) in local.iter_mut().enumerate().skip(1) {
+        let col: Vec<i16> = idx.iter().map(|&i| classes[i].0[c]).collect();
+        if col.iter().any(|&v| v != 0) {
+            *slot = *seen.entry(col).or_insert_with_key(|col| {
+                columns.push(col.clone());
+                columns.len() as u16
+            });
+        }
+    }
+    let n = columns.len() + 1;
+    let mut glyphs: Vec<(u16, u16)> = idx.iter().enumerate().flat_map(|(k, &i)| classes[i].1.iter().map(move |&g| (g, k as u16))).collect();
+    glyphs.sort();
+    let cov = coverage(&glyphs.iter().map(|g| g.0).collect::<Vec<_>>());
+    let cd1 = class_def(&glyphs.iter().copied().filter(|g| g.1 > 0).collect::<Vec<_>>());
+    let cd2 = class_def(&class2.iter().map(|&(g, c)| (g, local[c as usize])).filter(|g| g.1 > 0).collect::<Vec<_>>());
+    let matrix = 2 * idx.len() * n;
+    if 16 + matrix + cov.len() + cd1.len() > 0xFFFF {
+        return None;
+    }
+    let mut w = W(Vec::new());
+    w.u16(2); // posFormat
+    w.u16((16 + matrix) as u16); // coverage
+    w.u16(0x0004); // valueFormat1: XAdvance
+    w.u16(0); // valueFormat2
+    w.u16((16 + matrix + cov.len()) as u16); // classDef1
+    w.u16((16 + matrix + cov.len() + cd1.len()) as u16); // classDef2
+    w.u16(idx.len() as u16);
+    w.u16(n as u16);
+    for k in 0..idx.len() {
+        w.i16(0);
+        for col in &columns {
+            w.i16(col[k]);
+        }
+    }
+    w.0.extend_from_slice(&cov);
+    w.0.extend_from_slice(&cd1);
+    w.0.extend_from_slice(&cd2);
+    Some(w.0)
+}
+
+thread_local! {
+    /// The last kerning encoded and its subtables: the type tester
+    /// recompiles the font on every edit, mostly with the same kerning.
+    static LAST_KERN: std::cell::RefCell<(Pairs, Vec<Vec<u8>>)> = Default::default();
+}
+
+/// The kern lookup's subtables: class kerning plus exceptions when that is
+/// smaller (it is for any real font), else plain pairs. Class tolerances
+/// are compared with quick grouping; the best is then grouped thoroughly.
+fn pair_subtables(pairs: &[(u16, u16, i16)]) -> Vec<Vec<u8>> {
+    if let Some(hit) = LAST_KERN.with(|c| (c.borrow().0 == pairs).then(|| c.borrow().1.clone())) {
+        return hit;
+    }
+    let mut rows: BTreeMap<u16, Row> = Default::default();
+    for &(l, r, v) in pairs {
+        rows.entry(l).or_default().insert(r, v);
+    }
+    let size = |s: &Vec<Vec<u8>>| s.iter().map(|t| subtable_cost(t)).sum::<usize>();
+    let quick = [0.06, 0.12, 0.25, 0.5, 1.0].into_iter().filter_map(|f| class_pairs(&rows, f, false).map(|s| (f, s))).min_by_key(|s| size(&s.1));
+    let thorough = quick.as_ref().and_then(|q| class_pairs(&rows, q.0, true));
+    let best = quick.map(|q| q.1).into_iter().chain(thorough).chain([pair_pos_1(pairs)]).min_by_key(size).unwrap_or_default();
+    LAST_KERN.with(|c| *c.borrow_mut() = (pairs.to_vec(), best.clone()));
+    best
+}
+
+/// GPOS with one `kern` feature (DFLT and latn scripts) holding pair
+/// adjustments. Pairs are (left glyph, right glyph, x-advance of the left).
+/// Subtables are split to keep their 16-bit offsets in range and reached
+/// through Extension lookups, so any number of pairs fits.
+fn gpos_table(pairs: &[(u16, u16, i16)]) -> Vec<u8> {
+    let subtables = pair_subtables(pairs);
     let mut w = W(Vec::new());
     // Header: version 1.0, then ScriptList (10), FeatureList (48), LookupList (62).
     w.u32(0x0001_0000);
@@ -1005,5 +1369,60 @@ mod tests {
         assert!(face.glyph_bounding_box(GlyphId(0)).is_some());
         let fam = face.names().into_iter().find(|n| n.name_id == 1).and_then(|n| n.to_string());
         assert_eq!(fam.as_deref(), Some("Test Morph"));
+    }
+
+    /// Writes kerning between `n` square glyphs and shapes every pair back.
+    fn kerning_roundtrip(n: u32, kern: &dyn Fn(u32, u32) -> i16) -> (usize, usize) {
+        let ch = |i: u32| char::from_u32(0x100 + i).unwrap();
+        let glyphs: Vec<OutGlyph> = (0..n).map(|i| OutGlyph { codepoint: Some(ch(i) as u32), advance: 600.0, contours: vec![square(50.0, 500.0)] }).collect();
+        let mut m = meta();
+        m.kerning = (0..n).flat_map(|l| (0..n).map(move |r| (l, r))).map(|(l, r)| (ch(l) as u32, ch(r) as u32, kern(l, r))).collect();
+        let bytes = write_ttf(&m, &glyphs);
+        let face = rustybuzz::Face::from_slice(&bytes, 0).unwrap();
+        let chars: Vec<char> = (0..n).map(ch).collect();
+        let got = crate::font::pair_kerning(&face, &chars);
+        let mut want = 0;
+        for l in 0..n {
+            for r in 0..n {
+                let v = kern(l, r) as i32;
+                want += (v != 0) as usize;
+                assert_eq!(got.get(&(ch(l), ch(r))).copied().unwrap_or(0), v, "pair {l} {r}");
+            }
+        }
+        assert_eq!(got.len(), want);
+        let gpos = Face::parse(&bytes, 0).unwrap().raw_face().table(rustybuzz::ttf_parser::Tag::from_bytes(b"GPOS")).unwrap().len();
+        (want, gpos)
+    }
+
+    /// A small deterministic hash for test data.
+    fn mix(a: u32, b: u32) -> u32 {
+        let mut x = a.wrapping_mul(0x9E37_79B9) ^ b.wrapping_mul(0x85EB_CA6B);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x2C1B_3C6D);
+        x ^ (x >> 12)
+    }
+
+    #[test]
+    fn class_kerning_shapes_every_pair() {
+        // Classes like a real font's, plus single-pair exceptions, pairs
+        // taken out of a class and a glyph kerned only against a few.
+        let (pairs, gpos) = kerning_roundtrip(90, &|l, r| {
+            let class = |i: u32, k: u32| if i.is_multiple_of(11) { 0 } else { i * k % 7 };
+            let base = [0, -60, -35, 20, -90, -10, 45][((class(l, 3) * 3 + class(r, 5)) % 7) as usize];
+            match mix(l, r) % 97 {
+                0 => -150,
+                1 => 0,
+                _ if l == 89 => if r.is_multiple_of(30) { 25 } else { 0 },
+                _ => base,
+            }
+        });
+        assert!(pairs > 4000);
+        assert!(gpos * 3 < pairs * 4, "{gpos} bytes of GPOS for {pairs} pairs");
+    }
+
+    #[test]
+    fn unstructured_kerning_shapes_every_pair() {
+        kerning_roundtrip(40, &|l, r| (mix(l, r) % 41) as i16 - 20);
+        kerning_roundtrip(3, &|l, r| if l == 1 && r == 2 { -40 } else { 0 });
     }
 }

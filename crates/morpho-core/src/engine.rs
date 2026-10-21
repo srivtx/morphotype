@@ -515,6 +515,33 @@ pub struct GlyphPreview {
     pub edited: bool,
 }
 
+/// Kerning of one pair of a font spec, in em.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairKerning {
+    pub pair: String,
+    /// The font's own kerning (blended and scaled as in the export).
+    pub measured: f64,
+    /// What the export uses (before rounding to font units): the spec's
+    /// override, else `measured`.
+    pub value: f64,
+    pub overridden: bool,
+}
+
+/// The two characters of a kerning pair key such as "AV".
+fn pair_chars(p: &str) -> Option<(char, char)> {
+    let mut it = p.chars();
+    match (it.next(), it.next(), it.next()) {
+        (Some(l), Some(r), None) => Some((l, r)),
+        _ => None,
+    }
+}
+
+/// A spec's kerning overrides by character pair, in em.
+fn kerning_overrides(spec: &FontSpec) -> BTreeMap<(char, char), f64> {
+    spec.kerning.iter().filter(|(_, v)| v.is_finite()).filter_map(|(p, &v)| pair_chars(p).map(|c| (c, v))).collect()
+}
+
 /// A positioned glyph from text layout, in em units.
 struct PlacedGlyph {
     a: u16,
@@ -1533,12 +1560,14 @@ impl Engine {
         Ok(k)
     }
 
-    /// Kerning for an exported font, in font units: the base font's pairs,
-    /// blended towards the morph target's and scaled with the glyphs' width.
-    /// Glyphs whose outline was redrawn or replaced keep no kerning.
-    fn font_kerning(&mut self, spec: &FontSpec, chars: &[char], upm: f64) -> Result<Vec<(u32, u32, i16)>, String> {
+    /// Measured kerning of a font spec between `chars`, in em: the base
+    /// font's pairs, blended towards the morph target's and scaled with the
+    /// glyphs' width. Glyphs whose outline was redrawn or replaced keep no
+    /// kerning.
+    fn measured_kerning(&mut self, spec: &FontSpec, chars: &[char]) -> Result<BTreeMap<(char, char), f64>, String> {
+        let mut out = BTreeMap::new();
         if spec.blank {
-            return Ok(Vec::new());
+            return Ok(out);
         }
         let redrawn = |c: char| {
             spec.glyphs.iter().any(|g| g.ch.starts_with(c) && (g.d.as_deref().is_some_and(|d| !d.trim().is_empty()) || g.hide_base || g.parts.iter().any(|p| p.visible)))
@@ -1560,23 +1589,48 @@ impl Engine {
         let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
         let mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
         let (scale, ..) = Self::spacing_of(&mods);
-        let mut pairs: Vec<(char, char)> = ka.keys().chain(kb.iter().flat_map(|k| k.keys())).copied().collect();
-        pairs.sort();
-        pairs.dedup();
-        let mut out = Vec::new();
-        for (l, r) in pairs {
+        for &(l, r) in ka.keys().chain(kb.iter().flat_map(|k| k.keys())) {
             let a = ka.get(&(l, r)).copied().unwrap_or(0.0);
             // Characters the target lacks keep the base glyph, so its kerning too.
             let b = match &kb {
                 Some(kb) if in_b.contains(&l) && in_b.contains(&r) => kb.get(&(l, r)).copied().unwrap_or(0.0),
                 _ => a,
             };
-            let v = ((a * (1.0 - t) + b * t) * scale * upm).round();
-            if v.abs() >= 1.0 {
-                out.push((l as u32, r as u32, v.clamp(i16::MIN as f64, i16::MAX as f64) as i16));
-            }
+            out.insert((l, r), (a * (1.0 - t) + b * t) * scale);
         }
         Ok(out)
+    }
+
+    /// Kerning for an exported font, in font units: the measured kerning
+    /// between `chars`, with the spec's own pairs replacing it.
+    pub fn font_kerning(&mut self, spec: &FontSpec, chars: &[char], upm: f64) -> Result<Vec<(u32, u32, i16)>, String> {
+        let mut k = self.measured_kerning(spec, chars)?;
+        k.extend(kerning_overrides(spec));
+        Ok(k.into_iter()
+            .map(|((l, r), v)| (l as u32, r as u32, (v * upm).round().clamp(i16::MIN as f64, i16::MAX as f64) as i16))
+            .filter(|k| k.2 != 0)
+            .collect())
+    }
+
+    /// Kerning of some pairs ("AV") of a font spec, in em: what the font
+    /// measures (rounded to its units) and the spec's override, if any.
+    pub fn kerning_pairs(&mut self, spec: &FontSpec, pairs: &[String]) -> Result<Vec<PairKerning>, String> {
+        let upm = self.font(&spec.font)?.info.units_per_em.max(16) as f64;
+        let pairs: Vec<(String, char, char)> = pairs.iter().filter_map(|p| pair_chars(p).map(|(l, r)| (p.clone(), l, r))).collect();
+        let mut chars: Vec<char> = pairs.iter().flat_map(|p| [p.1, p.2]).collect();
+        chars.sort();
+        chars.dedup();
+        let measured = self.measured_kerning(spec, &chars)?;
+        let overrides = kerning_overrides(spec);
+        let units = |v: f64| (v * upm).round() / upm;
+        Ok(pairs
+            .into_iter()
+            .map(|(pair, l, r)| {
+                let m = units(measured.get(&(l, r)).copied().unwrap_or(0.0));
+                let o = overrides.get(&(l, r)).copied();
+                PairKerning { pair, measured: m, value: o.unwrap_or(m), overridden: o.is_some() }
+            })
+            .collect())
     }
 
     pub fn export_font(&mut self, spec: &FontSpec) -> Result<Vec<u8>, String> {
@@ -1795,6 +1849,10 @@ pub struct FontSpec {
     /// base font only lends its metrics.
     #[serde(default)]
     pub blank: bool,
+    /// Kerning by character pair ("AV"), in em. Each replaces what the
+    /// font measures for that pair; 0 removes the pair's kerning.
+    #[serde(default)]
+    pub kerning: BTreeMap<String, f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

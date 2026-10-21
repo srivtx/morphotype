@@ -249,6 +249,16 @@ export interface GlyphOut {
   exists: boolean;
 }
 
+/** Kerning of one pair of a font spec, in em. */
+export interface PairKerning {
+  pair: string;
+  /** The font's own kerning, blended and scaled as in the export. */
+  measured: number;
+  /** What the export uses: the override, else `measured`. */
+  value: number;
+  overridden: boolean;
+}
+
 export interface GlyphPreview {
   ch: string;
   d: string;
@@ -349,6 +359,8 @@ export interface FontSpec {
   blank?: boolean;
   /** Font version, e.g. "1.004". */
   version?: string;
+  /** Kerning by character pair ("AV"), in em; replaces the font's own. */
+  kerning?: Record<string, number>;
 }
 
 export interface SvgOptions {

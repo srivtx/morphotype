@@ -52,6 +52,9 @@ self.onmessage = async (ev: MessageEvent<Request>) => {
       case 'fontPreview':
         reply({ id: req.rid, ok: true, value: JSON.parse(morpho.fontPreview(req.spec, req.chars)) });
         break;
+      case 'kerningPairs':
+        reply({ id: req.rid, ok: true, value: JSON.parse(morpho.kerningPairs(req.spec, req.pairs)) });
+        break;
       case 'exportFont': {
         const bytes = morpho.exportFont(req.spec);
         reply({ id: req.rid, ok: true, value: bytes }, [bytes.buffer]);

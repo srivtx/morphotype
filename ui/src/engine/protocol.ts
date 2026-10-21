@@ -10,6 +10,7 @@ export type Request =
   | { rid: number; type: 'glyphPath'; font: string; axes: string; ch: string }
   | { rid: number; type: 'fontPreview'; spec: string; chars: string }
   | { rid: number; type: 'exportFont'; spec: string }
+  | { rid: number; type: 'kerningPairs'; spec: string; pairs: string }
   | { rid: number; type: 'trace'; rgba: Uint8Array; width: number; height: number; opts: string };
 
 export type Response =

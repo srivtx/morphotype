@@ -169,6 +169,8 @@ export interface TypeProject {
   /** Characters the font includes, in display order. */
   charset: string;
   glyphs: Record<string, GlyphEdit>;
+  /** Kerning by character pair ("AV"), in em: replaces the base font's for that pair. */
+  kerning: Record<string, number>;
   sample: string;
   /** Files exported or installed so far; the font's version is 1.<revision>. */
   revision?: number;

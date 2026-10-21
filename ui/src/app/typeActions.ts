@@ -61,6 +61,7 @@ export function createTypeProject(o: NewFontOptions): TypeProject {
     tracking: 0,
     charset: o.charset,
     glyphs: {},
+    kerning: {},
     sample: 'Sphinx of black quartz, judge my vow',
   };
   edit((p) => (p.type = tp));
@@ -100,6 +101,7 @@ export function specOf(t: TypeProject, opts: { quality?: number; format?: 'ttf' 
     charset: t.charset,
     glyphs,
     tracking: t.tracking,
+    kerning: t.kerning,
     quality: opts.quality,
     format: opts.format,
     blank: t.blank,
@@ -170,6 +172,20 @@ export function removeCharacter(ch: string) {
     tp.charset = [...tp.charset].filter((c) => c !== ch).join('');
     delete tp.glyphs[ch];
   });
+}
+
+/** The kerning pair in typed text: its first two visible characters, or null. */
+export function kernPair(text: string): string | null {
+  const c = [...text].filter((ch) => ch.trim() && !/\p{C}/u.test(ch));
+  return c.length >= 2 ? c[0] + c[1] : null;
+}
+
+/** Set a pair's kerning in em (replacing the font's own), or null to use the font's again. */
+export function setKerning(pair: string, value: number | null) {
+  editType((tp) => {
+    if (value === null) delete tp.kerning[pair];
+    else tp.kerning[pair] = Math.round(value * 10000) / 10000;
+  }, value === null ? '' : `kern:${pair}`);
 }
 
 function fileBase(t: TypeProject) {
@@ -276,6 +292,8 @@ export function fontChanges(t: TypeProject): string[] {
   const own = Object.values(t.glyphs).filter((g) => g.modifiers?.length).length;
   if (own) out.push(`${own} glyph${own > 1 ? 's' : ''} with their own modifiers`);
   if (Math.abs(t.tracking) > 1e-4) out.push(`Spacing ${t.tracking > 0 ? '+' : ''}${t.tracking.toFixed(3)} em`);
+  const kerned = Object.keys(t.kerning);
+  if (kerned.length) out.push(`${kerned.length} kerning pair${kerned.length > 1 ? 's' : ''} set by hand: ${kerned.slice(0, 8).join(' ')}${kerned.length > 8 ? ' …' : ''}`);
   if (out.length === 1 && !t.blank) out.push('No changes yet: it will look exactly like the base font');
   return out;
 }
