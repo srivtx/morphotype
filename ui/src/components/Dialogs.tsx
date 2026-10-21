@@ -4,17 +4,21 @@ import { newFont, startTemplate } from '../app/projects';
 import { platform, type SystemFont } from '../platform';
 import { projectScene } from '../render/thumbs';
 import { useSeen, useThumb } from '../render/thumbs';
-import { recipeOf, TEMPLATES, type Template } from '../state/templates';
+import type { Template } from '../state/templates';
+import { recipeOf, useTemplates, withTemplates } from '../state/templateCatalog';
 import { replaceProject, store, toast, useStore } from '../state/store';
+import { onDemand } from '../app/onDemand';
 import { CommandPalette } from './CommandPalette';
-import { HelpDialog } from './HelpDialog';
 import { Icon, type IconName } from './icons';
 import { applyIconTarget } from '../state/icon';
-import { SettingsDialog } from './SettingsDialog';
-import { TraceDialog } from './TraceDialog';
-import { TypeGuideDialog } from './type/TypeGuide';
-import { UseFontDialog } from './type/UseFontDialog';
 import { Dialog, Segmented } from './ui';
+
+// Rarely opened dialogs load on first use.
+const TraceDialog = onDemand(() => import('./TraceDialog').then((m) => m.TraceDialog));
+const SettingsDialog = onDemand(() => import('./SettingsDialog').then((m) => m.SettingsDialog));
+const HelpDialog = onDemand(() => import('./HelpDialog').then((m) => m.HelpDialog));
+const TypeGuideDialog = onDemand(() => import('./type/TypeGuide').then((m) => m.TypeGuideDialog));
+const UseFontDialog = onDemand(() => import('./type/UseFontDialog').then((m) => m.UseFontDialog));
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
@@ -48,16 +52,18 @@ export function Dialogs() {
 /** Start a blank project for one of the common jobs. */
 export function startIntent(i: (typeof INTENTS)[number]) {
   if (i.font) return newFont();
-  const p = { ...TEMPLATES[0].make(), name: i.label, layers: [], canvas: { width: i.w!, height: i.h! } };
-  if (i.tile) applyIconTarget(p.background, 'macos');
-  replaceProject(p);
-  window.dispatchEvent(new Event('mt-fit'));
+  withTemplates((templates) => {
+    const p = { ...templates[0].make(), name: i.label, layers: [], canvas: { width: i.w!, height: i.h! } };
+    if (i.tile) applyIconTarget(p.background, 'macos');
+    replaceProject(p);
+    window.dispatchEvent(new Event('mt-fit'));
+  });
 }
 
-export function TemplateCard({ t, onPick }: { t: Template; onPick: () => void }) {
-  // Only render previews of cards that have been on screen.
+export function TemplateCard({ t, onPick, eager }: { t: Template; onPick: () => void; eager?: boolean }) {
+  // Only render previews of cards that have been on screen (or `eager` ones).
   const [ref, seen] = useSeen<HTMLButtonElement>();
-  const url = useThumb(seen ? `tpl:${t.name}` : null, () => projectScene(t.make(), 300));
+  const url = useThumb(seen || eager ? `tpl:${t.name}` : null, () => projectScene(t.make(), 300));
   const p = useMemo(() => t.make(), [t]);
   const aspect = p.canvas.width / p.canvas.height;
   return (
@@ -91,7 +97,7 @@ function TemplatesDialog() {
     startIntent(i);
   };
   const [cat, setCat] = useState<'All' | Template['category']>('All');
-  const shown = TEMPLATES.filter((t) => cat === 'All' || t.category === cat);
+  const shown = (useTemplates() ?? []).filter((t) => cat === 'All' || t.category === cat);
   return (
     <Dialog title="New design" subtitle="Every template is a normal document: change anything." onClose={close} size="xl">
       <h4 className="intent-title">What are you making?</h4>
@@ -116,11 +122,13 @@ function TemplatesDialog() {
       <div className="templates">
         <button
           className="template blank"
-          onClick={() => {
-            replaceProject({ ...TEMPLATES[0].make(), name: 'Untitled', layers: [] });
-            close();
-            window.dispatchEvent(new Event('mt-fit'));
-          }}
+          onClick={() =>
+            withTemplates((templates) => {
+              replaceProject({ ...templates[0].make(), name: 'Untitled', layers: [] });
+              close();
+              window.dispatchEvent(new Event('mt-fit'));
+            })
+          }
         >
           <span className="template-img">
             <Icon name="plus" size={28} />

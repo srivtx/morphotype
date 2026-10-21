@@ -1,31 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ContextMenu } from '../components/ContextMenu';
 import { Dialogs } from '../components/Dialogs';
 import { Icon } from '../components/icons';
-import { Inspector } from '../components/Inspector';
-import { LayersPanel } from '../components/LayersPanel';
-import { prewarmThumbs, StylePanel } from '../components/StylePanel';
-import { TopBar } from '../components/TopBar';
 import { Home } from '../components/Home';
-import { TypeMode } from '../components/type/TypeMode';
 import { Tooltips } from '../components/ui';
-import { BrushBar } from '../components/canvas/BrushBar';
-import { PenOverlay } from '../components/canvas/PenTool';
-import { Viewport } from '../components/canvas/Viewport';
-import { TimelineBar } from '../components/canvas/Timeline';
 import { engine } from '../engine/client';
 import { loadBundled } from '../fonts/library';
 import { buildScene } from '../state/tree';
 import { setSettings, store, toast, useStore } from '../state/store';
-import { addShape, getRenderer, importFonts, importImage, onCopyEvent, onPasteEvent, openProject, setBackground } from './actions';
-import { Popover, Segmented } from '../components/ui';
-import { ShapePicker } from '../components/pickers';
-import { emptyProject, symbolLayer } from '../state/model';
-import { allCommands, matchKey, run } from './commands';
+import { importFonts, importImage, onCopyEvent, onPasteEvent, openProject } from './actions';
+import { emptyProject } from '../state/model';
+import { loadTemplates } from '../state/templateCatalog';
+import { allCommands, matchKey } from './commands';
 import { startAutosave } from './autosave';
 import { startLiveGeometry } from './geoMotion';
-import { newDesign, openLast, pageBackground } from './projects';
+import { onDemand, whenIdle } from './onDemand';
+import { newDesign, openLast } from './projects';
 import { openDocument } from '../state/store';
+
+// The editor (canvas, panels, timeline, Type mode) loads in its own chunk, so
+// Home paints without it; it preloads while Home is up.
+const Editor = onDemand(() => import('./Editor').then((m) => m.Editor));
 
 function Toasts() {
   const toasts = useStore((s) => s.toasts);
@@ -167,117 +162,6 @@ function useDropFiles() {
   return over;
 }
 
-/** Starting points on an empty artboard. */
-function EmptyStart() {
-  const [shapes, setShapes] = useState(false);
-  const page = useStore((s): 'white' | 'transparent' | 'dark' => {
-    const f = s.project.background.fill;
-    return f.kind === 'none' ? 'transparent' : f.kind === 'solid' && f.colors[0]?.toLowerCase() === '#ffffff' ? 'white' : f.kind === 'solid' && f.colors[0]?.toLowerCase() === '#0b0b0d' ? 'dark' : 'white';
-  });
-  const btn = useRef<HTMLButtonElement>(null);
-  return (
-    <div className="empty-start" role="group" aria-label="Start your design">
-      <h3>Start with</h3>
-      <div className="empty-start-row">
-        <button onClick={() => run('tool-text')}>
-          <Icon name="text" size={18} /> Text <kbd>T</kbd>
-        </button>
-        <button ref={btn} onClick={() => setShapes(!shapes)}>
-          <Icon name="shapes" size={18} /> Shape <kbd>O</kbd>
-        </button>
-        <button onClick={() => run('tool-draw')}>
-          <Icon name="brush" size={18} /> Draw <kbd>B</kbd>
-        </button>
-        <button onClick={() => void importImage()}>
-          <Icon name="image" size={18} /> Image <kbd>⇧⌘I</kbd>
-        </button>
-        <button onClick={() => store.set({ dialog: { kind: 'templates' } })}>
-          <Icon name="sparkle" size={18} /> Template
-        </button>
-        <button onClick={() => run('new-layer')} data-tip="A blank, transparent layer: what you draw or add goes inside it">
-          <Icon name="plus" size={18} /> Empty layer
-        </button>
-      </div>
-      <div className="empty-start-page">
-        <span className="dim small">Page</span>
-        <Segmented
-          size="sm"
-          value={page}
-          options={[
-            { value: 'white', label: 'White' },
-            { value: 'transparent', label: 'Clear', title: 'Transparent: exports without a background' },
-            { value: 'dark', label: 'Dark' },
-          ]}
-          onChange={(v) => {
-            setBackground((b) => Object.assign(b, pageBackground(v)));
-            setSettings({ newPage: v });
-          }}
-        />
-      </div>
-      {shapes && (
-        <Popover anchor={btn.current} onClose={() => setShapes(false)} width={340} placement="bottom-start">
-          <ShapePicker
-            onPick={(k) => {
-              setShapes(false);
-              addShape(symbolLayer(k));
-            }}
-          />
-        </Popover>
-      )}
-    </div>
-  );
-}
-
-function DesignMode() {
-  const tab = useStore((s) => s.tab);
-  const empty = useStore((s) => s.project.layers.length === 0);
-  const editing = useStore((s) => s.editing);
-  const tool = useStore((s) => s.tool);
-  return (
-    <main className="workspace">
-      <aside className="panel left">
-        <LayersPanel />
-      </aside>
-      <section className="center">
-        <Viewport />
-        <TimelineBar />
-        {empty && tool === 'select' && !editing && <EmptyStart />}
-        {tool === 'text' && !editing && (
-          <div className="edit-pill" role="status">
-            <Icon name="text" size={14} />
-            Click anywhere to type, or click a text to edit it
-            <button className="link-btn" onClick={() => store.set({ tool: 'select' })}>
-              Cancel <kbd>Esc</kbd>
-            </button>
-          </div>
-        )}
-        {tool === 'draw' && <BrushBar />}
-        {tool === 'pen' && <PenOverlay renderer={getRenderer()} />}
-        {editing && editing.kind !== 'text' && (
-          <div className="edit-pill" role="status">
-            <Icon name={editing.kind === 'warp' ? 'warp' : 'points'} size={14} />
-            {editing.kind === 'warp' ? 'Drag the 16 points to warp' : 'Editing points'}
-            <button className="link-btn" onClick={() => store.set({ editing: null })}>
-              Done <kbd>Esc</kbd>
-            </button>
-          </div>
-        )}
-      </section>
-      <aside className="panel right">
-        <div className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'design'} className={tab === 'design' ? 'on' : ''} onClick={() => store.set({ tab: 'design' })}>
-            Design
-          </button>
-          <button role="tab" aria-selected={tab === 'style'} className={tab === 'style' ? 'on' : ''} onClick={() => store.set({ tab: 'style' })}>
-            Style
-          </button>
-        </div>
-        <div className="panel-scroll">{tab === 'design' ? <Inspector /> : <StylePanel />}</div>
-      </aside>
-    </main>
-  );
-}
-
 export function App() {
   const ready = useStore((s) => s.ready);
   const mode = useStore((s) => s.mode);
@@ -287,14 +171,20 @@ export function App() {
   const dropping = useDropFiles();
 
   useEffect(() => {
+    // `?editor` (tests, demos) opens straight into a scratch design.
+    const q = new URLSearchParams(location.search);
+    // Opening straight into a design: fetch the editor while the engine loads.
+    if (q.has('editor') || q.has('new') || store.get().settings.launch === 'last') void Editor.preload();
     loadBundled().then(
       (fonts) => {
         store.set({ fonts, ready: true });
-        prewarmThumbs();
+        whenIdle(() => {
+          loadTemplates().catch(() => {});
+          void Editor.preload();
+          import('./Editor').then((m) => m.prewarmThumbs(), () => {});
+        });
         startAutosave();
         startLiveGeometry();
-        // `?editor` (tests, demos) opens straight into a scratch design.
-        const q = new URLSearchParams(location.search);
         if (q.has('editor')) openDocument(emptyProject());
         else if (q.has('new')) newDesign();
         else if (store.get().settings.launch === 'last') void openLast();
@@ -306,14 +196,7 @@ export function App() {
 
   return (
     <div className={`app mode-${mode} screen-${screen}`}>
-      {screen === 'home' ? (
-        <Home />
-      ) : (
-        <>
-          <TopBar />
-          {mode === 'design' ? <DesignMode /> : <TypeMode />}
-        </>
-      )}
+      {screen === 'home' ? <Home /> : <Editor />}
       {!ready && (
         <div className="boot">
           <span className="spinner" /> Loading engine…
