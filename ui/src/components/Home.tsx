@@ -7,7 +7,8 @@ import { deleteFromLibrary, duplicateFromLibrary, newDesign, newFont, openFromLi
 import { platform } from '../platform';
 import { listProjects, onLibraryChange, type ProjectMeta } from '../state/library';
 import { setSettings, store, useStore } from '../state/store';
-import { TEMPLATES, type Template } from '../state/templates';
+import type { Template } from '../state/templates';
+import { useTemplates } from '../state/templateCatalog';
 import { INTENTS, startIntent, TemplateCard } from './Dialogs';
 import { Icon, Logo, type IconName } from './icons';
 import { IconButton, Menu, MenuItem, MenuSep, Segmented } from './ui';
@@ -191,7 +192,8 @@ function StartRow() {
 
 function Templates({ limit, onAll }: { limit?: number; onAll?: () => void }) {
   const [cat, setCat] = useState<'All' | Template['category']>('All');
-  const shown = TEMPLATES.filter((t) => cat === 'All' || t.category === cat).slice(0, limit);
+  const templates = useTemplates();
+  const shown = (templates ?? []).filter((t) => cat === 'All' || t.category === cat).slice(0, limit);
   return (
     <section className="home-section">
       <div className="home-section-head">
@@ -200,15 +202,16 @@ function Templates({ limit, onAll }: { limit?: number; onAll?: () => void }) {
           <Segmented size="sm" value={cat} options={(['All', 'Learn', 'Logo', 'Icon', 'Type', 'Social', 'Print'] as const).map((c) => ({ value: c, label: c }))} onChange={setCat} />
         )}
         <span className="spacer" />
-        {onAll && (
+        {onAll && templates && (
           <button className="link-btn" onClick={onAll}>
-            All {TEMPLATES.length} templates
+            All {templates.length} templates
           </button>
         )}
       </div>
+      {/* Home's few cards preview at once, including a row just below the fold. */}
       <div className="templates home-templates">
         {shown.map((t) => (
-          <TemplateCard key={t.name} t={t} onPick={() => startTemplate(t)} />
+          <TemplateCard key={t.name} t={t} onPick={() => startTemplate(t)} eager={!!limit} />
         ))}
       </div>
     </section>
@@ -222,6 +225,7 @@ export function Home() {
   const [q, setQ] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const p = platform();
+  const templates = useTemplates();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
@@ -243,7 +247,7 @@ export function Home() {
     { id: 'home', label: 'Home', icon: 'grid' },
     { id: 'designs', label: 'Designs', icon: 'design', n: counts.designs },
     { id: 'fonts', label: 'Fonts', icon: 'type', n: counts.fonts },
-    { id: 'templates', label: 'Templates', icon: 'sparkle', n: TEMPLATES.length },
+    { id: 'templates', label: 'Templates', icon: 'sparkle', n: templates?.length },
   ];
   const recent = view === 'home' ? shown.slice(0, 12) : shown;
   return (
