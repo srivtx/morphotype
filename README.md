@@ -2,6 +2,8 @@
 
 A type and logo lab for macOS, Windows and the web. Morph one typeface into another, reshape lettering with a stack of modifiers, draw by hand, put photos inside any shape, trace images into vector marks, compile the result into a real installable font, and render it as liquid chrome, glow glass, puffy 3D, halftone, dither, rubber stamp or neon, all in real time on the GPU.
 
+**Website:** [morphotype.srivtx.xyz](https://morphotype.srivtx.xyz)
+
 ![Templates rendered by Morphotype](docs/images/gallery.png)
 
 ## Install
@@ -155,6 +157,7 @@ ui/src/render        WebGL2 renderer, SDF passes and effect shaders
 ui/src/components    Editor UI
 ui/public/fonts      Bundled OFL fonts
 scripts              WASM build and end-to-end test
+website              Landing page (static; Vercel deploys it from main to morphotype.srivtx.xyz)
 ```
 
 ## Fonts and licences
