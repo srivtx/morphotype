@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { anyGeoAnim, contentAt, modAnimKey, modifiersAt, movingDocAt, movingIds, nodeAt, projectAt, pruneGeoAnims, symAnimKey } from './geoMotion';
-import { emptyProject, group, lineLayer, morphLayer, newModifier, symbolLayer, type Project, type ShapeLayer } from './model';
+import { anyGeoAnim, contentAt, hasGeoAnim, modAnimKey, modifiersAt, MORPH_KEY, movingDocAt, movingIds, nodeAt, projectAt, pruneGeoAnims, symAnimKey } from './geoMotion';
+import { emptyProject, group, lineLayer, morphLayer, newModifier, symbolLayer, textLayer, type Project, type ShapeLayer } from './model';
 
 const wave = () => newModifier('wave', { amplitude: 0.1, wavelength: 2, phase: 0 } as never);
 
@@ -52,6 +52,26 @@ describe('animated geometry settings', () => {
     const c = contentAt(star.content, { [symAnimKey('points')]: { to: 9, period: 1, phase: 0, mode: 'ramp' }, [symAnimKey('inner')]: { to: 0.8, period: 1, phase: 0, mode: 'ramp' } }, 0.5);
     expect(c.type === 'symbol' && (c.symbol as unknown as { points: number }).points).toBe(7);
     expect(c.type === 'symbol' && (c.symbol as unknown as { inner: number }).inner).toBeCloseTo(0.45 + (0.8 - 0.45) / 2, 6);
+  });
+
+  it('moves a font morph and a morph layer between their two shapes', () => {
+    const swing = { [MORPH_KEY]: { to: 1, period: 2, phase: 0, mode: 'swing' as const } };
+    const text = textLayer('Morph', 'archivo', { animate: swing }, { morph: { font: 'pacifico', t: 0, axes: {} } });
+    const blend = (t: number) => {
+      const c = nodeAt(text, t).content;
+      return c.type === 'text' ? c.morph!.t : NaN;
+    };
+    expect(blend(0)).toBeCloseTo(0, 6);
+    expect(blend(1)).toBeCloseTo(1, 6);
+    expect(blend(0.5)).toBeGreaterThan(0);
+    expect(blend(0.5)).toBeLessThan(1);
+    expect(text.content.type === 'text' && text.content.morph!.t).toBe(0);
+    const m = morphLayer('a', 'b');
+    m.animate = { [MORPH_KEY]: { to: 0, period: 2, phase: 0, mode: 'swing' } };
+    const c = nodeAt(m, 1).content;
+    expect(c.type === 'morph' && c.t).toBeCloseTo(0, 6);
+    // Text with no morph has no blend to move.
+    expect(hasGeoAnim(textLayer('Plain', 'archivo', { animate: swing }))).toBe(false);
   });
 
   it('ignores keyframes that no longer apply', () => {

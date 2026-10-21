@@ -241,39 +241,49 @@ export const LAB_TEMPLATES: Template[] = [
     hint: 'A serif headline over pixel blobs, sparkles and an eye',
     category: 'Social',
     make: () => {
+      // Laid out on a 736 px reference: (x, y) there is ((x − 368)·k, (y − 368)·k) here.
+      const k = 1080 / 736;
+      const at = (x: number, y: number) => ({ x: (x - 368) * k, y: (y - 368) * k });
       const px = (size: number) => mods({ kind: 'pixelate', size, shape: 'square', gap: 0, dissolve: 0, angle: 180, seed: 1 });
       const cream = ink('#f6f0d8');
+      const sparkle = (x: number, y: number, size: number, color: string, tall = 1) =>
+        symbolLayer('sparkle', size * k, { ...at(x, y), sy: tall, name: 'Sparkle', style: ink(color), modifiers: px(0.045) }, { pinch: 0.42 });
       return project(
         'Pixel office',
         [
-          symbolLayer('blob', 760, { x: 30, y: -60, name: 'Pink blob', style: ink('#e66ef0'), modifiers: px(0.03) }, { lobes: 5, depth: 0.16, seed: 3, wobble: 0.6 }),
-          symbolLayer('blob', 430, { x: -60, y: -40, name: 'Violet blob', style: ink('#8d7bff'), modifiers: px(0.05) }, { lobes: 4, depth: 0.2, seed: 8, wobble: 0.4 }),
-          symbolLayer('pill', 560, { x: -70, y: 330, rotation: 80, name: 'Green worm', style: ink('#2fc94a'), modifiers: px(0.06) }, { aspect: 2.4 }),
+          symbolLayer('blob', 470 * k, { ...at(392, 245), rotation: -12, name: 'Pink blob', style: ink('#e66ef0'), modifiers: px(0.03) }, { lobes: 5, depth: 0.14, seed: 3, wobble: 0.5 }),
+          symbolLayer('lens', 330 * k, { ...at(368, 258), rotation: 90, name: 'Violet band', style: ink('#8d7bff'), modifiers: px(0.04) }, { aspect: 0.42 }),
+          symbolLayer('moon', 250 * k, { ...at(352, 500), rotation: -24, name: 'Green worm', style: ink('#2fc94a'), modifiers: px(0.045) }, { phase: 0.42 }),
           group(
-            [line([[0, 0], [60, 40], [20, 90], [90, 150]], 26, '#ffb21f', 'Zigzag', 120, -330), line([[0, 0], [50, 60], [10, 120], [70, 170]], 26, '#ffb21f', 'Zigzag', 170, 160)],
-            { name: 'Zigzags', merge: true, modifiers: px(0.12), style: ink('#ffb21f') },
+            [
+              line([[0, 0], [40, 18], [30, 52], [70, 80], [62, 120]], 13 * k, '#ffb21f', 'Zigzag', ...Object.values(at(470, 140)) as [number, number]),
+              line([[0, 0], [28, 40], [70, 52], [92, 100]], 13 * k, '#ffb21f', 'Zigzag', ...Object.values(at(500, 380)) as [number, number]),
+              line([[0, 0], [24, 34], [8, 70]], 13 * k, '#ffb21f', 'Zigzag', ...Object.values(at(420, 545)) as [number, number]),
+            ],
+            { name: 'Zigzags', merge: true, modifiers: px(0.06), style: ink('#ffb21f') },
           ),
-          symbolLayer('sparkle', 170, { x: 320, y: -380, name: 'Sparkle', style: ink('#ffb21f'), modifiers: px(0.1) }, { pinch: 0.55 }),
-          symbolLayer('sparkle', 100, { x: 420, y: -270, name: 'Sparkle', style: ink('#ffb21f'), modifiers: px(0.12) }, { pinch: 0.55 }),
-          symbolLayer('sparkle', 150, { x: -420, y: -160, sy: 1.5, name: 'Sparkle', style: ink('#1aa6e8'), modifiers: px(0.1) }, { pinch: 0.6 }),
-          symbolLayer('sparkle', 130, { x: 410, y: 340, sy: 1.5, name: 'Sparkle', style: ink('#1aa6e8'), modifiers: px(0.1) }, { pinch: 0.6 }),
+          sparkle(520, 62, 100, '#ffb21f'),
+          sparkle(598, 100, 78, '#ffb21f'),
+          sparkle(516, 160, 60, '#ffb21f'),
+          sparkle(84, 206, 70, '#1aa6e8', 1.7),
+          sparkle(622, 570, 92, '#1aa6e8', 1.6),
           group(
             shifted(
               [
-                symbolLayer('lens', 300, { rotation: 90, name: 'White', style: ink('#f6f0d8'), modifiers: px(0.06) }, { aspect: 0.5 }),
-                symbolLayer('circle', 130, { name: 'Iris', style: ink('#ff3d8b'), modifiers: px(0.12) }),
-                symbolLayer('circle', 62, { name: 'Pupil', style: ink('#8d7bff'), modifiers: px(0.2) }),
+                symbolLayer('lens', 190 * k, { rotation: 90, name: 'White', style: stroked(ink('#fbf5ff'), 5, '#8d7bff'), modifiers: px(0.05) }, { aspect: 0.48 }),
+                symbolLayer('ring', 72 * k, { name: 'Iris', style: ink('#ff3d8b'), modifiers: px(0.1) }, { thickness: 0.32 }),
+                symbolLayer('circle', 40 * k, { name: 'Pupil', style: ink('#8d7bff'), modifiers: px(0.16) }),
               ],
-              40,
-              -100,
+              at(404, 248).x,
+              at(404, 248).y,
             ),
             { name: 'Eye' },
           ),
-          textLayer('REMINDER', 'space-grotesk', { y: -330, name: 'Kicker', style: cream }, { size: 62, tracking: 0.02 }),
-          textLayer('out   of', 'young-serif', { y: -110, name: 'Line 1', style: cream }, { size: 240, tracking: -0.03 }),
-          textLayer('office', 'young-serif', { y: 140, name: 'Line 2', style: cream }, { size: 260, tracking: -0.03 }),
-          textLayer('I APPRECIATE YOUR UNDERSTANDING AND\nCOOPERATION DURING THIS TIME. I WILL MAKE SURE TO\nADDRESS YOUR EMAIL PROMPTLY UPON MY RETURN.', 'space-grotesk', { y: 330, name: 'Note', style: cream }, { size: 24, lineHeight: 1.15, tracking: -0.02 }),
-          textLayer('WE ARE BACK ON APRIL 25, 2026', 'space-grotesk', { y: 470, name: 'Date', style: cream }, { size: 36, tracking: -0.02 }),
+          textLayer('REMINDER', 'space-grotesk', { ...at(368, 150), name: 'Kicker', style: cream }, { size: 30 * k, tracking: 0.02 }),
+          textLayer('out       of', 'young-serif', { ...at(368, 240), name: 'Line 1', style: cream }, { size: 150 * k, tracking: -0.04 }),
+          textLayer('office', 'young-serif', { ...at(368, 382), name: 'Line 2', style: cream }, { size: 160 * k, tracking: -0.04 }),
+          textLayer('I APPRECIATE YOUR UNDERSTANDING AND\nCOOPERATION DURING THIS TIME. I WILL MAKE SURE TO\nADDRESS YOUR EMAIL PROMPTLY UPON MY RETURN.', 'space-grotesk', { ...at(368, 525), name: 'Note', style: cream }, { size: 15 * k, lineHeight: 1.15, tracking: -0.02 }),
+          textLayer('WE ARE BACK ON APRIL 25, 2026', 'space-grotesk', { ...at(368, 678), name: 'Date', style: cream }, { size: 22 * k, tracking: -0.02 }),
         ],
         solid('#111111'),
         { width: 1080, height: 1080 },

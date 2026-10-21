@@ -3,7 +3,8 @@
 // diamond button). Built only from what ships with the app — library shapes,
 // modifier recipes, bundled fonts and materials — so every part can be
 // selected, changed and reused.
-import { background, fill, group, mods, pattern, style, symbolLayer, textLayer, type Node, type Project, type ShapeLayer, type Style } from './model';
+import { background, depth, fill, group, mods, pattern, style, symbolLayer, textLayer, tile, type Node, type Project, type ShapeLayer, type Style } from './model';
+import { MORPH_KEY } from './geoMotion';
 import { FEELS, newMotion, type Motion, type ParamAnim, type Transition } from './motion';
 import type { Background } from './model';
 import type { SymbolKind } from '../engine/types';
@@ -43,6 +44,143 @@ const scene = (name: string, hint: string, layers: Node[], bg: Background, durat
 const solid = (c: string, grain = 0) => background(fill('solid', c), grain ? { grain } : {});
 
 export const SHOWCASE_TEMPLATES: Template[] = [
+  scene(
+    'Animated · Shape shifter',
+    'One word melting between a grotesque and a script in plasma chrome: a font morph whose Blend moves (the diamond on Morph to another font)',
+    (() => {
+      const plasma = style('chrome', { c1: '#16002b', c2: '#5a17d6', c3: '#ff2e9a', c4: '#ffd36b', rimColor: '#ff7ad1', bevel: 30, liquid: 0.9, speed: 0.35 });
+      const word = textLayer('Morph', 'inter-black', { y: -30, name: 'Morph', style: plasma }, { size: 300, align: 'center', lineHeight: 1, tracking: -0.02, morph: { font: 'pacifico', t: 0, axes: {} } });
+      word.animate = { [MORPH_KEY]: anim(1, 4, 'swing') };
+      const a = words('INTER BLACK', 'space-grotesk', 26, -300, 290, flat('#8f7cff'), 'From', { loop: 'blink', amount: 60, period: 4, phase: 0.5 }, 0.2);
+      const b = words('PACIFICO', 'space-grotesk', 26, 300, 290, flat('#ff7ad1'), 'To', { loop: 'blink', amount: 60, period: 4 }, 0.2);
+      return [a, b, word];
+    })(),
+    background({ ...fill('radial', '#2a0c4a', '#07030f'), angle: 180 }, { grain: 0.25 }),
+  ),
+  scene(
+    'Animated · Glass lens',
+    'A clear glass drop drifting across the word behind it, bending and splitting it as it goes: Glass lens with a Slide loop',
+    (() => {
+      const word = words('glass.', 'inter', 330, 0, -10, style('flat', { fill: '#151515' }), 'Word', undefined, -0.03);
+      word.modifiers = mods({ kind: 'weight', amount: 0.012 });
+      const drop = shape('blob', 330, 0, 0, style('lens', { refraction: 1.3, dispersion: 2, magnify: 0.3, edgeBend: 0.7, iridescence: 0.2, highlight: 0.6, film: 0.85, rim: 0.5, blur: 1, bevel: 130, softness: 50, tintAmount: 0 }), 'Drop', { lobes: 3, depth: 0.08, seed: 4, wobble: 0.35 }, { loop: 'slide', dir: 'right', amount: 300, period: 4 });
+      drop.animate = { 'sym:wobble': anim(0.6, 2, 'swing') };
+      return [word, drop];
+    })(),
+    solid('#eeefef'),
+  ),
+  scene(
+    'Animated · Crystal',
+    'A cut glass hexagon turning as it crosses bold white type, throwing rainbow light: Glass lens with flat facets, Spin inside a Slide',
+    (() => {
+      const word = words('mono', 'inter-black', 300, 0, 0, style('flat', { fill: '#f4f4f4' }), 'Word', undefined, -0.02);
+      const gem = shape('polygon', 300, 0, 0, style('lens', { chamfer: 1, bevel: 60, softness: 6, refraction: 1.6, dispersion: 2, magnify: 0.3, rainbow: 1.6, rainbowWidth: 0.7, rainbowShift: 0.3, thickness: 1, highlight: 0.6, rim: 1, iridescence: 0, tintAmount: 0 }), 'Gem', { sides: 6, rounding: 0.06 }, { loop: 'spin', amount: 1, period: 4 });
+      gem.style.animate = { rainbowShift: anim(-0.3, 2, 'swing') };
+      const path = group([gem], { name: 'Crystal', motion: newMotion({ loop: 'slide', dir: 'right', amount: 280, period: 4 }) });
+      return [word, path];
+    })(),
+    solid('#000000'),
+  ),
+  scene(
+    'Animated · Frosted 404',
+    'A frosted glass folder floating over extruded 3D numbers: Frosted glass with Float, the edges bending as it moves',
+    (() => {
+      const num = words('404', 'inter-black', 360, 0, -60, { ...style('flat', { fill: '#ffffff' }), depth: { ...depth(56, '#ff5a1f', 165), shade: 0.25 } }, '404', { loop: 'sway', amount: 3, period: 4, phase: 0.5 }, -0.04);
+      num.rotation = -8;
+      const folder = shape('folder', 520, 0, 70, style('frost', { tint: '#e6e9ff', tint2: '#3542d6', gradient: 0.9, tintAmount: 0.5, blur: 30, rim: 1, refraction: 0.6, shadow: 0.45 }), 'Glass folder', { tab: 0.32, corner: 0.06 }, { loop: 'float', amount: 26, period: 4 });
+      folder.rotation = 6;
+      folder.style.animate = { refraction: anim(1.3, 2, 'swing') };
+      const close = shape('plus', 100, 0, 250, style('flat', { fill: '#ffffff' }), 'Close', { thickness: 0.38 }, { loop: 'float', amount: 26, period: 4 });
+      close.rotation = 45;
+      close.modifiers = mods({ kind: 'round', radius: 0.08 });
+      return [num, folder, close];
+    })(),
+    background({ ...fill('radial', '#1d2140', '#0d0e15'), angle: 180 }),
+  ),
+  scene(
+    'Animated · Thermal wings',
+    'A butterfly in heat-camera colours beating its wings: a merged group with Thermal light, a Stretch whose Width moves, and shifting heat',
+    (() => {
+      const wing = (x: number, y: number, size: number, rot: number, aspect: number) => {
+        const w = symbolLayer('lens', size, { x, y, name: 'Wing' }, { aspect });
+        w.rotation = rot;
+        return w;
+      };
+      const body = symbolLayer('pill', 300, { y: 40, name: 'Body' }, { aspect: 5 });
+      body.rotation = 90;
+      const fly = group([wing(-200, -60, 520, -52, 0.6), wing(200, -60, 520, 52, 0.6), wing(-135, 160, 380, -28, 0.62), wing(135, 160, 380, 28, 0.62), body], {
+        name: 'Butterfly',
+        merge: true,
+        style: style('thermal', { spread: 100, glow: 200, glowAmount: 1, noise: 0.45, scale: 1.4, grain: 0.6 }),
+        modifiers: mods({ kind: 'round', radius: 0.02 }, { kind: 'stretch', x: 1, y: 1 }),
+        motion: newMotion({ loop: 'float', amount: 14, period: 2 }),
+      });
+      fly.animate = { [`mod:${fly.modifiers[1].uid}:x`]: anim(0.55, 1, 'swing') };
+      fly.style.animate = { shift: anim(0.18, 4, 'swing'), spread: anim(150, 2, 'swing') };
+      const title = words('Morphosis', 'inter-black', 90, 0, 20, style('flat', { fill: '#ffffff' }), 'Title', { enter: 'rise', delay: 0.2, transition: feel('Smooth', 0.8) }, -0.03);
+      return [fly, title];
+    })(),
+    solid('#e8133c', 0.4),
+  ),
+  scene(
+    'Animated · Puffy',
+    'Inflated letters bouncing one after another, with a cloud mascot blinking beside them: Puffy material, a Bounce loop set to Letters one by one',
+    (() => {
+      const word = words('puffy', 'unbounded', 250, -70, 40, style('inflate', { body: '#ffd9f0', shade: '#ff5fae', bevel: 70, gloss: 0.7, shadow: 0.35, shadowOffset: 30 }), 'Word', { loop: 'bounce', amount: 70, period: 1, stagger: 0.12, letters: 'letters' }, -0.02);
+      word.modifiers = mods({ kind: 'weight', amount: 0.03 });
+      const body = shape('cloud', 260, 0, 0, style('inflate', { body: '#f4f6ff', shade: '#8f9ee6', bevel: 70, gloss: 0.6, shadow: 0.4 }), 'Cloud', { puffs: 5, seed: 2 });
+      const eyes = shape('eyes', 110, 0, 10, style('flat', { fill: '#000000' }), 'Eyes', { gap: 0.55, width: 0.2, height: 0.34 }, { loop: 'blink', amount: 100, period: 2, phase: 0.85 });
+      eyes.op = 'subtract';
+      const mascot = group([body, eyes], { name: 'Mascot', motion: newMotion({ loop: 'float', amount: 24, period: 2 }) });
+      body.x = 400;
+      body.y = -230;
+      eyes.x = 400;
+      eyes.y = -220;
+      const sparkle = (x: number, y: number, size: number, phase: number) => shape('sparkle', size, x, y, style('inflate', { body: '#fff3b0', shade: '#e0a400', bevel: 26 }), 'Sparkle', { pinch: 0.6 }, { loop: 'pulse', amount: 40, period: 1, phase });
+      return [sparkle(-470, -250, 90, 0), sparkle(-400, 260, 60, 0.4), sparkle(470, 250, 76, 0.7), word, mascot];
+    })(),
+    background(fill('linear', '#b8a6ff', '#6f5cff')),
+  ),
+  scene(
+    'Animated · Aura',
+    'Four mesh-gradient tiles breathing in turn while their colour blobs drift: Aura material with a moving Arrangement',
+    (() => {
+      const auras = [
+        { c1: '#ff3d00', c2: '#1a0000', c3: '#ff9a3d', c4: '#ffd2b0', seed: 3 },
+        { c1: '#d6ff1f', c2: '#5a1fff', c3: '#b9ff3d', c4: '#f6ffd0', seed: 7.4 },
+        { c1: '#1424ff', c2: '#000028', c3: '#4fb4ff', c4: '#c7e4ff', seed: 1.2 },
+        { c1: '#ff4fb1', c2: '#1d0030', c3: '#ffffff', c4: '#ffd0f0', seed: 12.6 },
+      ];
+      const tiles = auras.map((a, i) => {
+        const t = shape('squircle', 330, (i % 2 ? 1 : -1) * 185, (i < 2 ? -1 : 1) * 185, style('aura', a), `Tile ${i + 1}`, { exponent: 4.2, aspect: 1 }, { loop: 'float', amount: 14, period: 4, phase: i * 0.25 });
+        t.style.animate = { seed: anim(a.seed + 1.5, 4, 'swing', i * 0.25) };
+        return t;
+      });
+      return [group(tiles, { name: 'Tiles', motion: newMotion({ enter: 'grow', delay: 0.1, stagger: 0.12, transition: feel('Bouncy', 0.6) }) })];
+    })(),
+    solid('#161616'),
+  ),
+  scene(
+    'Animated · Glow glass',
+    'Glass letters rising in one by one, their glow drifting from blue to pink: Glow glass with a moving Glow colour and letter-by-letter entrance',
+    (() => {
+      const lab = words('lab', 'unbounded', 300, 0, -60, style('glass', { reflection: 0.45 }), 'Word', { enter: 'rise', distance: 80, delay: 0.1, stagger: 0.14, letters: 'letters', transition: feel('Smooth', 0.7) });
+      lab.modifiers = mods({ kind: 'round', radius: 0.03 });
+      lab.style.animate = { glow: anim('#ff3df2', 4, 'swing'), rimIntensity: anim(2.6, 2, 'swing') };
+      return [lab];
+    })(),
+    solid('#000000'),
+  ),
+  scene(
+    'Animated · Holo J',
+    'An iridescent script letter on a dark tile, its foil turning through the spectrum as it sways: Holographic with a ramped Hue shift',
+    (() => {
+      const j = words('J', 'pacifico', 520, 0, -30, style('holo', { bevel: 34 }), 'J', { loop: 'sway', amount: 6, period: 4 });
+      j.style.animate = { shift: anim(1, 4, 'ramp') };
+      return [j];
+    })(),
+    background(fill('solid', '#000000'), { tile: tile(fill('linear', '#1e1e22', '#050506'), { rim: 12, holo: true, gloss: 0.15 }) }),
+  ),
   scene(
     'Animated · Neon sign',
     'A neon "Open" flickers on a concrete wall, its glow breathing: Neon tube with Flicker, and a moving Intensity',
