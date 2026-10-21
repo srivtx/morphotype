@@ -6,7 +6,7 @@
 //
 // Set CHROMIUM_PATH to use a specific browser binary.
 import { createServer } from 'node:http';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -785,6 +785,105 @@ try {
   const ttf = await download(async () => {}, () => page.getByRole('button', { name: '.ttf' }).click());
   check(ttf.readUInt32BE(0) === 0x00010000, `TTF export (${(ttf.length / 1024).toFixed(0)} KB)`);
   await page.screenshot({ path: path.join(out, 'type-02-star.png') });
+  // ---- Kerning: pairs, classes and exceptions, then the exported font ----
+  /** Pairs' kerning in a font file, in em, as the browser lays them out. */
+  const kernOf = (bytes, pairs) =>
+    page.evaluate(
+      async ({ b64, pairs }) => {
+        const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const name = `kern-check-${Math.random().toString(36).slice(2)}`;
+        const face = new FontFace(name, bin.buffer);
+        await face.load();
+        document.fonts.add(face);
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = `1000px "${name}"`;
+        ctx.fontKerning = 'normal';
+        const w = (t) => ctx.measureText(t).width;
+        const k = Object.fromEntries(pairs.map((p) => [p, (w(p) - w(p[0]) - w(p[1])) / 1000]));
+        document.fonts.delete(face);
+        return k;
+      },
+      { b64: Buffer.from(bytes).toString('base64'), pairs },
+    );
+  const kernPairs = ['AV', 'To', 'Vo', 'We', 'Ve', 'LT'];
+  const kernBase = await kernOf(ttf, kernPairs);
+  check(kernBase.AV < -0.01 && kernBase.To < -0.01, `exported fonts carry the base font's kerning (AV ${kernBase.AV.toFixed(3)}, To ${kernBase.To.toFixed(3)} em)`);
+  await page.getByRole('tab', { name: 'Kerning', exact: true }).click();
+  await page.waitForSelector('.kern-stage .kern-handle');
+  await page.waitForSelector('.kern-list-row', { timeout: 20_000 });
+  s = await state();
+  const upm = s.fonts.find((f) => f.id === s.project.type.base).info.unitsPerEm;
+  const shownUnits = async () => parseInt((await page.locator('.kern-value').textContent()).replace('−', '-'), 10);
+  await page.getByLabel('Kerning pair', { exact: true }).fill('AV');
+  const avUnits = await shownUnits();
+  check(Math.abs(avUnits / upm - kernBase.AV) < 1.5 / upm, `the editor shows the font's own kerning (AV ${avUnits} units)`);
+  check((await page.locator('.kern-list-row.on', { hasText: 'AV' }).count()) === 1, 'the open pair is picked in the list of pairs');
+  // ← kerns a unit tighter, ⇧← ten.
+  await page.locator('.kern-canvas').click({ position: { x: 20, y: 20 } });
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Shift+ArrowLeft');
+  s = await state();
+  check(Math.round(s.project.type.kerning.AV * upm) === avUnits - 13 && (await shownUnits()) === avUnits - 13, `arrow keys kern the pair (${avUnits} → ${avUnits - 13} units)`);
+  check((await page.locator('.kern-list-row', { hasText: 'by hand' }).count()) === 1, 'hand-kerned pairs are tagged in the list');
+  // Dragging the right letter loosens the pair, as one undo step.
+  const kernHandle = await page.locator('.kern-handle').boundingBox();
+  await page.mouse.move(kernHandle.x + kernHandle.width / 2, kernHandle.y + kernHandle.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 5; i++) await page.mouse.move(kernHandle.x + kernHandle.width / 2 + i * 6, kernHandle.y + kernHandle.height / 2);
+  await page.mouse.up();
+  s = await state();
+  const dragged = Math.round(s.project.type.kerning.AV * upm);
+  check(dragged > avUnits - 13 + 5, `dragging the right letter kerns the pair (${dragged} units)`);
+  await page.keyboard.press(`${mod}+z`);
+  s = await state();
+  check(Math.round(s.project.type.kerning.AV * upm) === avUnits - 13, 'undo takes the drag back in one step');
+  // Clicking a letter in the line of text opens it and the next as a pair.
+  await page.locator('.kern-strip-text').fill('HOTA');
+  await page.locator('.kern-strip-glyph[data-ch="T"]').click();
+  check((await state()).kernPair === 'TA', 'clicking a letter in the line opens its pair');
+  await page.getByLabel('Search pairs').fill('AV');
+  check((await page.locator('.kern-list-row').count()) === 1, 'the pair list searches');
+  await page.getByLabel('Search pairs').fill('');
+  // Classes: T V W against o c e, kerned once, with one exception.
+  await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+  await page.getByLabel('New right-side class').fill('T V W');
+  await page.keyboard.press('Enter');
+  await page.getByLabel('New left-side class').fill('oce');
+  await page.keyboard.press('Enter');
+  s = await state();
+  check(s.project.type.kernClasses?.map((c) => `${c.side}:${c.members}`).join(' ') === 'right:TVW left:oce', 'kerning classes from typed letters');
+  await page.getByLabel('Kerning pair', { exact: true }).fill('To');
+  const toUnits = await shownUnits();
+  await page.locator('.kern-canvas').click({ position: { x: 20, y: 20 } });
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page.keyboard.press('Shift+ArrowLeft');
+  s = await state();
+  const classPairs = Object.entries(s.project.type.classKerning ?? {});
+  check(classPairs.length === 1 && classPairs[0][0].split(' ').every((k) => k.startsWith('@')) && Math.round(classPairs[0][1] * upm) === toUnits - 20, `kerning a pair kerns its classes (${toUnits} → ${toUnits - 20} units)`);
+  check((await page.locator('.kern-stage .badge', { hasText: 'Class kerning' }).count()) === 1, 'the editor says a class pair is being kerned');
+  await page.getByLabel('Kerning pair', { exact: true }).fill('Ve');
+  check((await shownUnits()) === toUnits - 20, 'every pair of the classes follows');
+  await page.locator('.toggle-row', { hasText: 'Only this pair' }).locator('button').click();
+  await page.locator('.kern-canvas').click({ position: { x: 20, y: 20 } });
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowRight');
+  s = await state();
+  check(Math.round(s.project.type.kerning.Ve * upm) === toUnits + 20 && Object.keys(s.project.type.classKerning).length === 1, 'Only this pair makes an exception');
+  check(await page.locator('.toggle-row', { hasText: 'Only this pair' }).locator('button[aria-checked=true]').count(), 'an exception shows as Only this pair');
+  await settle(1200);
+  await page.screenshot({ path: path.join(out, 'type-02b-kerning.png') });
+  await page.getByRole('tab', { name: /Use & export/ }).click();
+  const kerned = await download(async () => {}, () => page.getByRole('button', { name: '.ttf' }).click());
+  const kernedWoff = await download(async () => {}, () => page.getByRole('button', { name: '.woff (web)' }).click());
+  await writeFile(path.join(out, 'kerned.ttf'), kerned);
+  await writeFile(path.join(out, 'kerned.woff'), kernedWoff);
+  for (const [label, bytes] of [['TTF', kerned], ['WOFF', kernedWoff]]) {
+    const after = await kernOf(bytes, kernPairs);
+    const near = (v, units) => Math.abs(v - units / upm) < 1.5 / upm;
+    check(near(after.AV, avUnits - 13), `${label}: the hand-kerned pair is in the font (AV ${kernBase.AV.toFixed(3)} → ${after.AV.toFixed(3)} em)`);
+    check(near(after.To, toUnits - 20) && near(after.Vo, toUnits - 20) && near(after.We, toUnits - 20), `${label}: class kerning reaches every pair (To ${after.To.toFixed(3)}, Vo ${after.Vo.toFixed(3)}, We ${after.We.toFixed(3)} em)`);
+    check(near(after.Ve, toUnits + 20), `${label}: the exception keeps its own value (Ve ${after.Ve.toFixed(3)} em)`);
+    check(Math.abs(after.LT - kernBase.LT) < 1.5 / upm, `${label}: other pairs keep their kerning (LT ${after.LT.toFixed(3)} em)`);
+  }
   await page.getByRole('button', { name: /Use in Design/ }).click();
   await page.waitForSelector('.use-font');
   await page.screenshot({ path: path.join(out, 'type-03-use.png') });

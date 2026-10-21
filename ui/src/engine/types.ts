@@ -249,6 +249,13 @@ export interface GlyphOut {
   exists: boolean;
 }
 
+/** The font's own kerning across a font spec's characters. */
+export interface KerningTable {
+  unitsPerEm: number;
+  /** Pairs ("AV") and their kerning in em, rounded to font units; 0s left out. */
+  pairs: [string, number][];
+}
+
 export interface GlyphPreview {
   ch: string;
   d: string;
@@ -349,6 +356,8 @@ export interface FontSpec {
   blank?: boolean;
   /** Font version, e.g. "1.004". */
   version?: string;
+  /** Kerning by character pair ("AV"), in em; replaces the font's own (0 removes it). */
+  kerning?: Record<string, number>;
 }
 
 export interface SvgOptions {

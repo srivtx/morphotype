@@ -2,12 +2,13 @@ import { engine } from '../engine/client';
 import type { FontSpec, GlyphEdit, GlyphPart, SymbolKind } from '../engine/types';
 import { registerCssFont } from '../fonts/library';
 import { platform } from '../platform';
-import { isGroup, SYMBOL_DEFAULTS, SYMBOL_UI, textLayer, uid, type TypeProject } from '../state/model';
+import { isGroup, SYMBOL_DEFAULTS, SYMBOL_UI, textLayer, uid, type KernClass, type TypeProject } from '../state/model';
 import type { ModEntry } from '../engine/types';
 import { allLayers } from '../state/tree';
 import { edit, store, toast, undo } from '../state/store';
 import { addShape, errorText, primaryNode, registerFontEntry, slug } from './actions';
 import { zip } from './zip';
+import { addClass, deleteClass, joinClass, leaveClass, resolveKerning, setClassMembers, setEntry } from './kerning';
 
 export const CHARSETS = {
   upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
@@ -61,6 +62,7 @@ export function createTypeProject(o: NewFontOptions): TypeProject {
     tracking: 0,
     charset: o.charset,
     glyphs: {},
+    kerning: {},
     sample: 'Sphinx of black quartz, judge my vow',
   };
   edit((p) => (p.type = tp));
@@ -100,6 +102,7 @@ export function specOf(t: TypeProject, opts: { quality?: number; format?: 'ttf' 
     charset: t.charset,
     glyphs,
     tracking: t.tracking,
+    kerning: resolveKerning(t),
     quality: opts.quality,
     format: opts.format,
     blank: t.blank,
@@ -170,6 +173,35 @@ export function removeCharacter(ch: string) {
     tp.charset = [...tp.charset].filter((c) => c !== ch).join('');
     delete tp.glyphs[ch];
   });
+}
+
+/** The kerning pair in typed text: its first two visible characters, or null. */
+export function kernPair(text: string): string | null {
+  const c = [...text].filter((ch) => ch.trim() && !/\p{C}/u.test(ch));
+  return c.length >= 2 ? c[0] + c[1] : null;
+}
+
+/** Set a kerning entry ("To", "@id o", "@id @id") in em, or clear it with null to use what it covered again. */
+export function setKerning(key: string, value: number | null) {
+  editType((tp) => setEntry(tp, key, value), value === null ? '' : `kern:${key}`);
+}
+
+/** Start kerning classes, each from some characters on the side they kern alike, as one step. */
+export function addKernClasses(classes: { side: KernClass['side']; chars: string }[]) {
+  editType((tp) => classes.forEach((c) => addClass(tp, c.side, c.chars, uid('k'))));
+}
+
+export function editKernClass(id: string, chars: string) {
+  editType((tp) => setClassMembers(tp, id, chars), `kclass:${id}`);
+}
+
+export function removeKernClass(id: string) {
+  editType((tp) => deleteClass(tp, id));
+}
+
+/** Move a character into a class (null: out of its class on that side). */
+export function putInKernClass(ch: string, side: KernClass['side'], id: string | null) {
+  editType((tp) => (id ? joinClass(tp, ch, id) : leaveClass(tp, ch, side)));
 }
 
 function fileBase(t: TypeProject) {
@@ -276,6 +308,11 @@ export function fontChanges(t: TypeProject): string[] {
   const own = Object.values(t.glyphs).filter((g) => g.modifiers?.length).length;
   if (own) out.push(`${own} glyph${own > 1 ? 's' : ''} with their own modifiers`);
   if (Math.abs(t.tracking) > 1e-4) out.push(`Spacing ${t.tracking > 0 ? '+' : ''}${t.tracking.toFixed(3)} em`);
+  const kerned = Object.keys(t.kerning);
+  if (kerned.length) out.push(`${kerned.length} kerning pair${kerned.length > 1 ? 's' : ''} set by hand: ${kerned.slice(0, 8).join(' ')}${kerned.length > 8 ? ' …' : ''}`);
+  const classes = t.kernClasses?.length ?? 0;
+  const classPairs = Object.keys(t.classKerning ?? {}).length;
+  if (classes) out.push(`${classes} kerning class${classes > 1 ? 'es' : ''}${classPairs ? `, ${classPairs} class pair${classPairs > 1 ? 's' : ''} kerned` : ''}`);
   if (out.length === 1 && !t.blank) out.push('No changes yet: it will look exactly like the base font');
   return out;
 }

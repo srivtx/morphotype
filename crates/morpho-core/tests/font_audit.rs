@@ -4,7 +4,8 @@
 //! set `FONT_AUDIT_OUT` to a folder to keep the exported fonts (relative paths
 //! start from crates/morpho-core, where cargo runs the test).
 
-use morpho_core::font::to_sfnt;
+use morpho_core::font::{pair_kerning, to_sfnt};
+use std::collections::HashMap;
 use morpho_core::{Engine, FontSpec};
 use rustybuzz::ttf_parser::{name_id, Face, GlyphId, OutlineBuilder, Tag};
 
@@ -162,6 +163,34 @@ fn kern(face: &Face, pair: &str) -> f64 {
     (run(true) - run(false)) as f64 / face.units_per_em() as f64
 }
 
+/// Characters of a font that have an outline.
+fn drawn_chars(face: &Face) -> Vec<char> {
+    (0x21..0x3000u32).filter_map(char::from_u32).filter(|&c| face.glyph_index(c).is_some_and(|g| face.glyph_bounding_box(g).is_some())).collect()
+}
+
+/// Every pair's kerning as rustybuzz shapes it, in font units.
+fn all_kerning(data: &[u8], chars: &[char]) -> HashMap<(char, char), i32> {
+    let face = rustybuzz::Face::from_slice(data, 0).unwrap();
+    pair_kerning(&face, chars)
+}
+
+/// Pairs where two kerning tables disagree, as "AV -80 vs -75".
+fn kern_diff(got: &HashMap<(char, char), i32>, want: &HashMap<(char, char), i32>) -> Vec<String> {
+    let mut keys: Vec<_> = got.keys().chain(want.keys()).copied().collect();
+    keys.sort();
+    keys.dedup();
+    keys.into_iter()
+        .filter_map(|k| {
+            let (g, w) = (got.get(&k).copied().unwrap_or(0), want.get(&k).copied().unwrap_or(0));
+            (g != w).then(|| format!("{}{} {g} vs {w}", k.0, k.1))
+        })
+        .collect()
+}
+
+fn gpos_len(data: &[u8]) -> usize {
+    Face::parse(data, 0).unwrap().raw_face().table(Tag::from_bytes(b"GPOS")).map_or(0, |t| t.len())
+}
+
 fn name(face: &Face, id: u16) -> String {
     face.names().into_iter().filter(|n| n.name_id == id).find_map(|n| n.to_string()).unwrap_or_default()
 }
@@ -169,6 +198,7 @@ fn name(face: &Face, id: u16) -> String {
 #[derive(Default, Debug)]
 struct Audit {
     bytes: usize,
+    gpos: usize,
     points: usize,
     missing_extremes: usize,
     baseline_err: f64,
@@ -187,7 +217,7 @@ fn audit(data: &[u8], cap: f64, xh: f64) -> Audit {
     let face = Face::parse(data, 0).unwrap();
     let upm = face.units_per_em() as f64;
     let k = (-(face.italic_angle() as f64)).to_radians().tan();
-    let mut a = Audit { bytes: data.len(), ..Default::default() };
+    let mut a = Audit { bytes: data.len(), gpos: gpos_len(data), ..Default::default() };
     for ch in LETTERS.chars() {
         let Some(g) = face.glyph_index(ch) else { continue };
         let pts = glyf_points(&face, g);
@@ -227,12 +257,13 @@ struct Case {
     source: &'static str,
 }
 
-const CASES: [Case; 6] = [
+const CASES: [Case; 7] = [
     Case { label: "inter plain", spec: r#"{"font":"inter","family":"Audit Plain","style":"Regular"}"#, source: "Inter-Regular.woff" },
     Case { label: "inter weight", spec: r#"{"font":"inter","family":"Audit Weight","style":"Bold","modifiers":[{"kind":"weight","amount":0.03}]}"#, source: "Inter-Regular.woff" },
     Case { label: "archivo round", spec: r#"{"font":"archivo","family":"Audit Round","style":"Regular","modifiers":[{"kind":"round","radius":0.03}]}"#, source: "ArchivoBlack-Regular.woff" },
     Case { label: "inter slant", spec: r#"{"font":"inter","family":"Audit Slant","style":"Italic","modifiers":[{"kind":"slant","angle":12}]}"#, source: "Inter-Regular.woff" },
     Case { label: "morph 50%", spec: r#"{"font":"inter","family":"Audit Morph","style":"Regular","morph":{"font":"playfair","t":0.5}}"#, source: "Inter-Regular.woff" },
+    Case { label: "inter kerned", spec: r#"{"font":"inter","family":"Audit Kerned","style":"Regular","kerning":{"AV":-0.2,"To":0,"HH":0.05,"Hé":-0.01,"xyz":1}}"#, source: "Inter-Regular.woff" },
     Case { label: "morph missing", spec: r#"{"font":"inter","family":"Audit Missing","style":"Regular","charset":"ß´","morph":{"font":"rubik","t":0.5}}"#, source: "Inter-Regular.woff" },
 ];
 
@@ -253,12 +284,13 @@ fn font_export_audit() {
             fails.push(msg);
         }
     };
-    println!("\n{:<15} {:>8} {:>7} {:>6} {:>8} {:>6} {:>6} {:>7} {:>9}  names", "case", "bytes", "points", "noext", "baseline", "cap", "x-ht", "sb-asym", "kern");
+    println!("\n{:<15} {:>8} {:>6} {:>7} {:>6} {:>8} {:>6} {:>6} {:>7} {:>9}  names", "case", "bytes", "gpos", "points", "noext", "baseline", "cap", "x-ht", "sb-asym", "kern");
     let row = |label: &str, a: &Audit| {
         println!(
-            "{:<15} {:>8} {:>7} {:>6} {:>8.1} {:>6.1} {:>6.1} {:>7.1} {:>3}/{:<2}{:>4.0}  ©{} lic{} url{} {}",
+            "{:<15} {:>8} {:>6} {:>7} {:>6} {:>8.1} {:>6.1} {:>6.1} {:>7.1} {:>3}/{:<2}{:>4.0}  ©{} lic{} url{} {}",
             label,
             a.bytes,
+            a.gpos,
             a.points,
             a.missing_extremes,
             a.baseline_err,
@@ -287,7 +319,22 @@ fn font_export_audit() {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(format!("{dir}/{}.ttf", c.label.replace([' ', '%'], "-")), &bytes).unwrap();
         }
-        let a = audit(&bytes, cap, xh);
+        // A morph blends the zones towards its target's, so it is measured
+        // against its own (blended) metrics.
+        let a = if c.spec.contains("\"morph\"") {
+            let f = Face::parse(&bytes, 0).unwrap();
+            audit(&bytes, f.capital_height().unwrap() as f64, f.x_height().unwrap() as f64)
+        } else {
+            audit(&bytes, cap, xh)
+        };
+        // Every pair shapes to exactly the kerning the engine meant to write.
+        let face = Face::parse(&bytes, 0).unwrap();
+        let chars = drawn_chars(&face);
+        let got = all_kerning(&bytes, &chars);
+        let want: HashMap<(char, char), i32> =
+            e.font_kerning(&spec, &chars, face.units_per_em() as f64).unwrap().into_iter().map(|(l, r, v)| ((char::from_u32(l).unwrap(), char::from_u32(r).unwrap()), v as i32)).collect();
+        let bad = kern_diff(&got, &want);
+        check(bad.is_empty(), format!("{}: {} of {} pairs shape wrong: {}", c.label, bad.len(), want.len(), bad.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
         if c.label != "morph missing" {
             row(&format!("src {}", c.source.split(['-', '.']).next().unwrap()), sa);
             row(c.label, &a);
@@ -303,6 +350,29 @@ fn font_export_audit() {
                 check(a.missing_extremes <= sa.missing_extremes, format!("{l}: {} glyphs miss an on-curve extreme", a.missing_extremes));
                 check(a.baseline_err < 0.5 && a.cap_err < 0.5, format!("{l}: metrics moved"));
                 check(a.kern_pairs == sa.kern_pairs && (a.kern_sum - sa.kern_sum).abs() <= KERN_PAIRS.len() as f64, format!("{l}: kerning {}/{} vs {}/{}", a.kern_pairs, a.kern_sum, sa.kern_pairs, sa.kern_sum));
+                // Same units per em, so every pair keeps the source's exact value.
+                let bad = kern_diff(&got, &all_kerning(&src, &chars));
+                check(bad.is_empty() && got.len() > 1000, format!("{l}: {} of {} pairs differ from the source: {}", bad.len(), got.len(), bad.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
+                // Class kerning: under half the 4 bytes a pair takes in format 1.
+                check(a.gpos < got.len() * 2, format!("{l}: GPOS is {} bytes for {} pairs", a.gpos, got.len()));
+                println!("{l}: {} pairs in {} bytes of GPOS", got.len(), a.gpos);
+            }
+            "inter kerned" => {
+                let src_k = all_kerning(&src, &chars);
+                let upm = face.units_per_em() as f64;
+                let want_pairs = [(('A', 'V'), -0.2), (('T', 'o'), 0.0), (('H', 'H'), 0.05), (('H', 'é'), -0.01)].map(|(p, v)| (p, (v * upm).round() as i32));
+                for ((l, r), v) in want_pairs {
+                    check(got.get(&(l, r)).copied().unwrap_or(0) == v, format!("{l}: override {l}{r} = {:?}, want {v}", got.get(&(l, r))));
+                }
+                check(src_k.get(&('T', 'o')).is_some_and(|v| *v != 0), format!("{l}: Inter should kern To"));
+                let rest = |m: &HashMap<(char, char), i32>| m.iter().filter(|(k, _)| !want_pairs.iter().any(|w| w.0 == **k)).map(|(k, v)| (*k, *v)).collect::<HashMap<_, _>>();
+                check(kern_diff(&rest(&got), &rest(&src_k)).is_empty(), format!("{l}: overrides changed other pairs"));
+                // What the kerning editor lists: the font's own pairs, overrides left out.
+                let table = e.kerning_table(&spec).unwrap();
+                let listed: HashMap<String, f64> = table.pairs.into_iter().collect();
+                let missing: Vec<String> = src_k.iter().filter(|(p, &v)| listed.get(&format!("{}{}", p.0, p.1)) != Some(&(v as f64 / upm))).map(|(p, v)| format!("{}{} {v}", p.0, p.1)).collect();
+                check(table.units_per_em as f64 == upm && missing.is_empty(), format!("{l}: kerning table misses {} pairs: {}", missing.len(), missing.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
+                check(listed.len() == src_k.len(), format!("{l}: kerning table lists {} pairs, the source has {}", listed.len(), src_k.len()));
             }
             "inter weight" => {
                 check(a.baseline_err <= 2.0, format!("{l}: flat letters sit {:.1} units off the baseline", a.baseline_err));
@@ -319,6 +389,10 @@ fn font_export_audit() {
                 check(a.kern_pairs == sa.kern_pairs, format!("{l}: kerning lost"));
             }
             "morph 50%" => {
+                // Curves are blended point for point, not resampled and refit.
+                check(a.points <= sa.points * 2, format!("{l}: {} points vs {} in the source", a.points, sa.points));
+                check(a.baseline_err <= 2.0, format!("{l}: flat letters sit {:.1} units off the baseline", a.baseline_err));
+                check(a.cap_err <= 2.0 && a.x_err <= 2.0, format!("{l}: cap/x-height off the blended metrics by {:.1}/{:.1}", a.cap_err, a.x_err));
                 check(a.kern_pairs >= sa.kern_pairs / 2, format!("{l}: kerning lost ({} pairs)", a.kern_pairs));
             }
             "morph missing" => {

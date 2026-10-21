@@ -6,7 +6,7 @@ use crate::fit::fit_shape;
 use crate::font::{glyph_outline, pair_kerning, shape_line, FontData, FontInfo};
 use crate::geom::{flatten_curves, normalize_winding, poly_to_curves, Affine, CurveShape, Pt, Rect, Shape};
 use crate::modifiers::{apply, apply_all, apply_all_frames, Ctx, Geo, ModEntry, Modifier};
-use crate::morph::Morph;
+use crate::morph::{CurveMorph, Morph};
 use crate::svg;
 use crate::symbols::{self, Symbol};
 use crate::trace::{trace, TraceOpts};
@@ -515,6 +515,31 @@ pub struct GlyphPreview {
     pub edited: bool,
 }
 
+/// The font's own kerning across a font spec's characters, for the kerning
+/// editor: what the export writes for each pair before the spec's overrides.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KerningTable {
+    pub units_per_em: u16,
+    /// Pairs ("AV") and their kerning in em, rounded to font units; pairs
+    /// that round to 0 are left out.
+    pub pairs: Vec<(String, f64)>,
+}
+
+/// The two characters of a kerning pair key such as "AV".
+fn pair_chars(p: &str) -> Option<(char, char)> {
+    let mut it = p.chars();
+    match (it.next(), it.next(), it.next()) {
+        (Some(l), Some(r), None) => Some((l, r)),
+        _ => None,
+    }
+}
+
+/// A spec's kerning overrides by character pair, in em.
+fn kerning_overrides(spec: &FontSpec) -> BTreeMap<(char, char), f64> {
+    spec.kerning.iter().filter(|(_, v)| v.is_finite()).filter_map(|(p, &v)| pair_chars(p).map(|c| (c, v))).collect()
+}
+
 /// A positioned glyph from text layout, in em units.
 struct PlacedGlyph {
     a: u16,
@@ -586,11 +611,19 @@ struct GlyphGeo {
     poly: Shape,
 }
 
+/// Cached correspondence between two glyphs, in em units: the curve morph
+/// when their contours could be made point-compatible, and the polyline
+/// morph that is always available.
+struct GlyphMorph {
+    poly: Morph,
+    curves: Option<CurveMorph>,
+}
+
 #[derive(Default)]
 pub struct Engine {
     fonts: HashMap<String, FontData>,
     glyphs: HashMap<(String, u64, u16), Rc<GlyphGeo>>,
-    morphs: HashMap<(String, u64, u16, String, u64, u16), Rc<Morph>>,
+    morphs: HashMap<(String, u64, u16, String, u64, u16), Rc<GlyphMorph>>,
     layers: HashMap<u64, Rc<Local>>,
     /// Finished font glyphs by spec, character and quality: editing one
     /// glyph or recompiling the tester only rebuilds what changed.
@@ -605,6 +638,12 @@ type Kerning = HashMap<(char, char), f64>;
 const PREVIEW_QUALITY: f64 = 120.0;
 const EXPORT_QUALITY: f64 = 360.0;
 const MORPH_SAMPLES: usize = 192;
+/// How close (in em) a morphed point must sit to a zone in both fonts to be
+/// snapped onto the blended zone. Smaller than any overshoot.
+const ZONE_SNAP: f64 = 0.01;
+/// How far (in em) a morphed glyph's curves may stray from either source
+/// where runs of them are refit as one spline.
+const MORPH_FIT: f64 = 0.0005;
 
 fn hash_of<T: Hash + ?Sized>(v: &T) -> u64 {
     let mut h = DefaultHasher::new();
@@ -673,14 +712,14 @@ impl Engine {
         Ok(g)
     }
 
-    fn glyph_morph(&mut self, fa: &str, aa: &BTreeMap<String, f32>, ga: u16, fb: &str, ab: &BTreeMap<String, f32>, gb: u16) -> Result<Rc<Morph>, String> {
+    fn glyph_morph(&mut self, fa: &str, aa: &BTreeMap<String, f32>, ga: u16, fb: &str, ab: &BTreeMap<String, f32>, gb: u16) -> Result<Rc<GlyphMorph>, String> {
         let key = (fa.to_string(), axes_key(aa), ga, fb.to_string(), axes_key(ab), gb);
         if let Some(m) = self.morphs.get(&key) {
             return Ok(m.clone());
         }
         let a = self.glyph(fa, aa, ga)?;
         let b = self.glyph(fb, ab, gb)?;
-        let m = Rc::new(Morph::new(&a.poly, &b.poly, MORPH_SAMPLES));
+        let m = Rc::new(GlyphMorph { poly: Morph::new(&a.poly, &b.poly, MORPH_SAMPLES), curves: CurveMorph::new(&a.curves, &b.curves, MORPH_SAMPLES, MORPH_FIT) });
         if self.morphs.len() > 4_000 {
             self.morphs.clear();
         }
@@ -829,7 +868,7 @@ impl Engine {
                     }
                     Some(mo) => {
                         let mm = self.glyph_morph(font, axes, g.a, &mo.font, &mo.axes, g.b)?;
-                        poly.extend(mm.at(t).transformed(&m));
+                        poly.extend(mm.poly.at(t).transformed(&m));
                     }
                 }
                 tags.push((poly.contours.len() - start, word_at.get(g.cluster).copied().unwrap_or(0)));
@@ -1355,7 +1394,16 @@ impl Engine {
                         match target {
                             Some((gb, adv_b)) => {
                                 let mm = self.glyph_morph(&spec.font, &spec.axes, ga, &m.font, &m.axes, gb)?;
-                                (mm.at(t), None, adv_a * (1.0 - t) + adv_b * t)
+                                let adv = adv_a * (1.0 - t) + adv_b * t;
+                                match &mm.curves {
+                                    Some(cm) => {
+                                        let cs = cm.at(t, &self.morph_zones(&spec.font, &m.font)?, ZONE_SNAP);
+                                        let mut poly = flatten_curves(&cs, 0.0006).cleaned(1e-10);
+                                        normalize_winding(&mut poly);
+                                        (poly, Some(cs), adv)
+                                    }
+                                    None => (mm.poly.at(t), None, adv),
+                                }
                             }
                             // The target font lacks this character: keep the base glyph
                             // rather than blending towards its .notdef box.
@@ -1512,6 +1560,14 @@ impl Engine {
         Ok((v * upm).round() as i16)
     }
 
+    /// Baseline, x-height and cap height of two fonts, in em (y-down), for
+    /// snapping morphed points onto the blended zones.
+    fn morph_zones(&self, a: &str, b: &str) -> Result<[(f64, f64); 3], String> {
+        let (a, b) = (&self.font(a)?.info, &self.font(b)?.info);
+        let em = |i: &FontInfo, v: i16| -(v as f64) / i.units_per_em.max(1) as f64;
+        Ok([(0.0, 0.0), (em(a, a.x_height), em(b, b.x_height)), (em(a, a.cap_height), em(b, b.cap_height))])
+    }
+
     /// Cap height and x-height of the font being built, in units of `upm`.
     fn font_zones(&self, spec: &FontSpec, upm: f64) -> Result<(f64, f64), String> {
         Ok((self.font_metric(spec, upm, |i| i.cap_height)? as f64, self.font_metric(spec, upm, |i| i.x_height)? as f64))
@@ -1533,12 +1589,14 @@ impl Engine {
         Ok(k)
     }
 
-    /// Kerning for an exported font, in font units: the base font's pairs,
-    /// blended towards the morph target's and scaled with the glyphs' width.
-    /// Glyphs whose outline was redrawn or replaced keep no kerning.
-    fn font_kerning(&mut self, spec: &FontSpec, chars: &[char], upm: f64) -> Result<Vec<(u32, u32, i16)>, String> {
+    /// Measured kerning of a font spec between `chars`, in em: the base
+    /// font's pairs, blended towards the morph target's and scaled with the
+    /// glyphs' width. Glyphs whose outline was redrawn or replaced keep no
+    /// kerning.
+    fn measured_kerning(&mut self, spec: &FontSpec, chars: &[char]) -> Result<BTreeMap<(char, char), f64>, String> {
+        let mut out = BTreeMap::new();
         if spec.blank {
-            return Ok(Vec::new());
+            return Ok(out);
         }
         let redrawn = |c: char| {
             spec.glyphs.iter().any(|g| g.ch.starts_with(c) && (g.d.as_deref().is_some_and(|d| !d.trim().is_empty()) || g.hide_base || g.parts.iter().any(|p| p.visible)))
@@ -1560,23 +1618,37 @@ impl Engine {
         let t = morph.map_or(0.0, |m| m.t.clamp(0.0, 1.0));
         let mods: Vec<ModEntry> = spec.modifiers.iter().filter(|m| m.on).cloned().collect();
         let (scale, ..) = Self::spacing_of(&mods);
-        let mut pairs: Vec<(char, char)> = ka.keys().chain(kb.iter().flat_map(|k| k.keys())).copied().collect();
-        pairs.sort();
-        pairs.dedup();
-        let mut out = Vec::new();
-        for (l, r) in pairs {
+        for &(l, r) in ka.keys().chain(kb.iter().flat_map(|k| k.keys())) {
             let a = ka.get(&(l, r)).copied().unwrap_or(0.0);
             // Characters the target lacks keep the base glyph, so its kerning too.
             let b = match &kb {
                 Some(kb) if in_b.contains(&l) && in_b.contains(&r) => kb.get(&(l, r)).copied().unwrap_or(0.0),
                 _ => a,
             };
-            let v = ((a * (1.0 - t) + b * t) * scale * upm).round();
-            if v.abs() >= 1.0 {
-                out.push((l as u32, r as u32, v.clamp(i16::MIN as f64, i16::MAX as f64) as i16));
-            }
+            out.insert((l, r), (a * (1.0 - t) + b * t) * scale);
         }
         Ok(out)
+    }
+
+    /// Kerning for an exported font, in font units: the measured kerning
+    /// between `chars`, with the spec's own pairs replacing it.
+    pub fn font_kerning(&mut self, spec: &FontSpec, chars: &[char], upm: f64) -> Result<Vec<(u32, u32, i16)>, String> {
+        let mut k = self.measured_kerning(spec, chars)?;
+        k.extend(kerning_overrides(spec));
+        Ok(k.into_iter()
+            .map(|((l, r), v)| (l as u32, r as u32, (v * upm).round().clamp(i16::MIN as f64, i16::MAX as f64) as i16))
+            .filter(|k| k.2 != 0)
+            .collect())
+    }
+
+    /// The measured kerning of every pair of a font spec's characters (its
+    /// overrides left out), rounded to font units.
+    pub fn kerning_table(&mut self, spec: &FontSpec) -> Result<KerningTable, String> {
+        let upm = self.font(&spec.font)?.info.units_per_em.max(16);
+        let u = upm as f64;
+        let measured = self.measured_kerning(spec, &Self::font_charset(spec))?;
+        let pairs = measured.into_iter().map(|((l, r), v)| (format!("{l}{r}"), (v * u).round() / u)).filter(|p| p.1 != 0.0).collect();
+        Ok(KerningTable { units_per_em: upm, pairs })
     }
 
     pub fn export_font(&mut self, spec: &FontSpec) -> Result<Vec<u8>, String> {
@@ -1795,6 +1867,10 @@ pub struct FontSpec {
     /// base font only lends its metrics.
     #[serde(default)]
     pub blank: bool,
+    /// Kerning by character pair ("AV"), in em. Each replaces what the
+    /// font measures for that pair; 0 removes the pair's kerning.
+    #[serde(default)]
+    pub kerning: BTreeMap<String, f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

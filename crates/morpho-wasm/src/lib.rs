@@ -82,6 +82,13 @@ pub fn font_preview(spec_json: &str, chars: &str) -> Result<String, JsError> {
     ENGINE.with(|e| json(&e.borrow_mut().font_preview(&spec, chars).map_err(|m| JsError::new(&m))?))
 }
 
+/// The font's own kerning across a font spec's characters: `{ unitsPerEm, pairs: [["AV", em]] }`.
+#[wasm_bindgen(js_name = kerningTable)]
+pub fn kerning_table(spec_json: &str) -> Result<String, JsError> {
+    let spec: FontSpec = parse(spec_json, "font spec")?;
+    ENGINE.with(|e| json(&e.borrow_mut().kerning_table(&spec).map_err(|m| JsError::new(&m))?))
+}
+
 #[wasm_bindgen(js_name = exportSvg)]
 pub fn export_svg(doc_json: &str, opts_json: &str) -> Result<String, JsError> {
     let doc: Document = parse(doc_json, "document")?;

@@ -91,4 +91,12 @@ describe('migration', () => {
     expect(g.style.params.body).toBe('#ffffff');
     expect(g.style.params).not.toHaveProperty('bgTop');
   });
+
+  it('gives fonts saved before kerning overrides an empty set', () => {
+    const type = { family: 'Old Sans', style: 'Regular', base: 'inter', axes: {}, morph: null, modifiers: [], tracking: 0, charset: 'AV', glyphs: {}, sample: '' };
+    const p = migrate({ version: 2, name: 'Font', canvas: { width: 800, height: 800 }, layers: [], fonts: [], type });
+    expect(p.type?.kerning).toEqual({});
+    const kept = migrate({ version: 2, name: 'Font', canvas: { width: 800, height: 800 }, layers: [], fonts: [], type: { ...type, kerning: { AV: -0.08 } } });
+    expect(kept.type?.kerning).toEqual({ AV: -0.08 });
+  });
 });
