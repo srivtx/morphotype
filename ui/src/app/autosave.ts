@@ -7,7 +7,6 @@ import { saveProject, type ProjectMeta } from '../state/library';
 import type { Project } from '../state/model';
 import { onBeforeOpen, store } from '../state/store';
 import { usedImportedFonts } from './actions';
-import { specOf } from './typeActions';
 
 const SETTLE_MS = 700;
 const THUMB_EVERY_MS = 5000;
@@ -27,6 +26,8 @@ function worthSaving(p: Project) {
 async function preview(p: Project, mode: 'design' | 'type'): Promise<Partial<ProjectMeta>> {
   if (mode === 'type' && p.type) {
     try {
+      // Font code loads with Type mode, so it is already here when a font is open.
+      const { specOf } = await import('./typeActions');
       const glyphs = await engine.fontPreview(specOf(p.type, { quality: 60 }), 'Aa');
       let x = 0;
       const paths = glyphs.map((g) => {

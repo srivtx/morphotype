@@ -1,5 +1,4 @@
 // Starting points. Each one is a small, fully editable document.
-import { effectById } from '../render/effects';
 import { brushById } from './brushes';
 import { LAB_TEMPLATES } from './templatesLab';
 import { STUDIO_TEMPLATES } from './templatesStudio';
@@ -7,30 +6,7 @@ import { GRAPHIC_TEMPLATES } from './templatesGraphic';
 import { LEARN_TEMPLATES, STARTER_TEMPLATES } from './templatesLearn';
 import { SHOWCASE_TEMPLATES } from './templatesShowcase';
 import { MOTION_TEMPLATES } from './templatesMotion';
-import { background, fill, group, MODIFIER_UI, mods, pattern, strokeLayer, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer } from './model';
-
-/**
- * The building blocks a design uses (modifiers, materials, page pattern),
- * shown on template cards so people can see how a look is made.
- */
-export function recipeOf(p: Project): string[] {
-  const out = new Set<string>();
-  const mat = new Set<string>();
-  const visit = (n: Node) => {
-    for (const m of n.modifiers) if (m.on) out.add(MODIFIER_UI[m.kind]?.label ?? m.kind);
-    if (n.op === 'subtract') out.add('Cut');
-    if (n.op === 'intersect') out.add('Mask');
-    if ((n as { type?: string }).type === 'group') {
-      const g = n as Extract<Node, { type: 'group' }>;
-      if (g.merge) (out.add('Merge'), mat.add(effectById(g.style.effect).name));
-      g.children.forEach(visit);
-    } else if (n.op === 'add') mat.add(effectById(n.style.effect).name);
-    if (n.style?.stroke) out.add('Stroke');
-  };
-  p.layers.forEach(visit);
-  const pat = p.background.pattern;
-  return [...out, ...[...mat].filter((m) => m !== 'Flat' || mat.size === 1), ...(pat ? [`${pat.kind[0].toUpperCase()}${pat.kind.slice(1)} pattern`] : [])];
-}
+import { background, fill, group, mods, pattern, strokeLayer, style, symbolLayer, textLayer, tile, type Background, type Node, type Project, type ShapeLayer } from './model';
 
 // ---------- hand-drawn helpers (deterministic, so templates look the same every time) ----------
 

@@ -134,7 +134,7 @@ try {
       p2.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
       p2.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text()}`));
       await p2.goto(`http://127.0.0.1:${port}/?editor`);
-      await p2.waitForFunction(() => window.morphotype?.renderer, null, { timeout: 30_000 });
+      await p2.waitForFunction(() => window.morphotype?.renderer && window.morphotype.templates, null, { timeout: 30_000 });
       // Hold motion still, after every entrance, so screenshots are stable and software GL isn't redrawing every frame.
       await p2.evaluate(() => {
         window.morphotype.clock.pause({ duration: 6, loop: true });

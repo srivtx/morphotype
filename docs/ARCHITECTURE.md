@@ -131,6 +131,7 @@ Motion and animated materials never touch geometry; only keyframed shape and mod
 - Materials have colour roles (`render/palette.ts`): one picked colour generates every role (shadow, base, light, highlight…) in OKLCH, which is how a single swatch recolours chrome or puffy believably.
 - `EngineClient` handles worker RPC with latest-wins builds and crash recovery.
 - `platform/` hides the web/desktop differences: file dialogs, saving, system fonts and font install.
+- Home paints from the main chunk alone. The editor (`app/Editor.tsx`: canvas, panels, timeline), Type mode, font code, the template list (`state/templateCatalog.ts`) and rarely opened dialogs load in their own chunks through `app/onDemand.ts`, which renders a part directly once its code is in. The editor and templates preload when the engine is ready, and the editor is fetched alongside the engine when the app opens straight into a design.
 
 ## Roadmap
 
