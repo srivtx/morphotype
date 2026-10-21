@@ -1,7 +1,9 @@
-// The material deck: one collectible card per animated showcase, held as a
-// hand. Cards tilt toward the pointer under a foil, play their loop on hover,
-// and open in an inspector where they turn over to show their timeline.
-import { SHOWCASES } from './showcases.js';
+// The poster deck: one collectible card per new animated poster, fanned out.
+// Cards tilt toward the pointer under a foil, play their loop on hover (one at
+// a time), and open in an inspector where they turn over to show their timeline.
+import { DECK, SHOWCASES } from './showcases.js';
+
+const CARDS = DECK.map((id) => SHOWCASES.find((s) => s.id === id));
 
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = (s, el = document) => el.querySelector(s);
@@ -48,7 +50,7 @@ const fmt = (v) => (Math.abs(v) >= 10 || Number.isInteger(v) ? String(Math.round
 
 /* ---------- Card markup ---------- */
 
-function front(s) {
+function front(s, i) {
   const stats = s.settings
     .map((st) => {
       const v = clamp((st.value - st.min) / (st.max - st.min), 0, 1);
@@ -59,7 +61,7 @@ function front(s) {
   const sw = s.palette.slice(0, 5).map((c) => `<i style="background:${c}"></i>`).join('');
   return `
     <div class="face front"><div class="panel"><div class="foil"></div>
-      <div class="tc-head"><b class="tc-name">${esc(s.title)}</b><span class="tc-no">No.${String(s.no).padStart(2, '0')}/${SHOWCASES.length}</span></div>
+      <div class="tc-head"><b class="tc-name">${esc(s.title)}</b><span class="tc-no">No.${String(i + 1).padStart(2, '0')}/${String(CARDS.length).padStart(2, '0')}</span></div>
       <div class="tc-art"><img src="/media/${s.id}.webp" alt="" loading="lazy" decoding="async" /><video muted loop playsinline preload="none" data-src="/media/${s.id}.mp4"></video></div>
       <div class="tc-type"><span class="tc-chip">${esc(s.material)}</span><span class="tc-meta">${s.duration.toFixed(1)} s · ${s.layers} layers</span></div>
       <ul class="tc-stats">${stats}</ul>
@@ -109,7 +111,7 @@ function makeCard(s, i) {
   el.setAttribute('role', 'button');
   el.setAttribute('aria-label', `${s.title}: ${s.material}. Open card`);
   for (const [k, v] of Object.entries(tones(s))) el.style.setProperty(k, v);
-  el.innerHTML = `<div class="tcard-tilt"><div class="tcard-flip">${front(s)}${back(s)}</div></div>`;
+  el.innerHTML = `<div class="tcard-tilt"><div class="tcard-flip">${front(s, i)}${back(s)}</div></div>`;
   return el;
 }
 
@@ -175,37 +177,43 @@ function playIn(card, on) {
   }
 }
 
-/* ---------- The hand ---------- */
+/* ---------- The fan ---------- */
+
+/** Where each card sits in the fan, after ref 10: a loose, overlapping spread. */
+const FAN = [
+  { a: -7, y: 34 },
+  { a: 4, y: 52 },
+  { a: -3, y: 6 },
+  { a: 2, y: 0 },
+  { a: 5, y: 44 },
+  { a: -4, y: 16 },
+];
 
 export function deck() {
   sparkle();
   const hand = $('[data-hand]');
-  const cards = SHOWCASES.map((s, i) => makeCard(s, i));
+  const cards = CARDS.map((s, i) => makeCard(s, i));
   cards.forEach((c) => hand.append(c));
   const tilts = cards.map((c) => tilter(c, 16));
   const narrow = () => matchMedia('(max-width: 720px)').matches;
+  // Overlap more when the fan would be wider than the page.
+  const spacing = () => {
+    const w = cards[0].offsetWidth;
+    return Math.min(w * 0.8, (hand.clientWidth - w * 1.15) / (cards.length - 1));
+  };
   let hover = -1;
 
   const layout = () => {
     if (narrow()) return;
     const n = cards.length;
-    const step = innerWidth < 980 ? 4.4 : 5.4;
     cards.forEach((c, i) => {
-      const base = (i - (n - 1) / 2) * step;
-      let a = base, lift = 0, sc = 1, z = i + 1;
-      if (hover >= 0) {
-        const d = i - hover;
-        if (d === 0) {
-          a = base * 0.55;
-          lift = -70;
-          sc = 1.12;
-          z = 60;
-        } else a = base + Math.sign(d) * Math.max(0, 3.6 - Math.abs(d) * 0.9);
-      }
-      c.style.setProperty('--a', `${a.toFixed(2)}deg`);
-      c.style.setProperty('--lift', `${lift}px`);
-      c.style.setProperty('--sc', sc);
-      c.style.setProperty('--z', z);
+      const f = FAN[i % FAN.length];
+      const on = i === hover;
+      c.style.setProperty('--x', `${((i - (n - 1) / 2) * spacing()).toFixed(1)}px`);
+      c.style.setProperty('--a', `${on ? f.a * 0.35 : f.a}deg`);
+      c.style.setProperty('--lift', `${on ? f.y - 48 : f.y}px`);
+      c.style.setProperty('--sc', on ? 1.07 : 1);
+      c.style.setProperty('--z', on ? 60 : i + 1);
     });
   };
 
@@ -220,16 +228,33 @@ export function deck() {
     layout();
   };
 
+  // Which card the pointer is on, by fixed columns across the fan: lifting a
+  // card never moves the boundaries, so hovering one can't hand off to another.
+  const pick = (e) => {
+    const r = hand.getBoundingClientRect();
+    const n = cards.length, w = spacing();
+    const i = Math.round((e.clientX - (r.left + r.width / 2)) / w + (n - 1) / 2);
+    const edge = Math.abs(e.clientX - (r.left + r.width / 2)) <= w * (n / 2) + cards[0].offsetWidth * 0.1;
+    return edge && i >= 0 && i < n ? i : -1;
+  };
+  hand.addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse' || narrow()) return;
+    const i = pick(e);
+    setHover(i);
+    if (i >= 0) tilts[i].move(e);
+  });
+  hand.addEventListener('pointerleave', () => !narrow() && setHover(-1));
+  hand.addEventListener('click', (e) => {
+    if (narrow()) return;
+    const i = pick(e);
+    if (i >= 0) inspector.open(i, cards[i]);
+  });
+
   cards.forEach((c, i) => {
-    c.style.setProperty('--delay', `${i * 55}ms`);
-    c.addEventListener('pointerenter', (e) => e.pointerType === 'mouse' && setHover(i));
-    c.addEventListener('pointermove', (e) => {
-      if (e.pointerType !== 'mouse') return;
-      setHover(i);
-      tilts[i].move(e);
-    });
-    c.addEventListener('focus', () => setHover(i));
-    c.addEventListener('click', () => inspector.open(i, c));
+    c.style.setProperty('--delay', `${i * 70}ms`);
+    c.addEventListener('focus', () => !narrow() && setHover(i));
+    // Phones: the cards are a swipeable row and take their own taps.
+    c.addEventListener('click', () => narrow() && inspector.open(i, c));
     c.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -237,12 +262,11 @@ export function deck() {
       }
     });
   });
-  hand.addEventListener('pointerleave', () => setHover(-1));
   hand.addEventListener('focusout', (e) => !hand.contains(e.relatedTarget) && setHover(-1));
   addEventListener('resize', layout);
   layout();
 
-  // Deal the hand when it comes into view, then drop the stagger so hovers are quick.
+  // Deal the fan when it comes into view, then drop the stagger so hovers are quick.
   new IntersectionObserver(
     ([en], io) => {
       if (!en.isIntersecting) return;
@@ -253,15 +277,26 @@ export function deck() {
     { threshold: 0.3 },
   ).observe(hand);
 
-  // On phones the hand is a swipeable row: the card in the middle plays.
-  const centre = new IntersectionObserver(
-    (entries) => {
-      if (!narrow()) return;
-      for (const en of entries) playIn(en.target, en.isIntersecting);
-    },
-    { root: hand, threshold: 0.75 },
-  );
-  cards.forEach((c) => centre.observe(c));
+  // On phones the fan is a swipeable row: only the card nearest the middle
+  // plays, and only while the row is on screen.
+  let onScreen = false, playing = -1;
+  const centred = () => {
+    if (!narrow()) return;
+    const r = hand.getBoundingClientRect(), mid = r.left + r.width / 2;
+    let best = -1, dist = Infinity;
+    cards.forEach((c, i) => {
+      const b = c.getBoundingClientRect(), d = Math.abs(b.left + b.width / 2 - mid);
+      if (d < dist) (best = i), (dist = d);
+    });
+    const next = onScreen ? best : -1;
+    if (next === playing) return;
+    if (playing >= 0) playIn(cards[playing], false);
+    playing = next;
+    if (next >= 0) playIn(cards[next], true);
+  };
+  new IntersectionObserver(([en]) => ((onScreen = en.isIntersecting), centred()), { threshold: 0.4 }).observe(hand);
+  let settle = 0;
+  hand.addEventListener('scroll', () => (clearTimeout(settle), (settle = setTimeout(centred, 120))), { passive: true });
 
   const inspector = makeInspector(cards);
 }
@@ -276,7 +311,7 @@ function makeInspector(cards) {
   const angleOf = (el) => parseFloat(el.style.getPropertyValue('--a')) || 0;
 
   const mount = (i) => {
-    const s = SHOWCASES[i];
+    const s = CARDS[i];
     card = makeCard(s, i);
     card.removeAttribute('role');
     card.setAttribute('aria-label', `${s.title}. Click to turn over`);

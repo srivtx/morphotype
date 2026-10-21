@@ -73,12 +73,12 @@
       </div>
     </section>
 
-    <!-- A hand of collectible cards, one per animated showcase, with real settings -->
+    <!-- A fan of collectible cards, one per new animated poster, with real settings -->
     <section class="deck" id="made">
       <div class="section-head">
-        <p class="eyebrow px">The material deck</p>
-        <h2>Ten cards, dealt <br />straight from the app.</h2>
-        <p class="sub">Each card is a real template with its real settings. Tilt one to catch the foil, then click it to turn it over.</p>
+        <p class="eyebrow px">The poster deck</p>
+        <h2 class="poster-head"><span class="w-puff">Puffy</span>, <span class="w-chrome">chrome</span>, <span class="w-glitch" data-text="pixel">pixel</span>. <br />Six posters from the app.</h2>
+        <p class="sub">Each card is a real template with its real settings. Point at one to play it, then click to turn it over.</p>
       </div>
       <div class="hand" data-hand></div>
     </section>
@@ -101,30 +101,30 @@
       </ul>
     </section>
 
-    <!-- The motion timeline, laid out exactly as the app's dock lays it out -->
-    <section class="motion" id="motion">
+    <!-- The reel: one scene at a time, over its real timeline -->
+    <section class="reel" id="motion">
       <div class="section-head">
         <p class="eyebrow px">Motion, frame for frame</p>
         <h2>The timeline you edit <br />is the one that plays.</h2>
-        <p class="sub">These are the real tracks from each showcase. Drag across the timeline to scrub.</p>
+        <p class="sub">Lines that draw themselves on, pixel badges that build back, vinyl that breathes. Under each scene are its real tracks: drag across them to scrub.</p>
       </div>
-      <div class="tl" data-tl>
-        <div class="tl-bar">
-          <button class="tl-play" aria-label="Pause" data-tl-play><svg viewBox="0 0 16 16"><path class="i-pause" d="M5 3v10M11 3v10" /><path class="i-play" d="M5 3l8 5-8 5z" /></svg></button>
-          <span class="tl-title" data-tl-title>Animated · Shape shifter</span>
-          <span class="tl-time px" data-tl-time>0.00 s · f0</span>
+      <div class="reel-frame" data-reel>
+        <div class="reel-media"></div>
+        <button class="reel-nav prev" aria-label="Previous"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg></button>
+        <button class="reel-nav next" aria-label="Next"><svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" /></svg></button>
+        <div class="reel-bar">
+          <div class="pasito pasito-glass" role="tablist" aria-label="Scene"></div>
+          <button class="reel-play" aria-label="Pause"><svg viewBox="0 0 16 16"><path class="i-pause" d="M5 3v10M11 3v10" /><path class="i-play" d="M5 3l8 5-8 5z" /></svg></button>
         </div>
-        <div class="tl-stage">
-          <video muted playsinline preload="auto" data-tl-video></video>
-          <canvas class="tl-fx" data-tl-fx aria-hidden="true"></canvas>
-        </div>
+      </div>
+      <div class="reel-tl">
+        <div class="reel-meta"><p class="reel-caption"><b data-reel-title></b> <span data-reel-note></span></p><span class="tl-time px" data-tl-time>0.00 s · f0</span></div>
         <div class="tl-dock" data-tl-dock>
           <div class="tl-ruler" data-tl-ruler></div>
           <div class="tl-rows" data-tl-rows></div>
           <div class="tl-head" data-tl-head><i></i></div>
         </div>
       </div>
-      <div class="tl-picker" role="tablist" aria-label="Showcase" data-tl-picker></div>
     </section>
 
     <!-- The editor itself -->
