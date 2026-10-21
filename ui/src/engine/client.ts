@@ -1,5 +1,5 @@
 import type { Request, RequestBody, Response } from './protocol';
-import type { BakeOut, BuildOut, Content, EngineDocument, FontInfo, FontSpec, GlyphOut, GlyphPreview, PairKerning, PathsOut, PieceOut, SvgOptions, TextLayout, TraceOptions, TraceOut } from './types';
+import type { BakeOut, BuildOut, Content, EngineDocument, FontInfo, FontSpec, GlyphOut, GlyphPreview, KerningTable, PathsOut, PieceOut, SvgOptions, TextLayout, TraceOptions, TraceOut } from './types';
 
 export type BuildResult = BuildOut & { ms: number };
 
@@ -176,9 +176,9 @@ export class EngineClient {
     return this.fonts.has(id);
   }
 
-  /** Kerning of character pairs ("AV") of a font spec. */
-  kerningPairs(spec: FontSpec, pairs: string[]): Promise<PairKerning[]> {
-    return this.post({ type: 'kerningPairs', spec: JSON.stringify(spec), pairs: JSON.stringify(pairs) });
+  /** The font's own kerning across a font spec's characters (its overrides left out). */
+  kerningTable(spec: FontSpec): Promise<KerningTable> {
+    return this.post({ type: 'kerningTable', spec: JSON.stringify(spec) });
   }
 
   exportFont(spec: FontSpec): Promise<Uint8Array> {

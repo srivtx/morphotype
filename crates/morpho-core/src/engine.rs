@@ -515,17 +515,15 @@ pub struct GlyphPreview {
     pub edited: bool,
 }
 
-/// Kerning of one pair of a font spec, in em.
+/// The font's own kerning across a font spec's characters, for the kerning
+/// editor: what the export writes for each pair before the spec's overrides.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairKerning {
-    pub pair: String,
-    /// The font's own kerning (blended and scaled as in the export).
-    pub measured: f64,
-    /// What the export uses (before rounding to font units): the spec's
-    /// override, else `measured`.
-    pub value: f64,
-    pub overridden: bool,
+pub struct KerningTable {
+    pub units_per_em: u16,
+    /// Pairs ("AV") and their kerning in em, rounded to font units; pairs
+    /// that round to 0 are left out.
+    pub pairs: Vec<(String, f64)>,
 }
 
 /// The two characters of a kerning pair key such as "AV".
@@ -1612,25 +1610,14 @@ impl Engine {
             .collect())
     }
 
-    /// Kerning of some pairs ("AV") of a font spec, in em: what the font
-    /// measures (rounded to its units) and the spec's override, if any.
-    pub fn kerning_pairs(&mut self, spec: &FontSpec, pairs: &[String]) -> Result<Vec<PairKerning>, String> {
-        let upm = self.font(&spec.font)?.info.units_per_em.max(16) as f64;
-        let pairs: Vec<(String, char, char)> = pairs.iter().filter_map(|p| pair_chars(p).map(|(l, r)| (p.clone(), l, r))).collect();
-        let mut chars: Vec<char> = pairs.iter().flat_map(|p| [p.1, p.2]).collect();
-        chars.sort();
-        chars.dedup();
-        let measured = self.measured_kerning(spec, &chars)?;
-        let overrides = kerning_overrides(spec);
-        let units = |v: f64| (v * upm).round() / upm;
-        Ok(pairs
-            .into_iter()
-            .map(|(pair, l, r)| {
-                let m = units(measured.get(&(l, r)).copied().unwrap_or(0.0));
-                let o = overrides.get(&(l, r)).copied();
-                PairKerning { pair, measured: m, value: o.unwrap_or(m), overridden: o.is_some() }
-            })
-            .collect())
+    /// The measured kerning of every pair of a font spec's characters (its
+    /// overrides left out), rounded to font units.
+    pub fn kerning_table(&mut self, spec: &FontSpec) -> Result<KerningTable, String> {
+        let upm = self.font(&spec.font)?.info.units_per_em.max(16);
+        let u = upm as f64;
+        let measured = self.measured_kerning(spec, &Self::font_charset(spec))?;
+        let pairs = measured.into_iter().map(|((l, r), v)| (format!("{l}{r}"), (v * u).round() / u)).filter(|p| p.1 != 0.0).collect();
+        Ok(KerningTable { units_per_em: upm, pairs })
     }
 
     pub fn export_font(&mut self, spec: &FontSpec) -> Result<Vec<u8>, String> {

@@ -152,6 +152,19 @@ export interface Background {
   pattern?: Pattern | null;
 }
 
+/**
+ * Characters that kern alike on one side. A `right` class groups the right
+ * sides of its glyphs, so they come first in a pair (T V W in "To"); a
+ * `left` class groups left sides, for glyphs that come second (o c e).
+ * A character is in at most one class per side.
+ */
+export interface KernClass {
+  id: string;
+  side: 'left' | 'right';
+  /** Member characters, in order. */
+  members: string;
+}
+
 /** A font being designed in Type mode. */
 export interface TypeProject {
   /** Stable id, so renaming the font keeps it linked to text using it. */
@@ -169,8 +182,18 @@ export interface TypeProject {
   /** Characters the font includes, in display order. */
   charset: string;
   glyphs: Record<string, GlyphEdit>;
-  /** Kerning by character pair ("AV"), in em: replaces the base font's for that pair. */
+  /**
+   * Kerning by character pair ("AV"), in em: replaces the base font's for
+   * that pair, and any class kerning (an exception).
+   */
   kerning: Record<string, number>;
+  /** Groups of characters that kern alike on one side. */
+  kernClasses?: KernClass[];
+  /**
+   * Kerning between a class and a class or a character, in em, keyed by
+   * both sides: "@id @id", "@id o" or "T @id". Replaces the base font's.
+   */
+  classKerning?: Record<string, number>;
   sample: string;
   /** Files exported or installed so far; the font's version is 1.<revision>. */
   revision?: number;

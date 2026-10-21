@@ -49,6 +49,12 @@ export interface State {
   glyph: string;
   /** Selected layer of the open glyph (null: its outline). */
   glyphPart: string | null;
+  /** Type mode's right panel tab; Kerning also turns the canvas into the kerning editor. */
+  typeTab: 'font' | 'glyph' | 'kerning' | 'export';
+  /** Pair open in the kerning editor, e.g. "AV". */
+  kernPair: string;
+  /** Kerning edits change just the open pair, not its classes. */
+  kernOnly: boolean;
   editing: EditMode;
   fonts: FontEntry[];
   build: BuildResult | null;
@@ -80,6 +86,9 @@ function initial(): State {
     mode: 'design',
     glyph: 'A',
     glyphPart: null,
+    typeTab: 'font',
+    kernPair: 'AV',
+    kernOnly: false,
     editing: null,
     fonts: [],
     build: null,

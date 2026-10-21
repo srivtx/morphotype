@@ -33,4 +33,26 @@ describe('kerning', () => {
     const t: TypeProject = { family: 'K', style: 'Regular', base: 'inter', axes: {}, morph: null, modifiers: [], tracking: 0, charset: 'AV', glyphs: {}, kerning: { AV: -0.1 }, sample: '' };
     expect(specOf(t).kerning).toEqual({ AV: -0.1 });
   });
+
+  it('expands class kerning for the engine, exceptions on top', () => {
+    const t: TypeProject = {
+      family: 'K',
+      style: 'Regular',
+      base: 'inter',
+      axes: {},
+      morph: null,
+      modifiers: [],
+      tracking: 0,
+      charset: 'TVoe',
+      glyphs: {},
+      kerning: { Ve: 0 },
+      kernClasses: [
+        { id: 'a', side: 'right', members: 'TV' },
+        { id: 'b', side: 'left', members: 'oe' },
+      ],
+      classKerning: { '@a @b': -0.08 },
+      sample: '',
+    };
+    expect(specOf(t).kerning).toEqual({ To: -0.08, Te: -0.08, Vo: -0.08, Ve: 0 });
+  });
 });

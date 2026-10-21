@@ -360,11 +360,12 @@ fn font_export_audit() {
                 check(src_k.get(&('T', 'o')).is_some_and(|v| *v != 0), format!("{l}: Inter should kern To"));
                 let rest = |m: &HashMap<(char, char), i32>| m.iter().filter(|(k, _)| !want_pairs.iter().any(|w| w.0 == **k)).map(|(k, v)| (*k, *v)).collect::<HashMap<_, _>>();
                 check(kern_diff(&rest(&got), &rest(&src_k)).is_empty(), format!("{l}: overrides changed other pairs"));
-                // What the kerning panel shows: the font's value and the override.
-                let shown = e.kerning_pairs(&spec, &["AV".into(), "AT".into(), "xyz".into()]).unwrap();
-                let av = src_k[&('A', 'V')] as f64 / upm;
-                check(shown.len() == 2 && shown[0].overridden && (shown[0].measured - av).abs() < 1e-9 && shown[0].value == -0.2, format!("{l}: panel shows {shown:?}"));
-                check(!shown[1].overridden && shown[1].value == shown[1].measured && shown[1].measured < 0.0, format!("{l}: panel shows {:?}", shown[1]));
+                // What the kerning editor lists: the font's own pairs, overrides left out.
+                let table = e.kerning_table(&spec).unwrap();
+                let listed: HashMap<String, f64> = table.pairs.into_iter().collect();
+                let missing: Vec<String> = src_k.iter().filter(|(p, &v)| listed.get(&format!("{}{}", p.0, p.1)) != Some(&(v as f64 / upm))).map(|(p, v)| format!("{}{} {v}", p.0, p.1)).collect();
+                check(table.units_per_em as f64 == upm && missing.is_empty(), format!("{l}: kerning table misses {} pairs: {}", missing.len(), missing.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
+                check(listed.len() == src_k.len(), format!("{l}: kerning table lists {} pairs, the source has {}", listed.len(), src_k.len()));
             }
             "inter weight" => {
                 check(a.baseline_err <= 2.0, format!("{l}: flat letters sit {:.1} units off the baseline", a.baseline_err));

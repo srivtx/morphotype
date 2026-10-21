@@ -1420,6 +1420,72 @@ mod tests {
         assert!(gpos * 3 < pairs * 4, "{gpos} bytes of GPOS for {pairs} pairs");
     }
 
+    /// PairPos subtables of a font's GPOS by format: (format 1, format 2).
+    fn pair_formats(bytes: &[u8]) -> (usize, usize) {
+        use rustybuzz::ttf_parser::gpos::{PairAdjustment, PositioningSubtable};
+        let face = Face::parse(bytes, 0).unwrap();
+        let gpos = face.tables().gpos.unwrap();
+        let mut n = (0, 0);
+        for lookup in gpos.lookups {
+            for i in 0..lookup.subtables.len() {
+                match lookup.subtables.get::<PositioningSubtable>(i) {
+                    Some(PositioningSubtable::Pair(PairAdjustment::Format1 { .. })) => n.0 += 1,
+                    Some(PositioningSubtable::Pair(PairAdjustment::Format2 { .. })) => n.1 += 1,
+                    other => panic!("unexpected subtable {:?}", other.is_some()),
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn hand_classes_write_class_pairs_and_exceptions() {
+        // Kerning as the editor resolves it: a first-letter class (like T V W)
+        // against a second-letter class (like o c e), one glyph-to-class pair,
+        // and exceptions: one pair kerned apart and one taken back to 0.
+        let first = 0..8u32;
+        let second = 20..32u32;
+        let kern = |l: u32, r: u32| -> i16 {
+            match (l, r) {
+                (3, 25) => -140,
+                (5, 21) => 0,
+                (40, r) if second.contains(&r) => -25,
+                (l, r) if first.contains(&l) && second.contains(&r) => -80,
+                _ => 0,
+            }
+        };
+        let n = 48;
+        let ch = |i: u32| char::from_u32(0x100 + i).unwrap();
+        let glyphs: Vec<OutGlyph> = (0..n).map(|i| OutGlyph { codepoint: Some(ch(i) as u32), advance: 600.0, contours: vec![square(50.0, 500.0)] }).collect();
+        let mut m = meta();
+        m.kerning = (0..n).flat_map(|l| (0..n).map(move |r| (l, r))).filter(|&(l, r)| kern(l, r) != 0).map(|(l, r)| (ch(l) as u32, ch(r) as u32, kern(l, r))).collect();
+        let pairs = m.kerning.len();
+        let bytes = write_ttf(&m, &glyphs);
+        let (f1, f2) = pair_formats(&bytes);
+        assert!(f2 >= 1, "no class subtable ({f1} format 1)");
+        assert!(f1 >= 1, "the exception needs a format 1 subtable");
+        let gpos = Face::parse(&bytes, 0).unwrap().raw_face().table(rustybuzz::ttf_parser::Tag::from_bytes(b"GPOS")).unwrap().len();
+        // Format 1 alone takes 4 bytes a pair plus 4 per left glyph.
+        assert!(gpos < pairs * 2, "{gpos} bytes of GPOS for {pairs} pairs");
+        let face = rustybuzz::Face::from_slice(&bytes, 0).unwrap();
+        let chars: Vec<char> = (0..n).map(ch).collect();
+        let got = crate::font::pair_kerning(&face, &chars);
+        for l in 0..n {
+            for r in 0..n {
+                assert_eq!(got.get(&(ch(l), ch(r))).copied().unwrap_or(0), kern(l, r) as i32, "pair {l} {r}");
+            }
+        }
+    }
+
+    #[test]
+    fn few_pairs_stay_format_1() {
+        let ch = |i: u32| char::from_u32(0x100 + i).unwrap();
+        let glyphs: Vec<OutGlyph> = (0..4).map(|i| OutGlyph { codepoint: Some(ch(i) as u32), advance: 600.0, contours: vec![square(50.0, 500.0)] }).collect();
+        let mut m = meta();
+        m.kerning = vec![(ch(0) as u32, ch(1) as u32, -50), (ch(2) as u32, ch(3) as u32, 30)];
+        assert_eq!(pair_formats(&write_ttf(&m, &glyphs)), (1, 0));
+    }
+
     #[test]
     fn unstructured_kerning_shapes_every_pair() {
         kerning_roundtrip(40, &|l, r| (mix(l, r) % 41) as i16 - 20);

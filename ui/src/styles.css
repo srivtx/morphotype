@@ -630,6 +630,16 @@ kbd {
   background: var(--text);
 }
 
+/* Type mode has four tabs in the same width. */
+.type-tabs button {
+  padding: 8px 7px 9px;
+  white-space: nowrap;
+}
+.type-tabs button.on::after {
+  left: 5px;
+  right: 5px;
+}
+
 /* ---------- layers ---------- */
 .layers {
   display: flex;
@@ -2495,66 +2505,180 @@ button.row-caret:hover {
   color: var(--text);
   transition: opacity 0.2s;
 }
-.kern-row {
+.kern-pair {
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-.kern-pair {
-  flex: 0 0 72px;
+  gap: 6px;
 }
 .kern-pair input {
+  width: 56px;
   font-size: 15px;
   text-align: center;
   letter-spacing: 0.04em;
 }
 .kern-value {
-  flex: 1;
+  min-width: 72px;
   text-align: center;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
-.kern-preview {
-  margin: 8px 0 2px;
-  padding: 6px 4px 10px;
+.kern-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.kern-strip-text {
+  font-size: 12px;
+}
+.kern-strip-line {
+  height: 64px;
+  position: relative;
+}
+.kern-strip-line svg {
+  position: absolute;
+  inset: 0;
+}
+.kern-strip-glyph {
+  cursor: pointer;
+}
+.kern-strip-glyph path {
+  fill: var(--dim);
+}
+.kern-strip-glyph:hover path {
+  fill: var(--text);
+}
+.kern-strip-glyph.on path {
+  fill: var(--accent-2);
+}
+.kern-hit {
+  fill: transparent;
+}
+.kern-strip-glyph:hover .kern-hit {
+  fill: var(--hover);
+}
+.kern-canvas {
+  user-select: none;
+}
+.kern-glyph path {
+  fill: #5c5c66;
+}
+.kern-glyph.on path {
+  fill: #ecebe6;
+}
+.kern-missing {
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 0.006;
+  stroke-dasharray: 0.02 0.02;
+}
+.kern-handle {
+  fill: transparent;
+  cursor: ew-resize;
+}
+.kern-handle:hover,
+.kern-handle.dragging {
+  fill: rgb(123 108 255 / 0.07);
+}
+.kern-gap {
+  fill: rgb(123 108 255 / 0.22);
+}
+.kern-gap.pos {
+  fill: rgb(61 220 151 / 0.18);
+}
+.kern-gap-label {
+  fill: var(--dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.kern-pair-big {
+  margin: 2px 0 6px;
+  padding: 4px 4px 8px;
   border-radius: var(--r);
   background: var(--panel-2);
-  font-size: 52px;
+  font-size: 56px;
   line-height: 1.1;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
-  color: var(--dim);
   transition: opacity 0.2s;
 }
-.kern-preview mark {
-  background: none;
-  color: var(--text);
+.kern-class-picks {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+}
+.kern-class-pick {
+  display: grid;
+  grid-template-columns: 22px 64px 1fr;
+  align-items: center;
+  gap: 6px;
+}
+.kern-class-ch {
+  font-size: 16px;
+  text-align: center;
+}
+.kern-class-group {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+.kern-class-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 4px;
+}
+.kern-class-row .text-field {
+  min-width: 0;
+  letter-spacing: 0.06em;
+}
+.kern-list-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 .kern-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
+  flex-direction: column;
+  max-height: 340px;
+  overflow-y: auto;
 }
-.kern-list .chip-btn {
-  padding: 0 4px 0 8px;
-}
-.kern-chip,
-.kern-x {
+.kern-list-row {
+  display: grid;
+  grid-template-columns: 1fr auto 52px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
   border: 0;
+  border-radius: var(--r-sm);
   background: none;
-  color: inherit;
+  color: var(--dim);
   font: inherit;
-  padding: 0;
+  text-align: left;
   cursor: pointer;
 }
-.kern-x {
-  width: 16px;
-  opacity: 0.6;
+.kern-list-row strong {
+  color: var(--text);
+  font-weight: 500;
+  font-size: 14px;
 }
-.kern-x:hover {
-  opacity: 1;
+.kern-list-row:hover {
+  background: var(--hover);
+}
+.kern-list-row.on {
+  background: var(--accent-soft);
+}
+.kern-tag {
+  color: var(--faint);
+  font-size: 11px;
+}
+.kern-units {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .export-grid {
   display: grid;

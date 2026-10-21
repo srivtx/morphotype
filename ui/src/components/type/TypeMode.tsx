@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { importImage } from '../../app/actions';
-import { addCharacters, addGlyphPart, CHARSETS, closeTypeProject, customFontId, customizeGlyph, editType, exportFontFile, exportWebKit, installOnMac, kernPair, removeCharacter, resetGlyph, setKerning, specOf } from '../../app/typeActions';
+import { addCharacters, addGlyphPart, CHARSETS, closeTypeProject, customFontId, customizeGlyph, editType, exportFontFile, exportWebKit, installOnMac, removeCharacter, resetGlyph, specOf } from '../../app/typeActions';
 import { TypeStart } from './TypeStart';
 import { GlyphLayers, GlyphLook, GlyphPartPanel, PartsOverlay } from './GlyphLayers';
 import { TYPE_TERMS } from './TypeGuide';
 import { Tour } from '../Tour';
 import { engine } from '../../engine/client';
-import type { GlyphPreview, ModEntry, PairKerning } from '../../engine/types';
+import type { GlyphPreview, ModEntry } from '../../engine/types';
+import { KerningPanel, KerningStage, type FontKerning } from './KerningEditor';
 import { platform } from '../../platform';
 import { uid, type TypeProject } from '../../state/model';
 import { lookOf, SHAPE_RECIPES } from '../../state/recipes';
@@ -104,9 +105,11 @@ function metricsOf(t: TypeProject) {
 export function TypeMode() {
   const type = useStore((s) => s.project.type);
   const ready = useStore((s) => s.ready);
+  const tab = useStore((s) => s.typeTab);
   const { map, busy } = usePreviews(type);
   // Compiled only once the engine has the fonts it needs.
   const family = useCompiledFont(ready ? type : undefined);
+  const kerning = useKerningTable(ready ? type : undefined, tab === 'kerning');
   if (!ready) return <div className="workspace type-mode" />;
   if (!type) return <TypeStart />;
   return (
@@ -115,11 +118,11 @@ export function TypeMode() {
         <GlyphGrid t={type} previews={map} />
       </aside>
       <section className="type-center">
-        <GlyphCanvas t={type} previews={map} busy={busy} />
+        {tab === 'kerning' ? <KerningStage t={type} previews={map} table={kerning} m={metricsOf(type)} /> : <GlyphCanvas t={type} previews={map} busy={busy} />}
         <Tester t={type} family={family} />
       </section>
       <aside className="panel right">
-        <FontPanel t={type} previews={map} family={family} />
+        <FontPanel t={type} previews={map} family={family} kerning={kerning} />
       </aside>
       <TypeTour />
     </main>
@@ -365,7 +368,7 @@ function useCompiledFont(t: TypeProject | undefined) {
   const [family, setFamily] = useState<string | null>(null);
   const counter = useRef(0);
   const faceRef = useRef<FontFace | null>(null);
-  const key = t ? geoKey(t) + t.charset + JSON.stringify(t.kerning) : '';
+  const key = t ? geoKey(t) + t.charset + JSON.stringify([t.kerning, t.kernClasses, t.classKerning]) : '';
   useEffect(() => {
     if (!t) return;
     let live = true;
@@ -395,6 +398,37 @@ function useCompiledFont(t: TypeProject | undefined) {
   return family;
 }
 
+/**
+ * The font's own kerning for the kerning editor, measured once the editor
+ * is open and again when the look, the characters or a redrawn glyph change it.
+ */
+function useKerningTable(t: TypeProject | undefined, on: boolean) {
+  const [table, setTable] = useState<FontKerning | null>(null);
+  // Redrawn glyphs keep no kerning of the base font's.
+  const key = t ? JSON.stringify([globalKey(t), t.charset, Object.entries(t.glyphs).filter(([, g]) => g.d || g.hideBase || g.parts?.some((p) => p.visible)).map(([c]) => c)]) : '';
+  const done = useRef('');
+  useEffect(() => {
+    if (!t || !on || done.current === key) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      engine.kerningTable({ ...specOf(t), kerning: {} }).then(
+        (k) => {
+          if (!live) return;
+          done.current = key;
+          setTable({ upm: k.unitsPerEm, pairs: new Map(k.pairs) });
+        },
+        (e: Error) => live && toast(e.message, 'error'),
+      );
+    }, 150);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, on]);
+  return table;
+}
+
 /** Live preview with the real compiled font. */
 function Tester({ t, family }: { t: TypeProject; family: string | null }) {
   const [size, setSize] = useState(64);
@@ -418,14 +452,12 @@ function Tester({ t, family }: { t: TypeProject; family: string | null }) {
   );
 }
 
-type PanelTab = 'font' | 'glyph' | 'export';
-
-function FontPanel({ t, previews, family }: { t: TypeProject; previews: Map<string, GlyphPreview>; family: string | null }) {
-  const [tab, setTab] = useState<PanelTab>('font');
+function FontPanel({ t, previews, family, kerning }: { t: TypeProject; previews: Map<string, GlyphPreview>; family: string | null; kerning: FontKerning | null }) {
+  const tab = useStore((s) => s.typeTab);
   const glyph = useStore((s) => s.glyph);
   const partSel = useStore((s) => s.glyphPart);
   useEffect(() => {
-    if (partSel) setTab('glyph');
+    if (partSel) store.set({ typeTab: 'glyph' });
   }, [partSel]);
   return (
     <>
@@ -434,24 +466,26 @@ function FontPanel({ t, previews, family }: { t: TypeProject; previews: Map<stri
           [
             ['font', 'Font'],
             ['glyph', `Glyph ${glyph}`],
+            ['kerning', 'Kerning'],
             ['export', 'Use & export'],
           ] as const
         ).map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => store.set({ typeTab: id })}>
             {label}
           </button>
         ))}
       </div>
       <div className="panel-scroll">
-        {tab === 'font' && <FontTab t={t} family={family} />}
+        {tab === 'font' && <FontTab t={t} />}
         {tab === 'glyph' && <GlyphTab t={t} previews={previews} />}
+        {tab === 'kerning' && <KerningPanel t={t} table={kerning} family={family} />}
         {tab === 'export' && <ExportTab t={t} />}
       </div>
     </>
   );
 }
 
-function FontTab({ t, family }: { t: TypeProject; family: string | null }) {
+function FontTab({ t }: { t: TypeProject }) {
   const looks = SHAPE_RECIPES.filter((r) => !r.mods.some((m) => ['arc', 'warp', 'wave'].includes(m.kind)));
   const current = lookOf(t.modifiers, looks);
   return (
@@ -515,7 +549,6 @@ function FontTab({ t, family }: { t: TypeProject; family: string | null }) {
           </button>
         </p>
       </Section>
-      <KerningSection t={t} family={family} />
       <Section title={t.blank ? 'Metrics' : 'Base'} id="type-family">
         <label className="field">
           <span>Style</span>
@@ -540,111 +573,6 @@ function FontTab({ t, family }: { t: TypeProject; family: string | null }) {
         <Modifiers mods={t.modifiers} owner="type" onChange={(fn, key) => editType((tp) => fn(tp.modifiers), key)} />
       </Section>
     </div>
-  );
-}
-
-/** Neighbours a pair is judged against: straight-sided letters of its case. */
-function kernContext(ch: string) {
-  if (/\p{Ll}/u.test(ch)) return 'n';
-  if (/\p{Nd}/u.test(ch)) return '0';
-  return 'H';
-}
-
-const KERN_STEP = 0.005;
-
-/** Kerning one pair at a time: type it, see it in the compiled font, nudge it. */
-function KerningSection({ t, family }: { t: TypeProject; family: string | null }) {
-  const [text, setText] = useState('AV');
-  const [info, setInfo] = useState<PairKerning | null>(null);
-  const pair = kernPair(text);
-  const kerning = t.kerning;
-  const own = pair ? kerning[pair] : undefined;
-  const chars = pair ? [...pair] : [];
-  // What the font measures depends on its look and on these two glyphs only.
-  const key = JSON.stringify([pair, globalKey(t), chars.map((c) => t.glyphs[c] ?? null)]);
-  useEffect(() => {
-    if (!pair) {
-      setInfo(null);
-      return;
-    }
-    let live = true;
-    const timer = setTimeout(() => {
-      engine.kerningPairs({ ...specOf(t), kerning: {} }, [pair]).then(
-        ([k]) => live && setInfo(k ?? null),
-        () => live && setInfo(null),
-      );
-    }, 120);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
-  const measured = info?.pair === pair ? info.measured : null;
-  const value = own ?? measured ?? 0;
-  const nudge = (dir: number, big: boolean) => pair && setKerning(pair, value + dir * KERN_STEP * (big ? 4 : 1));
-  const em = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(3)} em`;
-  const set = Object.entries(kerning);
-  return (
-    <Section title="Kerning" id="type-kerning">
-      <div className="kern-row">
-        <label className="kern-pair" data-tip="Type two characters">
-          <input
-            className="text-field"
-            aria-label="Kerning pair"
-            value={text}
-            maxLength={8}
-            spellCheck={false}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                e.preventDefault();
-                nudge(e.key === 'ArrowUp' ? 1 : -1, e.shiftKey);
-              }
-            }}
-          />
-        </label>
-        <IconButton icon="minus" title="Tighter (⇧ for more)" disabled={!pair} onClick={(e) => nudge(-1, e.shiftKey)} />
-        <output className="kern-value" aria-label="Kerning value">
-          {pair ? em(value) : '–'}
-        </output>
-        <IconButton icon="plus" title="Looser (⇧ for more)" disabled={!pair} onClick={(e) => nudge(1, e.shiftKey)} />
-      </div>
-      {pair && (
-        <div className="kern-preview" style={{ fontFamily: family ? `"${family}", system-ui` : 'system-ui', opacity: family ? 1 : 0.35 }} aria-label={`${pair} in the compiled font`}>
-          {kernContext(chars[0]).repeat(2)}
-          <mark>{pair}</mark>
-          {kernContext(chars[1]).repeat(2)}
-        </div>
-      )}
-      <p className="hint">
-        {!pair
-          ? 'Type two characters to kern them.'
-          : own !== undefined
-            ? <>Set by hand. The font's own: {measured === null ? '…' : em(measured)}.{' '}
-                <button className="link-btn inline" onClick={() => setKerning(pair, null)}>Use the font's</button>
-              </>
-            : measured === null
-              ? 'Measuring…'
-              : measured === 0
-                ? 'The font doesn’t kern this pair. Nudge to add some.'
-                : 'The font’s own kerning. Nudge to change it; ↑ ↓ in the box work too.'}
-      </p>
-      {set.length > 0 && (
-        <div className="kern-list" aria-label="Kerned by hand">
-          {set.map(([p, v]) => (
-            <span key={p} className={`chip-btn ${p === pair ? 'on' : ''}`}>
-              <button className="kern-chip" onClick={() => setText(p)} aria-label={`Kern ${p}`}>
-                <strong>{p}</strong> {em(v)}
-              </button>
-              <button className="kern-x" onClick={() => setKerning(p, null)} aria-label={`Use the font's kerning for ${p}`}>
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </Section>
   );
 }
 

@@ -82,12 +82,11 @@ pub fn font_preview(spec_json: &str, chars: &str) -> Result<String, JsError> {
     ENGINE.with(|e| json(&e.borrow_mut().font_preview(&spec, chars).map_err(|m| JsError::new(&m))?))
 }
 
-/// Kerning of character pairs of a font spec: `[{ pair, measured, value, overridden }]` in em.
-#[wasm_bindgen(js_name = kerningPairs)]
-pub fn kerning_pairs(spec_json: &str, pairs_json: &str) -> Result<String, JsError> {
+/// The font's own kerning across a font spec's characters: `{ unitsPerEm, pairs: [["AV", em]] }`.
+#[wasm_bindgen(js_name = kerningTable)]
+pub fn kerning_table(spec_json: &str) -> Result<String, JsError> {
     let spec: FontSpec = parse(spec_json, "font spec")?;
-    let pairs: Vec<String> = parse(pairs_json, "kerning pairs")?;
-    ENGINE.with(|e| json(&e.borrow_mut().kerning_pairs(&spec, &pairs).map_err(|m| JsError::new(&m))?))
+    ENGINE.with(|e| json(&e.borrow_mut().kerning_table(&spec).map_err(|m| JsError::new(&m))?))
 }
 
 #[wasm_bindgen(js_name = exportSvg)]
