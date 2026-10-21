@@ -1,12 +1,16 @@
 # Morphotype
 
-A Mac-first type and logo lab. Morph one typeface into another, reshape lettering with a stack of modifiers, draw by hand, put photos inside any shape, trace images into vector marks, compile the result into a real installable font, and render it as liquid chrome, glow glass, puffy 3D, halftone, dither, rubber stamp or neon, all in real time on the GPU.
+A type and logo lab for macOS, Windows and the web. Morph one typeface into another, reshape lettering with a stack of modifiers, draw by hand, put photos inside any shape, trace images into vector marks, compile the result into a real installable font, and render it as liquid chrome, glow glass, puffy 3D, halftone, dither, rubber stamp or neon, all in real time on the GPU.
 
 ![Templates rendered by Morphotype](docs/images/gallery.png)
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/srivtx/morphotype/releases). It's a universal app for Apple silicon and Intel Macs. Open it and drag **Morphotype** to Applications. The app isn't notarised yet, so the first time macOS blocks it: go to **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Morphotype.app` once in Terminal. On Windows 10 or 11, download `Morphotype_<version>_x64-setup.exe` from the same release and run it. It isn't code-signed yet, so SmartScreen may warn the first time: click **More info → Run anyway**. `Morphotype-web.zip` in the same release is the browser version, ready to host anywhere.
+Everything is on the [Releases](https://github.com/srivtx/morphotype/releases) page.
+
+- **macOS:** download the `.dmg`, a universal app for Apple silicon and Intel Macs. Open it and drag **Morphotype** to Applications. The app isn't notarised yet, so the first time macOS blocks it: go to **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Morphotype.app` once in Terminal.
+- **Windows 10 or 11:** download `Morphotype_<version>_x64-setup.exe` and run it. It isn't code-signed yet, so SmartScreen may warn the first time: click **More info → Run anyway**.
+- **Web:** `Morphotype-web.zip` is the browser version, ready to host anywhere.
 
 ## What it does
 
@@ -39,7 +43,7 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 - Glyph layers: build glyphs from shapes and other glyphs (components), cut with them, give a glyph its own look, or bake the finished glyph into editable points.
 - A live tester using the real compiled font.
 - A **kerning editor**: type a pair or click two letters in a line of text, see it large in your font, drag the right letter or nudge it with ← → (⇧ for 10 units), and search every kerned pair. Advanced adds **kerning classes**: group letters that kern alike (the right sides of T V W, the left sides of o c e, or let it suggest groups from the font), kern one pair for the whole class, and make single-pair exceptions. Exports pack kerning into class-based GPOS tables with the exceptions alongside, so files stay small.
-- Export as `.ttf`, `.woff`, or a **web font kit** (TTF, WOFF, `@font-face` CSS and a specimen page). On the Mac app you can also install the font, and **Use in Design** adds it to your fonts under its own name, with a summary of how it differs from the font it started from.
+- Export as `.ttf`, `.woff`, or a **web font kit** (TTF, WOFF, `@font-face` CSS and a specimen page). In the desktop app you can also install the font, and **Use in Design** adds it to your fonts under its own name, with a summary of how it differs from the font it started from.
 
 **Export**: PNG at 1×, 2× or 4× (optionally transparent), JPG, copy to clipboard, SVG with one path per object, fonts, and `.morpho` project files that embed imported fonts.
 
@@ -54,7 +58,7 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 ## How it's built
 
 ```
-┌──────────────────────── Mac app (Tauri) ────────────────────────┐
+┌────────────────────── Desktop app (Tauri) ──────────────────────┐
 │  React UI ──► Web Worker ──► morpho-core (Rust → WebAssembly)   │
 │     │                          fonts · morph · modifiers ·      │
 │     │                          booleans · tracing · TTF writer  │
@@ -65,11 +69,11 @@ Morphotype has two modes: **Design** for logos, icons, thumbnails and posts, and
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- **One Rust engine, everywhere.** `crates/morpho-core` is pure Rust with no platform code. It runs as WebAssembly inside a Web Worker on both the Mac app and the web, so slider drags never pay an IPC round-trip and never block the UI thread. The same crate is linked natively into the Tauri shell.
+- **One Rust engine, everywhere.** `crates/morpho-core` is pure Rust with no platform code. It runs as WebAssembly inside a Web Worker in the desktop app and on the web, so slider drags never pay an IPC round-trip and never block the UI thread. The same crate is linked natively into the Tauri shell.
 - **Robust geometry.** Weight, rounding, outlines, ink and booleans all go through one path: narrow-band exact signed distance, then marching-squares iso-contours. Overlapping strokes merge correctly, nothing self-intersects, and the source font's winding rules don't matter.
 - **GPU effects.** The outline is rasterised once. A jump-flooding pass builds a signed distance field in about 12 GPU passes, which is blurred into a height map. Each effect is a single fragment shader over those textures, so changing a colour or bevel redraws in under a frame.
 - **Latest-wins scheduling.** While the engine is busy, only the newest document is queued. If the WebAssembly module ever traps, the worker restarts, reloads fonts and retries.
-- **Small native app.** Tauri uses the system WKWebView rather than bundling Chromium.
+- **Small native app.** Tauri uses the system web view (WKWebView on macOS, WebView2 on Windows) rather than bundling Chromium.
 
 Typical timings (release build, a 10-letter word): plain text under 0.5 ms, weight about 5 ms, rounding about 20 ms, ink about 25 ms, slice about 10 ms. A 2000-point brush scribble takes about 5 ms and seven echo rings around a shape about 11 ms. Cached rebuilds when only another layer changed take about 0.3 ms. See `cargo run --release -p morpho-core --example bench`.
 
@@ -88,8 +92,8 @@ npm install
 | Task | Command |
 | --- | --- |
 | Run in the browser | `npm run dev`, then open http://localhost:1420 |
-| Run the Mac app | `npm run tauri dev` |
-| Build the Mac app (.app and .dmg) | `npm run tauri build` (universal binary: add `-- --target universal-apple-darwin`) |
+| Run the desktop app | `npm run tauri dev` |
+| Build the macOS app (.app and .dmg) | `npm run tauri build` (universal binary: add `-- --target universal-apple-darwin`) |
 | Build the Windows installer (on Windows) | `npx tauri build --bundles nsis` |
 | Build the web app | `npm run build` (output in `dist/`) |
 | Rust and UI unit tests | `npm test` |
@@ -145,7 +149,7 @@ Drag fonts, images or `.morpho` files onto the window to open them.
 ```
 crates/morpho-core   Rust engine (geometry, fonts, morph, modifiers, trace, TTF/SVG)
 crates/morpho-wasm   wasm-bindgen bindings
-src-tauri            Mac/desktop shell: system fonts, font install, dialogs
+src-tauri            Desktop shell: system fonts, font install, dialogs
 ui/src/engine        Worker + client for the engine
 ui/src/render        WebGL2 renderer, SDF passes and effect shaders
 ui/src/components    Editor UI
@@ -163,4 +167,4 @@ The code is MIT licensed. The bundled fonts (Archivo Black, Inter, Space Grotesk
 - Content outside the artboard isn't rendered (like a clipped frame), though you can still select and move it.
 - WOFF2 imports aren't supported yet; import the TTF or OTF instead.
 - Morphing between structurally very different glyphs, such as a two-storey and a single-storey "a", can pinch mid-way. Moving the blend toward either end resolves it.
-- The renderer needs WebGL2 with float render targets (`EXT_color_buffer_float`), which WKWebView provides on macOS 12 and later. If it's missing, editing and SVG/font export still work but the effect preview doesn't.
+- The renderer needs WebGL2 with float render targets (`EXT_color_buffer_float`), which WKWebView provides on macOS 12 and later and WebView2 provides on Windows 10 and 11. If it's missing, editing and SVG/font export still work but the effect preview doesn't.

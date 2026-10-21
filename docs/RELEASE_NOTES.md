@@ -1,24 +1,50 @@
-## Morphotype 0.9.0
+## Morphotype 0.9.1
 
-Motion, a shape kit that helps you draw, fonts that export properly — and, for the first time, a Windows installer.
+A motion editor with a timeline, text that moves letter by letter, a kerning editor, smoother morphed fonts, and a faster start.
 
 ### Install on a Mac
 
-1. Download `Morphotype_0.9.0_universal.dmg` below (it runs on Apple silicon and Intel).
+1. Download `Morphotype_0.9.1_universal.dmg` below (it runs on Apple silicon and Intel).
 2. Open it and drag **Morphotype** into **Applications**.
 3. The app isn't notarised yet, so macOS blocks it the first time. Either go to **System Settings → Privacy & Security** and click **Open Anyway** next to Morphotype, or run this once in Terminal (it also fixes a "damaged" message):
    `xattr -dr com.apple.quarantine /Applications/Morphotype.app && open /Applications/Morphotype.app`
 
 ### Install on Windows
 
-1. Download `Morphotype_0.9.0_x64-setup.exe` below and run it.
+1. Download `Morphotype_0.9.1_x64-setup.exe` below and run it.
 2. The installer isn't signed yet, so SmartScreen may warn. Click **More info** → **Run anyway**.
 
 Fonts you install are registered under your user account and broadcast straight away, so they show up in other apps without a restart.
 
 `Morphotype-web.zip` is the same app as a static website: unzip it and serve the folder from any web host.
 
-### What's new in 0.9
+### What's new in 0.9.1
+
+**Motion editor**
+- A **timeline dock**: a row for every moving layer. Entrances and **Then** are clips, loops and keyframed settings show their real cycles, and colours show the colours they pass through. Drag to retime, click to edit, + to add.
+- **Comes in › Move from…** and **Then › Move to…**, set by dragging dashed copies on the canvas. Then can also rise, drop, slide or shrink away.
+- **A path of stops**: Move to… can go on through any number of stops, each with its own wait and Feel, shown on the canvas as numbered copies joined by a dashed path.
+- **Letter by letter**: text can move one letter or one word at a time, without breaking it apart.
+- Slide loops go left, right, up or down, one way (a conveyor) or back and forth.
+- Groups move their children together or one by one, with a gap and an order (in order, reverse, from the centre, random).
+- The Motion panel is **Simple** by default (Feel: Smooth, Snappy, Bouncy, Slow); **Advanced** adds curves, springs, offsets, fades and order.
+- Copy and paste motion (⌥⇧⌘C / ⌥⇧⌘V).
+
+**Learn**
+- Ten lessons and six starters built from library shapes.
+- Ten **animated showcases**, one per material: neon sign, sticker pack, liquid chrome, keycaps, melting type, arcade, plush weather, holo card, extruded 3D type and a riso print. Each is made with the Motion panel, so you can take every part apart.
+
+**Type**
+- A **Kerning** tab in Type mode: drag the right letter or nudge with the arrow keys, pick pairs by typing or clicking, and search every kerned pair. Advanced adds kerning classes (with suggestions) and pair exceptions, exported as compact GPOS class tables.
+- **Morphed fonts are drawn curve to curve**, so a blend has about a third as many points as before and its letters stay exactly on the baseline, x-height and cap height.
+
+**Speed and polish**
+- The app opens faster: Home loads about half the code it used to, and the editor, Type mode and templates load as you need them.
+- Moving shapes no longer stall the GPU: 50 moving lines go from about 5 to about 19 frames a second.
+- Every template now exports exactly the same pixels each time (some materials could differ by a pixel at shape edges from run to run).
+- Fixed: the playhead didn't follow a scrub while paused.
+
+### What's new in 0.9.0
 
 **Motion**
 - One **scene clock**: play, pause, seek and replay. The project saves a timeline (length and loop), and when a loop is on, loops and pattern speeds snap to a whole number of cycles per loop so they repeat cleanly.
