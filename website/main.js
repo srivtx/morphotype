@@ -1,6 +1,9 @@
 // Morphotype site. No dependencies: the hero morphs signed distance fields of
 // our bundled fonts on the CPU and draws them as a grid of pixels.
 
+import { deck } from './deck.js';
+import { timeline } from './timeline.js';
+
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -507,107 +510,6 @@ function icons() {
   }
 }
 
-/* ---------- Fanned cards ---------- */
-
-function fan() {
-  const el = $('[data-fan]');
-  $$('.card', el).forEach((c, i) => c.style.setProperty('--i', i));
-  const videos = $$('video', el);
-  new IntersectionObserver(
-    ([en]) => {
-      if (en.isIntersecting) {
-        el.classList.add('spread');
-        if (!reduced) videos.forEach((v) => v.play().catch(() => {}));
-      } else videos.forEach((v) => v.pause());
-    },
-    { threshold: 0.25 },
-  ).observe(el);
-}
-
-/* ---------- Reel of animated showcases ---------- */
-
-const REEL = [
-  ['neon-sign', 'Neon sign', 'Neon material with flicker; the glow is keyframed.'],
-  ['liquid-chrome', 'Liquid chrome', 'Chrome that flows on its own, with a spinning sparkle.'],
-  ['sticker-pack', 'Sticker pack', 'Sticker material on five shapes, grown one by one.'],
-  ['keyboard', 'Keyboard', 'Keycap letters that drop in turn, then pulse.'],
-  ['melting', 'Melting', 'A melt modifier on Anton, with rays turning behind.'],
-  ['arcade', 'Arcade', 'A pixelate modifier, a floating ghost and a one-way lane.'],
-  ['plush-weather', 'Plush weather', 'Plush material on a cloud, a sun and a bolt.'],
-  ['holo-card', 'Holo card', 'A holographic shift that ramps while the card sways.'],
-  ['pop-3d', 'Pop 3D', 'Extruded type whose angle turns as it plays.'],
-  ['print-club', 'Print club', 'Riso offset flicker, with words entering from both sides.'],
-];
-
-function reel() {
-  const frame = $('[data-reel]');
-  const media = $('.reel-media', frame);
-  const title = $('[data-reel-title]'), note = $('[data-reel-note]');
-  const play = $('.reel-play', frame);
-  const videos = REEL.map(([id]) => {
-    const v = document.createElement('video');
-    v.muted = true;
-    v.loop = true;
-    v.playsInline = true;
-    v.preload = 'none';
-    v.poster = `/media/${id}.webp`;
-    v.dataset.src = `/media/${id}.mp4`;
-    media.append(v);
-    return v;
-  });
-  let inView = false;
-  const show = (i) => {
-    videos.forEach((v, k) => {
-      if (k === i) {
-        if (!v.src) v.src = v.dataset.src;
-        v.currentTime = 0;
-        v.classList.add('on');
-        if (inView && !reduced) v.play().catch(() => {});
-      } else {
-        v.classList.remove('on');
-        v.pause();
-      }
-    });
-    // Warm the next one.
-    const n = videos[(i + 1) % videos.length];
-    if (!n.src) {
-      n.preload = 'auto';
-      n.src = n.dataset.src;
-    }
-    title.textContent = REEL[i][1];
-    note.textContent = REEL[i][2];
-  };
-  const steps = stepper($('.pasito', frame), REEL.length, { duration: () => 4800, onChange: (i) => show(i) });
-  show(0);
-  $('.prev', frame).addEventListener('click', () => steps.set(steps.index - 1, true));
-  $('.next', frame).addEventListener('click', () => steps.set(steps.index + 1, true));
-  let userPaused = false;
-  play.addEventListener('click', () => {
-    userPaused = !userPaused;
-    play.classList.toggle('paused', userPaused);
-    play.setAttribute('aria-label', userPaused ? 'Play' : 'Pause');
-    const v = videos[steps.index];
-    if (userPaused) {
-      steps.pause();
-      v.pause();
-    } else {
-      steps.play();
-      v.play().catch(() => {});
-    }
-  });
-  new IntersectionObserver(([en]) => {
-    inView = en.isIntersecting;
-    const v = videos[steps.index];
-    if (inView && !userPaused && !reduced) {
-      v.play().catch(() => {});
-      steps.play();
-    } else {
-      v.pause();
-      steps.pause();
-    }
-  }, { threshold: 0.35 }).observe(frame);
-}
-
 /* ---------- Design / Type toggle ---------- */
 
 function modeShots() {
@@ -711,7 +613,7 @@ function chrome() {
       }),
     { rootMargin: '0px 0px -8% 0px' },
   );
-  $$('.section-head, .feature-grid li, .platform, .window, .reel-frame, .changes li, .seg').forEach((el, i) => {
+  $$('.section-head, .feature-grid li, .platform, .window, .tl, .changes li, .seg').forEach((el, i) => {
     el.classList.add('reveal');
     el.style.transitionDelay = `${(i % 4) * 70}ms`;
     io.observe(el);
@@ -720,8 +622,8 @@ function chrome() {
 
 icons();
 chrome();
-fan();
-reel();
+deck();
+timeline();
 modeShots();
 marquees();
 downloads();
