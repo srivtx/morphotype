@@ -242,12 +242,13 @@ vec4 effect(vec2 uv) {
   vec4 fg = cov > 0.0 ? vec4(glassColor(uv, d) * cov, cov) : vec4(0.0);
   float og = exp(-max(d, 0.0) / max(u_glowRadius, 1.0)) * u_outerGlow * (1.0 - cov);
   float yb = u_bbox.w;
-  if (u_reflection > 0.0 && uv.y > yb) {
+  if (u_reflection > 0.0) {
+    // Coverage before the per-pixel row test: fwidth needs the whole quad.
     vec2 ruv = vec2(uv.x, 2.0 * yb - uv.y);
     float rt = sdfPx(ruv);
     float rc = cover(rt);
     float fade = exp(-(uv.y - yb) / (0.25 * max(u_bbox.w - u_bbox.y, 0.01))) * u_reflection;
-    if (rc > 0.0) fg = over(fg, vec4(glassColor(ruv, rt / u_k) * rc * fade, rc * fade));
+    if (uv.y > yb && rc > 0.0) fg = over(fg, vec4(glassColor(ruv, rt / u_k) * rc * fade, rc * fade));
   }
   fg.rgb += u_glow * og;
   fg.a = clamp(fg.a + og, 0.0, 1.0);
@@ -799,14 +800,15 @@ float threshold(vec2 px) {
 vec4 effect(vec2 uv) {
   vec2 px = artPx(uv);
   float th = threshold(px);
+  // Coverage first: fwidth inside the per-pixel shadow test would read pixels that skipped it.
+  float dt = sdfPx(uv);
+  float cov = cover(dt);
   vec4 shadow = vec4(0.0);
   if (u_shadow > 0.0) {
     float sd = sdfArt(uv - offsetUv(vec2(0.0, 22.0)));
     float s = exp(-max(sd, 0.0) / 26.0) * u_shadow;
-    if (s > th) shadow = vec4(u_ink, 1.0) * clamp(1.0 - cover(sdfPx(uv)), 0.0, 1.0);
+    if (s > th) shadow = vec4(u_ink, 1.0) * clamp(1.0 - cov, 0.0, 1.0);
   }
-  float dt = sdfPx(uv);
-  float cov = cover(dt);
   if (cov <= 0.0) return shadow;
   vec3 nrm = normalAt(uv, 1.0);
   vec3 L = normalize(vec3(-0.45, -0.65, 0.62));
@@ -844,7 +846,6 @@ uniform float u_hasPhoto, u_imgAspect, u_zoom, u_x, u_y, u_duotone, u_contrast, 
 uniform vec3 u_dark, u_light;
 vec4 effect(vec2 uv) {
   float cov = cover(sdfPx(uv));
-  if (cov <= 0.0) return vec4(0.0);
   vec2 box = (u_bbox.zw - u_bbox.xy) * u_region.zw;
   float ba = box.x / max(box.y, 1e-3);
   vec2 q = boxUv(uv) - 0.5;
@@ -853,6 +854,8 @@ vec4 effect(vec2 uv) {
   float z = max(u_zoom, 1.0);
   q = q / z + 0.5 + vec2(u_x, u_y) * 0.5 * (1.0 - 1.0 / z);
   vec3 c = u_hasPhoto > 0.5 ? texture(u_photo, q).rgb : mix(vec3(0.55), vec3(0.7), step(0.5, fract((q.x + q.y) * 8.0)));
+  // Only after sampling: the picture's mip level comes from derivatives of q across the 2×2 quad.
+  if (cov <= 0.0) return vec4(0.0);
   float l = dot(c, vec3(0.299, 0.587, 0.114));
   c = mix(vec3(l), c, u_saturation);
   c = (c - 0.5) * u_contrast + 0.5 + u_brightness * 0.5;
@@ -1175,7 +1178,6 @@ vec3 field(vec2 q) {
 }
 vec4 effect(vec2 uv) {
   float cov = cover(sdfPx(uv));
-  if (cov <= 0.0) return vec4(0.0);
   float a = radians(u_angle);
   mat2 R = mat2(cos(a), sin(a), -sin(a), cos(a));
   vec2 p = R * artPx(uv);
@@ -1187,6 +1189,8 @@ vec4 effect(vec2 uv) {
   float r = 0.5 * u_cell * clamp(sqrt(lum) * 1.35, 0.0, 1.0);
   float dist = length(fract(g) - 0.5) * u_cell;
   float aa = max(fwidth(dist), 1e-3);
+  // Only after fwidth: a derivative needs every pixel of its 2×2 quad still running.
+  if (cov <= 0.0) return vec4(0.0);
   float dotA = clamp((r - dist) / aa + 0.5, 0.0, 1.0) * cov;
   vec3 col = clamp(c / max(max(c.r, max(c.g, c.b)), 0.25), 0.0, 1.0);
   return vec4(col * dotA, dotA);
@@ -1356,7 +1360,6 @@ vec3 pal(float h) {
 vec4 effect(vec2 uv) {
   float dt = sdfPx(uv);
   float cov = cover(dt);
-  if (cov <= 0.0) return vec4(0.0);
   // Cells counted from the object's top-left corner so blocks line up with it.
   vec2 p = (artPx(uv) - (u_region.xy + u_bbox.xy * u_region.zw)) / (u_cell * vec2(max(u_wide, 0.05), 1.0));
   vec2 c = floor(p);
@@ -1375,6 +1378,8 @@ vec4 effect(vec2 uv) {
   vec2 e = abs(q) - half_ + rr;
   float bd = (length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - rr) * u_cell * min(size.x, size.y) * u_k;
   float inBlock = (u_gap > 0.0 || u_round > 0.0) ? clamp(0.5 - bd / max(fwidth(bd), 1e-3), 0.0, 1.0) : 1.0;
+  // Only after fwidth: a derivative needs every pixel of its 2×2 quad still running.
+  if (cov <= 0.0) return vec4(0.0);
   float a = cov * inBlock;
   return vec4(col * a, a);
 }`,
