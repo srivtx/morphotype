@@ -1,7 +1,7 @@
 // The poster deck: one collectible card per new animated poster, fanned out.
-// Cards tilt toward the pointer under a foil, play their loop on hover (one at
-// a time), and open in an inspector where they turn over to show their timeline.
-import { DECK, SHOWCASES } from './showcases.js?v=3';
+// Cards tilt toward the pointer under a foil, play their loops while on screen,
+// and open in an inspector where they turn over to show their timeline.
+import { DECK, SHOWCASES } from './showcases.js?v=4';
 
 const CARDS = DECK.map((id) => SHOWCASES.find((s) => s.id === id));
 
@@ -62,7 +62,7 @@ function front(s, i) {
   return `
     <div class="face front"><div class="panel"><div class="foil"></div>
       <div class="tc-head"><b class="tc-name">${esc(s.title)}</b><span class="tc-no">No.${String(i + 1).padStart(2, '0')}/${String(CARDS.length).padStart(2, '0')}</span></div>
-      <div class="tc-art"><img src="/media/${s.id}.webp" alt="" loading="lazy" decoding="async" /><video muted loop playsinline preload="none" data-src="/media/${s.id}.mp4"></video></div>
+      <div class="tc-art"><img src="/media/${s.id}.webp" alt="" loading="lazy" decoding="async" /><canvas data-feed="${s.id}" aria-hidden="true"></canvas></div>
       <div class="tc-type"><span class="tc-chip">${esc(s.material)}</span><span class="tc-meta">${s.duration.toFixed(1)} s · ${s.layers} layers</span></div>
       <ul class="tc-stats">${stats}</ul>
       <p class="tc-flavor">${esc(s.flavor)}</p>
@@ -165,15 +165,65 @@ function tilter(el, range) {
   };
 }
 
+/* ---------- Card screens ---------- */
+
+// Chrome drops the whole page to 30 fps while two or more videos play on
+// screen, and the fan plays six. So each scene plays in a video that never goes
+// on the page, and its cards paint the frames onto canvases in one frame loop.
+const feeds = new Map();
+let painting = 0;
+
+function feed(id) {
+  let f = feeds.get(id);
+  if (!f) {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.src = `/media/${id}.mp4`;
+    f = { video, screens: new Set(), at: -1 };
+    feeds.set(id, f);
+  }
+  return f;
+}
+
+function paint() {
+  painting = 0;
+  let live = false;
+  for (const f of feeds.values()) {
+    if (!f.screens.size) continue;
+    live = true;
+    // Only when the video has moved on to a new frame.
+    if (f.video.readyState < 2 || f.video.currentTime === f.at) continue;
+    f.at = f.video.currentTime;
+    for (const c of f.screens) {
+      c.getContext('2d').drawImage(f.video, 0, 0, c.width, c.height);
+      c.classList.add('playing');
+    }
+  }
+  if (live) painting = requestAnimationFrame(paint);
+}
+
 function playIn(card, on) {
-  const v = $('video', card);
-  if (!v) return;
+  const c = $('canvas[data-feed]', card);
+  if (!c) return;
   if (on && !reduced) {
-    if (!v.src) v.src = v.dataset.src;
-    v.onplaying = () => v.classList.add('playing');
-    v.play().catch(() => {});
+    if (!c.dataset.sized) {
+      c.dataset.sized = '1';
+      const w = Math.min(1080, Math.round((c.clientWidth || 360) * Math.min(devicePixelRatio || 1, 2)));
+      c.width = w;
+      c.height = Math.round(w / 1.5);
+    }
+    const f = feed(c.dataset.feed);
+    f.screens.add(c);
+    f.at = -1;
+    f.video.play().catch(() => {});
+    painting ||= requestAnimationFrame(paint);
   } else {
-    v.pause();
+    const f = feeds.get(c.dataset.feed);
+    if (!f) return;
+    f.screens.delete(c);
+    if (!f.screens.size) f.video.pause();
   }
 }
 

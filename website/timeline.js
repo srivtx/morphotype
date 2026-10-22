@@ -3,8 +3,8 @@
 // Under the stage are that scene's real timeline rows, laid out the way the
 // app's timeline dock lays them out, with a playhead that follows the video.
 // Dragging across the rows scrubs.
-import { REEL, SHOWCASES } from './showcases.js?v=3';
-import { stepper } from './stepper.js?v=3';
+import { REEL, SHOWCASES } from './showcases.js?v=4';
+import { stepper } from './stepper.js?v=4';
 
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = (s, el = document) => el.querySelector(s);
