@@ -1,7 +1,7 @@
 // The poster deck: one collectible card per new animated poster, fanned out.
 // Cards tilt toward the pointer under a foil, play their loop on hover (one at
 // a time), and open in an inspector where they turn over to show their timeline.
-import { DECK, SHOWCASES } from './showcases.js';
+import { DECK, SHOWCASES } from './showcases.js?v=3';
 
 const CARDS = DECK.map((id) => SHOWCASES.find((s) => s.id === id));
 

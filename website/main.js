@@ -1,9 +1,9 @@
 // Morphotype site. No dependencies: the hero morphs signed distance fields of
 // our bundled fonts on the CPU and draws them as a grid of pixels.
 
-import { deck } from './deck.js';
-import { stepper } from './stepper.js';
-import { timeline } from './timeline.js';
+import { deck } from './deck.js?v=3';
+import { stepper } from './stepper.js?v=3';
+import { timeline } from './timeline.js?v=3';
 
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = (s, el = document) => el.querySelector(s);
