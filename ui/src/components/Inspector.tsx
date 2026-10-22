@@ -14,7 +14,7 @@ import { BG_PRESETS, lookOf, SHAPE_RECIPES, type Recipe } from '../state/recipes
 import { edit, select, setSettings, store, toast, undo, useStore } from '../state/store';
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
 import { allLayers, findNode } from '../state/tree';
-import { modAnimKey, pruneGeoAnims, symAnimKey } from '../state/geoMotion';
+import { modAnimKey, MORPH_KEY, pruneGeoAnims, symAnimKey } from '../state/geoMotion';
 import type { ParamAnim } from '../state/motion';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
@@ -561,7 +561,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
   const setC = <T extends Content['type']>(fn: (c: Of<T>) => void, key = '') => set((l) => fn(l.content as Of<T>), key);
   switch (c.type) {
     case 'text':
-      return <TextEditor c={c} setC={setC} />;
+      return <TextEditor c={c} setC={setC} anims={geoAnims(layer)} />;
     case 'symbol':
       return <SymbolEditor c={c} setC={setC} layer={layer} />;
     case 'path':
@@ -596,7 +596,7 @@ function ContentEditor({ layer, set }: { layer: ShapeLayer; set: (fn: (l: ShapeL
         </Section>
       );
     case 'morph':
-      return <MorphLayerEditor c={c} self={layer.id} setC={setC} />;
+      return <MorphLayerEditor c={c} self={layer.id} setC={setC} anims={geoAnims(layer)} />;
     case 'stroke':
       return (
         <Section title="Drawing" id="stroke">
@@ -740,7 +740,7 @@ function SymbolEditor({ c, setC, layer }: { c: Of<'symbol'>; setC: <T extends Co
   );
 }
 
-function TextEditor({ c, setC }: { c: Of<'text'>; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
+function TextEditor({ c, setC, anims }: { c: Of<'text'>; anims?: GeoAnims; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
   const fonts = useStore((s) => s.fonts);
   const advanced = useStore((s) => s.settings.advanced);
   const info = fonts.find((f) => f.id === c.font)?.info;
@@ -802,7 +802,7 @@ function TextEditor({ c, setC }: { c: Of<'text'>; setC: <T extends Content['type
         </div>
         {c.morph ? (
           <>
-            <Slider label="Blend" value={c.morph.t} min={0} max={1} step={0.005} onChange={(v) => setC<'text'>((x) => x.morph && (x.morph.t = v), 'morph-t')} />
+            <KeyedSlider anims={anims} k={MORPH_KEY} label="Blend" value={c.morph.t} min={0} max={1} step={0.005} onChange={(v) => setC<'text'>((x) => x.morph && (x.morph.t = v), 'morph-t')} />
             {morphInfo?.axes.map((a) => (
               <Slider
                 key={a.tag}
@@ -824,7 +824,7 @@ function TextEditor({ c, setC }: { c: Of<'text'>; setC: <T extends Content['type
   );
 }
 
-function MorphLayerEditor({ c, self, setC }: { c: Of<'morph'>; self: string; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
+function MorphLayerEditor({ c, self, setC, anims }: { c: Of<'morph'>; self: string; anims?: GeoAnims; setC: <T extends Content['type']>(fn: (c: Of<T>) => void, key?: string) => void }) {
   const layers = useStore((s) => s.project.layers);
   const others = allLayers(layers).filter((l) => l.id !== self && l.content.type !== 'morph');
   const opts = [{ value: '', label: 'Choose a layer…' }, ...others.map((l) => ({ value: l.id, label: nodeLabel(l) }))];
@@ -839,7 +839,7 @@ function MorphLayerEditor({ c, self, setC }: { c: Of<'morph'>; self: string; set
         <span>To</span>
         <Select value={c.b} options={opts} onChange={(v) => setC<'morph'>((x) => (x.b = v))} />
       </div>
-      <Slider label="Blend" value={c.t} min={0} max={1} step={0.005} onChange={(v) => setC<'morph'>((x) => (x.t = v), 't')} />
+      <KeyedSlider anims={anims} k={MORPH_KEY} label="Blend" value={c.t} min={0} max={1} step={0.005} onChange={(v) => setC<'morph'>((x) => (x.t = v), 't')} />
     </Section>
   );
 }

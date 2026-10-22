@@ -109,7 +109,9 @@ try {
   const openTemplate = async (name) => {
     await page.keyboard.press(`${mod}+n`);
     await page.locator('.templates').waitFor({ timeout: 10_000 });
-    await page.locator('.template', { hasText: name }).first().click();
+    // By exact name: "Frosted 404" must not pick "Animated · Frosted 404".
+    const exact = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+    await page.locator('.template', { has: page.locator('strong', { hasText: exact }) }).first().click();
     await settle(900);
   };
 

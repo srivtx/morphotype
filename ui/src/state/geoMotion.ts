@@ -7,6 +7,7 @@
 // Keys, on the node's `animate`:
 //   mod:<uid>:<field>   a modifier's number field (layers and merged groups)
 //   sym:<field>         a library shape's number field
+//   morph:t             the blend of a text's font morph, or of a morph layer
 import type { EngineDocument, ModEntry } from '../engine/types';
 import { isChoice, isGroup, MODIFIER_UI, SYMBOL_UI, type Field, type Node, type NumberField, type Project, type ShapeLayer } from './model';
 import { animatedValue, type ParamAnim } from './motion';
@@ -16,11 +17,16 @@ export type GeoAnims = Record<string, ParamAnim>;
 
 export const modAnimKey = (uid: string, field: string) => `mod:${uid}:${field}`;
 export const symAnimKey = (field: string) => `sym:${field}`;
+export const MORPH_KEY = 'morph:t';
+
+/** Whether a node has a morph blend to move: text morphing to another font, or a morph layer. */
+const hasMorph = (n: Node) => !isGroup(n) && ((n.content.type === 'text' && !!n.content.morph) || n.content.type === 'morph');
 
 /** Whether a keyframe still points at a number setting (its modifier may be gone, or the shape changed). */
 function applies(n: Node, key: string): boolean {
   const m = /^mod:([^:]+):(.+)$/.exec(key);
   if (m) return typeof (n.modifiers.find((x) => x.uid === m[1]) as unknown as Record<string, unknown> | undefined)?.[m[2]] === 'number';
+  if (key === MORPH_KEY) return hasMorph(n);
   if (!key.startsWith('sym:') || isGroup(n) || n.content.type !== 'symbol') return false;
   return typeof (n.content.symbol as unknown as Record<string, unknown>)[key.slice(4)] === 'number';
 }
@@ -58,8 +64,16 @@ export function modifiersAt(mods: ModEntry[], anims: GeoAnims | undefined, t: nu
   return out;
 }
 
-/** A layer's content with its animated shape fields at `t`. */
+const BLEND: NumberField = { key: 't', label: 'Blend', min: 0, max: 1, step: 0.005 };
+
+/** A layer's content with its animated shape fields and morph blend at `t`. */
 export function contentAt(c: ShapeLayer['content'], anims: GeoAnims | undefined, t: number, loopLength?: number): ShapeLayer['content'] {
+  const blend = anims?.[MORPH_KEY];
+  if (blend) {
+    const at = (from: number) => Math.min(1, Math.max(0, valueAt(from, blend, t, loopLength, BLEND)));
+    if (c.type === 'text' && c.morph) return { ...c, morph: { ...c.morph, t: at(c.morph.t) } };
+    if (c.type === 'morph') return { ...c, t: at(c.t) };
+  }
   if (c.type !== 'symbol') return c;
   let symbol = c.symbol;
   for (const [k, a] of Object.entries(anims ?? {})) {
