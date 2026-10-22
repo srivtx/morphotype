@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anyGeoAnim, contentAt, hasGeoAnim, modAnimKey, modifiersAt, MORPH_KEY, movingDocAt, movingIds, nodeAt, projectAt, pruneGeoAnims, symAnimKey } from './geoMotion';
+import { anyGeoAnim, contentAt, hasGeoAnim, lineAnimKey, modAnimKey, modifiersAt, MORPH_KEY, movingDocAt, movingIds, nodeAt, projectAt, pruneGeoAnims, symAnimKey } from './geoMotion';
 import { emptyProject, group, lineLayer, morphLayer, newModifier, symbolLayer, textLayer, type Project, type ShapeLayer } from './model';
 
 const wave = () => newModifier('wave', { amplitude: 0.1, wavelength: 2, phase: 0 } as never);
@@ -52,6 +52,27 @@ describe('animated geometry settings', () => {
     const c = contentAt(star.content, { [symAnimKey('points')]: { to: 9, period: 1, phase: 0, mode: 'ramp' }, [symAnimKey('inner')]: { to: 0.8, period: 1, phase: 0, mode: 'ramp' } }, 0.5);
     expect(c.type === 'symbol' && (c.symbol as unknown as { points: number }).points).toBe(7);
     expect(c.type === 'symbol' && (c.symbol as unknown as { inner: number }).inner).toBeCloseTo(0.45 + (0.8 - 0.45) / 2, 6);
+  });
+
+  it('draws a pen line on and slides it round', () => {
+    const l = lineLayer('M0 0 L1 0', 400, 8);
+    l.animate = { [lineAnimKey('end')]: { to: 0, period: 2, phase: 0, mode: 'swing' } };
+    expect(hasGeoAnim(l)).toBe(true);
+    const end = (t: number) => {
+      const c = nodeAt(l, t).content;
+      return c.type === 'line' ? c.trim?.end : undefined;
+    };
+    expect(end(0)).toBeCloseTo(1, 6);
+    expect(end(1)).toBeCloseTo(0, 6);
+    // A slide keeps going past 1 (it wraps round the line); start and end stay on it.
+    l.content = { ...(l.content as Extract<ShapeLayer['content'], { type: 'line' }>), trim: { start: 0, end: 0.3, offset: 0.5, each: false } };
+    l.animate = { [lineAnimKey('offset')]: { to: 1.5, period: 1, phase: 0, mode: 'ramp' }, [lineAnimKey('start')]: { to: 2, period: 1, phase: 0, mode: 'swing' } };
+    const c = nodeAt(l, 0.75).content;
+    expect(c.type === 'line' && c.trim?.offset).toBeCloseTo(1.25, 6);
+    expect(c.type === 'line' && c.trim?.start).toBe(1);
+    expect(c.type === 'line' && c.trim?.end).toBeCloseTo(0.3, 6);
+    // Shapes have no line to draw.
+    expect(hasGeoAnim(symbolLayer('star', 100, { animate: { [lineAnimKey('end')]: { to: 0, period: 1, phase: 0, mode: 'swing' } } }))).toBe(false);
   });
 
   it('moves a font morph and a morph layer between their two shapes', () => {

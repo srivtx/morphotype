@@ -40,7 +40,8 @@ export type Modifier =
   | { kind: 'fuse'; amount: number }
   | { kind: 'fitCircle'; amount: number }
   | { kind: 'isometric'; face: IsoFace }
-  | { kind: 'foam'; amount: number; size: number; wall: number; spread: number; angle: number; seed: number };
+  | { kind: 'foam'; amount: number; size: number; wall: number; spread: number; angle: number; seed: number }
+  | { kind: 'glitch'; amount: number; size: number; spread: number; shift: number; bands: number; seed: number };
 
 export type RepeatMode = 'radial' | 'grid' | 'trail';
 
@@ -113,7 +114,7 @@ export type Content =
   /** Freehand brush stroke; points are [x, y, pressure] in layer pixels. */
   | { type: 'stroke'; points: [number, number, number][]; width: number; taper: number; smooth: number }
   /** Pen line: path data in em units × size; open subpaths are stroked `width` px wide. */
-  | { type: 'line'; d: string; size: number; width: number; cap: LineCap; squiggle?: Squiggle | null; dash?: Dash | null };
+  | { type: 'line'; d: string; size: number; width: number; cap: LineCap; squiggle?: Squiggle | null; dash?: Dash | null; trim?: Trim | null };
 
 export type LineCap = 'round' | 'butt' | 'square';
 
@@ -137,6 +138,18 @@ export interface Squiggle {
   /** End with a leg straight across the line. */
   flatEnds: boolean;
   flip: boolean;
+}
+
+/**
+ * Only part of a pen line drawn, from `start` to `end` (0…1 of its length),
+ * slid along by `offset` (wrapping round): animate End to draw it on.
+ * Subpaths draw one after another, or each at once with `each`.
+ */
+export interface Trim {
+  start: number;
+  end: number;
+  offset: number;
+  each: boolean;
 }
 
 /** Dashes along a pen line (px); a 0 dash with round ends draws dots. */

@@ -53,6 +53,7 @@ export function Keyframed({ label, anim, from, color, range, start, set, childre
                 { value: 'swing', label: 'Swing', title: 'There and back, easing at each end' },
                 { value: 'ramp', label: 'Ramp', title: 'Steadily to To, then round again: for angles, phases, shifts and hues' },
                 { value: 'flicker', label: 'Flicker', title: 'Jumps between steps from its value to To, at random: tiles, lights, screens' },
+                { value: 'hold', label: 'Hold', title: 'Waits at its value, then goes to To and comes back: a line wiping off and drawing on, a puff, a burst of debris' },
               ]}
             />
           </div>

@@ -67,6 +67,110 @@ impl Default for Dash {
     }
 }
 
+/// Draw only part of a pen line, like trimming a path: from `start` to `end`
+/// (fractions of its length), the window slid along by `offset` (wrapping
+/// round). Several subpaths count as one line drawn in order, or with `each`
+/// every one is trimmed by itself. Animate `end` to draw a line on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Trim {
+    pub start: f64,
+    pub end: f64,
+    pub offset: f64,
+    pub each: bool,
+}
+
+impl Default for Trim {
+    fn default() -> Self {
+        Trim { start: 0.0, end: 1.0, offset: 0.0, each: false }
+    }
+}
+
+/// The stretch of a polyline between arc lengths `a` and `b`.
+fn sub_line(pts: &[Pt], acc: &[f64], a: f64, b: f64) -> Vec<Pt> {
+    let at = |s: f64| -> Pt {
+        let i = acc.partition_point(|&x| x < s).clamp(1, pts.len() - 1);
+        let (a0, a1) = (acc[i - 1], acc[i]);
+        pts[i - 1].lerp(pts[i], if a1 > a0 { (s - a0) / (a1 - a0) } else { 0.0 })
+    };
+    let mut out = vec![at(a)];
+    let (i0, i1) = (acc.partition_point(|&x| x <= a), acc.partition_point(|&x| x < b));
+    out.extend_from_slice(&pts[i0..i1.max(i0)]);
+    out.push(at(b));
+    out
+}
+
+/// Pieces of the window `[a, b]` (fractions, `b - a` under 1) once slid by
+/// `offset` and wrapped into 0…1.
+fn windows(t: &Trim) -> Vec<(f64, f64)> {
+    let (lo, hi) = (t.start.min(t.end).clamp(0.0, 1.0), t.start.max(t.end).clamp(0.0, 1.0));
+    let a = lo + t.offset;
+    let k = a.floor();
+    let (a, b) = (a - k, hi + t.offset - k);
+    if b <= 1.0 { vec![(a, b)] } else { vec![(a, 1.0), (0.0, b - 1.0)] }
+}
+
+/// Trim centre lines (see [`Trim`]); trimmed pieces are open lines.
+pub fn trim(lines: Vec<(Vec<Pt>, bool)>, t: &Trim) -> Vec<(Vec<Pt>, bool)> {
+    let span = (t.start - t.end).abs().min(1.0);
+    if span >= 1.0 - 1e-9 {
+        return lines;
+    }
+    if span < 1e-6 {
+        return Vec::new();
+    }
+    // Closed lines are measured round to their first point again.
+    let lines: Vec<(Vec<Pt>, bool, Vec<f64>)> = lines
+        .into_iter()
+        .filter(|(l, _)| l.len() >= 2)
+        .map(|(mut l, closed)| {
+            if closed && l.first().zip(l.last()).is_some_and(|(a, b)| a.dist(*b) > 1e-9) {
+                l.push(l[0]);
+            }
+            let mut acc = vec![0.0];
+            for w in l.windows(2) {
+                acc.push(acc.last().unwrap() + w[0].dist(w[1]));
+            }
+            (l, closed, acc)
+        })
+        .collect();
+    let win = windows(t);
+    let cut = |l: &[Pt], acc: &[f64], closed: bool, from: f64, len: f64, total: f64| -> Vec<Vec<Pt>> {
+        let mut pieces: Vec<(f64, Vec<Pt>)> = Vec::new();
+        for &(wa, wb) in &win {
+            let (a, b) = ((wa * total - from).max(0.0), (wb * total - from).min(len));
+            if b - a > 1e-9 {
+                pieces.push((a, sub_line(l, acc, a, b)));
+            }
+        }
+        // A window wrapping round a closed line is one piece through its start
+        // (`windows` gives the stretch up to the end first, then the one from 0).
+        if closed && pieces.len() == 2 && pieces[1].0 < 1e-9 {
+            let head = pieces.pop().unwrap().1;
+            let mut joined = pieces.pop().unwrap().1;
+            joined.extend_from_slice(&head[1..]);
+            return vec![joined];
+        }
+        pieces.into_iter().map(|(_, p)| p).collect()
+    };
+    let mut out = Vec::new();
+    if t.each {
+        for (l, closed, acc) in &lines {
+            let len = *acc.last().unwrap();
+            out.extend(cut(l, acc, *closed, 0.0, len, len).into_iter().map(|p| (p, false)));
+        }
+    } else {
+        let total: f64 = lines.iter().map(|(_, _, acc)| *acc.last().unwrap()).sum();
+        let mut from = 0.0;
+        for (l, closed, acc) in &lines {
+            let len = *acc.last().unwrap();
+            out.extend(cut(l, acc, *closed && lines.len() == 1, from, len, total).into_iter().map(|p| (p, false)));
+            from += len;
+        }
+    }
+    out
+}
+
 /// A flattened line with its arc length and where each pen segment ends.
 struct Track {
     pts: Vec<Pt>,
@@ -491,6 +595,36 @@ mod tests {
 
     fn line(a: Pt, b: Pt) -> CurveContour {
         CurveContour { start: a, segs: vec![Seg::Line(b)] }
+    }
+
+    #[test]
+    fn trim_keeps_a_window_of_the_line() {
+        let l = vec![(vec![pt(0.0, 0.0), pt(100.0, 0.0)], false)];
+        let half = trim(l.clone(), &Trim { end: 0.5, ..Trim::default() });
+        assert_eq!(half.len(), 1);
+        assert!((half[0].0.last().unwrap().x - 50.0).abs() < 1e-9);
+        assert!(trim(l.clone(), &Trim { end: 0.0, ..Trim::default() }).is_empty());
+        assert_eq!(trim(l.clone(), &Trim::default()), l);
+        // Slid past the end it wraps round to the start.
+        let w = trim(l, &Trim { start: 0.0, end: 0.4, offset: 0.8, each: false });
+        assert_eq!(w.len(), 2);
+        assert!((w[0].0[0].x - 80.0).abs() < 1e-9 && (w[1].0.last().unwrap().x - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn trim_draws_subpaths_in_order_or_each() {
+        let two = vec![(vec![pt(0.0, 0.0), pt(100.0, 0.0)], false), (vec![pt(0.0, 10.0), pt(100.0, 10.0)], false)];
+        let first = trim(two.clone(), &Trim { end: 0.25, ..Trim::default() });
+        assert_eq!(first.len(), 1);
+        assert!((first[0].0.last().unwrap().x - 50.0).abs() < 1e-9);
+        let each = trim(two, &Trim { end: 0.25, each: true, ..Trim::default() });
+        assert_eq!(each.len(), 2);
+        assert!(each.iter().all(|(p, _)| (p.last().unwrap().x - 25.0).abs() < 1e-9));
+        // A closed square, window across its start: one unbroken piece.
+        let sq = vec![(vec![pt(0.0, 0.0), pt(10.0, 0.0), pt(10.0, 10.0), pt(0.0, 10.0)], true)];
+        let r = trim(sq, &Trim { start: 0.0, end: 0.5, offset: 0.75, each: false });
+        assert_eq!(r.len(), 1);
+        assert!((r[0].0[0].y - 10.0).abs() < 1e-9 && (r[0].0.last().unwrap().x - 10.0).abs() < 1e-9);
     }
 
     #[test]

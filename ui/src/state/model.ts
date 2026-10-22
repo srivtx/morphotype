@@ -257,6 +257,7 @@ export const MODIFIER_DEFAULTS: Record<ModifierKind, Modifier> = {
   fitCircle: { kind: 'fitCircle', amount: 1 },
   isometric: { kind: 'isometric', face: 'top' },
   foam: { kind: 'foam', amount: 0.7, size: 0.16, wall: 0.012, spread: 0, angle: 135, seed: 1 },
+  glitch: { kind: 'glitch', amount: 0.5, size: 0.05, spread: 0.3, shift: 0.06, bands: 0.12, seed: 1 },
 };
 
 export interface NumberField {
@@ -418,6 +419,19 @@ export const MODIFIER_UI: Record<ModifierKind, ModifierUI> = {
       { key: 'spread', label: 'Fade out', min: 0, max: 1, step: 0.01 },
       { key: 'angle', label: 'Fade toward', min: 0, max: 360, step: 1, show: { spread: 'nonzero' } },
       { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1, integer: true, advanced: true },
+    ],
+  },
+  glitch: {
+    label: 'Glitch',
+    blurb: 'Pixel debris off the edges and torn scan lines',
+    group: 'Texture',
+    fields: [
+      { key: 'amount', label: 'Debris', min: 0, max: 1, step: 0.01 },
+      { key: 'size', label: 'Block size', min: 0.01, max: 0.3, step: 0.001 },
+      { key: 'spread', label: 'Reach', min: 0, max: 1.5, step: 0.005 },
+      { key: 'shift', label: 'Tear', min: 0, max: 0.6, step: 0.002 },
+      { key: 'bands', label: 'Band height', min: 0.02, max: 0.6, step: 0.002, show: { shift: 'nonzero' } },
+      { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1, integer: true },
     ],
   },
   repeat: {

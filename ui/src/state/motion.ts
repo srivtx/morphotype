@@ -330,8 +330,13 @@ export interface ParamAnim {
   /** Seconds per cycle. */
   period: number;
   phase: number;
-  /** Swing there and back, ramp round and round, or flicker: hold a random in-between value, then jump. */
-  mode: 'swing' | 'ramp' | 'flicker';
+  /**
+   * Swing there and back, ramp round and round, flicker (hold a random
+   * in-between value, then jump), or hold: wait at its own value, then ease
+   * to To and back (a line wiping off and drawing on again, a balloon
+   * puffing, debris bursting out and gathering).
+   */
+  mode: 'swing' | 'ramp' | 'flicker' | 'hold';
 }
 
 const hexRgb = (h: string) => {
@@ -341,10 +346,22 @@ const hexRgb = (h: string) => {
 };
 const rgbHex = (c: number[]) => '#' + c.map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0')).join('');
 
+/** Hold mode: where in a cycle it sets off, arrives at To, and starts back. */
+export const HOLD_GO = 0.4;
+export const HOLD_IN = 0.6;
+export const HOLD_OUT = 0.7;
+
 /** How far (0..1) between from and to a setting is at `t`. */
 export function animMix(a: ParamAnim, t: number, loopLength?: number): number {
   const u = t / loopPeriod(a.period, loopLength) + a.phase;
   if (a.mode === 'ramp') return u - Math.floor(u);
+  if (a.mode === 'hold') {
+    // At its value until HOLD_GO, at To from HOLD_IN to HOLD_OUT, back by the end.
+    const f = u - Math.floor(u);
+    const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
+    if (f < HOLD_GO) return 0;
+    return f < HOLD_IN ? ease((f - HOLD_GO) / (HOLD_IN - HOLD_GO)) : f < HOLD_OUT ? 1 : ease((1 - f) / (1 - HOLD_OUT));
+  }
   if (a.mode === 'flicker') {
     // Four holds per cycle, each a repeatable random step (0, ⅓, ⅔ or 1).
     const n = Math.floor(u * 4) + Math.round(a.phase * 997);

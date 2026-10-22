@@ -35,6 +35,15 @@ describe('effects', () => {
     }
   });
 
+  it('Form › Tube asks the height pass for the tube profile', () => {
+    const withForm = EFFECTS.filter((e) => e.params.some((p) => p.key === 'form'));
+    expect(withForm.map((e) => e.id)).toEqual(expect.arrayContaining(['chrome', 'inflate', 'vinyl']));
+    for (const e of withForm) {
+      expect(e.height?.({ ...defaultParams(e), form: 1 }).profile, e.id).toBe(3);
+      expect(e.height?.({ ...defaultParams(e), form: 0 }).profile, e.id).toBe(0);
+    }
+  });
+
   it('presets only set parameters their effect has', () => {
     for (const preset of PRESETS) {
       const e = effectById(preset.effect);
