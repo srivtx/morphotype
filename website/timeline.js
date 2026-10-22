@@ -1,14 +1,20 @@
-// The motion section: a showcase loop above its real timeline rows, laid out
-// the way the app's timeline dock lays them out. The playhead follows the
-// video, dragging across the dock scrubs it, and switching showcases
-// pixelates out of one and into the next.
-import { SHOWCASES } from './showcases.js';
+// The motion section, on the reel from v1: one scene playing at a time on a
+// big stage, a stepper and a pause button over it, and arrows to either side.
+// Under the stage are that scene's real timeline rows, laid out the way the
+// app's timeline dock lays them out, with a playhead that follows the video.
+// Dragging across the rows scrubs.
+import { REEL, SHOWCASES } from './showcases.js?v=3';
+import { stepper } from './stepper.js?v=3';
 
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $ = (s, el = document) => el.querySelector(s);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const FPS = 30;
+/** Each scene plays this many loops before the reel moves on. */
+const LOOPS = 2;
+
+const SCENES = REEL.map((id) => SHOWCASES.find((s) => s.id === id));
 
 function rowsHTML(s) {
   const D = s.duration;
@@ -44,170 +50,133 @@ function rulerHTML(D) {
 }
 
 export function timeline() {
-  const root = $('[data-tl]');
-  const video = $('[data-tl-video]', root);
-  const fx = $('[data-tl-fx]', root);
-  const fctx = fx.getContext('2d');
-  const tiny = document.createElement('canvas');
-  const tctx = tiny.getContext('2d');
-  const dock = $('[data-tl-dock]', root);
-  const head = $('[data-tl-head]', root);
-  const rowsEl = $('[data-tl-rows]', root);
-  const ruler = $('[data-tl-ruler]', root);
-  const title = $('[data-tl-title]', root);
-  const time = $('[data-tl-time]', root);
-  const playBtn = $('[data-tl-play]', root);
-  const picker = $('[data-tl-picker]');
+  const frame = $('[data-reel]');
+  const media = $('.reel-media', frame);
+  const play = $('.reel-play', frame);
+  const title = $('[data-reel-title]'), note = $('[data-reel-note]');
+  const dock = $('[data-tl-dock]');
+  const head = $('[data-tl-head]', dock);
+  const rowsEl = $('[data-tl-rows]', dock);
+  const ruler = $('[data-tl-ruler]', dock);
+  const time = $('[data-tl-time]');
 
-  let cur = 0, clips = [], inView = false, userPaused = false, scrubbing = false, switching = false;
-  let loops = 0, lastT = 0, touched = 0;
-
-  const chips = SHOWCASES.map((s, i) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'tl-chip';
-    b.setAttribute('role', 'tab');
-    b.setAttribute('aria-selected', String(i === 0));
-    b.innerHTML = `<img src="/media/${s.id}.webp" alt="" loading="lazy" />${esc(s.title)}`;
-    b.addEventListener('click', () => {
-      touched = performance.now();
-      show(i);
-    });
-    picker.append(b);
-    return b;
+  const videos = SCENES.map((s) => {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.loop = true;
+    v.playsInline = true;
+    v.preload = 'none';
+    v.poster = `/media/${s.id}.webp`;
+    v.dataset.src = `/media/${s.id}.mp4`;
+    v.setAttribute('aria-label', `${s.title}: ${s.flavor}`);
+    media.append(v);
+    return v;
   });
 
+  let cur = 0, inView = false, userPaused = false, scrubbing = false, raf = 0, clips = [];
+
   const render = (i) => {
-    const s = SHOWCASES[i];
-    title.textContent = `Animated · ${s.title}`;
-    ruler.innerHTML = rulerHTML(s.duration);
+    const s = SCENES[i];
     rowsEl.innerHTML = rowsHTML(s);
+    ruler.innerHTML = rulerHTML(s.duration);
     clips = [...rowsEl.querySelectorAll('.clip[data-start]')].map((el) => ({ el, a: +el.dataset.start, b: +el.dataset.end }));
-    chips.forEach((c, k) => {
-      c.setAttribute('aria-selected', String(k === i));
-      c.style.setProperty('--prog', 0);
-    });
+    title.textContent = s.title;
+    note.textContent = s.flavor;
   };
 
-  /** Draw the current video frame in blocks of `size` pixels. */
-  const pixelate = (size) => {
-    const w = (fx.width = fx.clientWidth), h = (fx.height = fx.clientHeight);
-    const tw = Math.max(1, Math.round(w / size)), th = Math.max(1, Math.round(h / size));
-    tiny.width = tw;
-    tiny.height = th;
-    tctx.drawImage(video, 0, 0, tw, th);
-    fctx.imageSmoothingEnabled = false;
-    fctx.drawImage(tiny, 0, 0, w, h);
-  };
-  const tween = (ms, fn) =>
-    new Promise((res) => {
-      const t0 = performance.now();
-      const step = (now) => {
-        const k = clamp((now - t0) / ms, 0, 1);
-        fn(k);
-        k < 1 ? requestAnimationFrame(step) : res();
-      };
-      requestAnimationFrame(step);
-    });
-
-  const load = (i) =>
-    new Promise((res) => {
-      video.addEventListener('loadeddata', res, { once: true });
-      video.src = `/media/${SHOWCASES[i].id}.mp4`;
-    });
-
-  const show = async (i) => {
-    if (switching || i === cur) return;
-    switching = true;
-    const animate = !reduced && video.readyState >= 2;
-    if (animate) {
-      fx.classList.add('on');
-      await tween(260, (k) => pixelate(1 + k * k * 40));
-    }
-    cur = i;
-    loops = 0;
-    await load(i);
-    render(i);
-    if (inView && !userPaused) video.play().catch(() => {});
-    if (animate) {
-      await tween(360, (k) => pixelate(1 + (1 - k) ** 2 * 40));
-      fx.classList.remove('on');
-    }
-    switching = false;
-  };
-
-  // Playhead, readout, live clips and the chip's progress follow the video.
-  const tick = () => {
-    const D = SHOWCASES[cur].duration;
-    const t = clamp(video.currentTime || 0, 0, D);
+  const paint = () => {
+    const v = videos[cur], D = SCENES[cur].duration;
+    const t = v.currentTime % D;
     head.style.setProperty('--t', (t / D).toFixed(4));
     time.textContent = `${t.toFixed(2)} s · f${Math.round(t * FPS)}`;
     for (const c of clips) c.el.classList.toggle('live', t >= c.a && t <= c.b);
-    chips[cur].style.setProperty('--prog', (t / D).toFixed(3));
-    if (t + 0.5 < lastT) loops++;
-    lastT = t;
-    // Left alone, it moves on to the next showcase after a couple of loops.
-    if (loops >= 2 && !scrubbing && !userPaused && performance.now() - touched > 15000) show((cur + 1) % SHOWCASES.length);
-    if (inView) requestAnimationFrame(tick);
+  };
+  // The playhead only runs while a video plays on screen.
+  const tick = () => {
+    paint();
+    raf = videos[cur].paused ? 0 : requestAnimationFrame(tick);
+  };
+  const run = () => raf || (raf = requestAnimationFrame(tick));
+
+  const show = (i) => {
+    cur = i;
+    videos.forEach((v, k) => {
+      if (k === i) {
+        if (!v.src && inView) v.src = v.dataset.src;
+        v.currentTime = 0;
+        v.classList.add('on');
+        if (inView && !userPaused && !reduced) v.play().then(run, () => {});
+      } else {
+        v.classList.remove('on');
+        v.pause();
+      }
+    });
+    // Warm the next one (videos load only once the reel is on screen).
+    const n = videos[(i + 1) % videos.length];
+    if (!n.src && inView) {
+      n.preload = 'auto';
+      n.src = n.dataset.src;
+    }
+    render(i);
+    paint();
   };
 
-  // Scrub by dragging anywhere across the dock.
-  const timeAt = (x) => {
-    const r = head.getBoundingClientRect();
-    return clamp((x - r.left) / r.width, 0, 1) * SHOWCASES[cur].duration;
+  const steps = stepper($('.pasito', frame), SCENES.length, { duration: (i) => SCENES[i].duration * LOOPS * 1000, onChange: (i) => show(i) });
+  show(0);
+  $('.prev', frame).addEventListener('click', () => steps.set(steps.index - 1, true));
+  $('.next', frame).addEventListener('click', () => steps.set(steps.index + 1, true));
+
+  const pause = (on) => {
+    userPaused = on;
+    play.classList.toggle('paused', on);
+    play.setAttribute('aria-label', on ? 'Play' : 'Pause');
+    const v = videos[steps.index];
+    if (on) {
+      steps.pause();
+      v.pause();
+    } else {
+      steps.play();
+      v.play().then(run, () => {});
+    }
   };
-  let wasPlaying = false, sx = 0, armed = false;
+  play.addEventListener('click', () => pause(!userPaused));
+
+  // Scrub: drag across the rows to move through the loop (the reel holds still).
+  const seek = (e) => {
+    const r = rowsEl.getBoundingClientRect();
+    const u = clamp((e.clientX - r.left - parseFloat(getComputedStyle(dock).getPropertyValue('--name'))) / (r.width - parseFloat(getComputedStyle(dock).getPropertyValue('--name')) - 14), 0, 1);
+    videos[cur].currentTime = u * SCENES[cur].duration;
+    paint();
+  };
   dock.addEventListener('pointerdown', (e) => {
-    sx = e.clientX;
-    armed = true;
-    if (e.pointerType === 'mouse') begin(e);
-  });
-  const begin = (e) => {
+    if (e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
     scrubbing = true;
-    touched = performance.now();
-    wasPlaying = !video.paused;
-    video.pause();
-    video.currentTime = timeAt(e.clientX);
     dock.setPointerCapture(e.pointerId);
-  };
-  dock.addEventListener('pointermove', (e) => {
-    if (!scrubbing && armed && e.pointerType !== 'mouse' && Math.abs(e.clientX - sx) > 8) begin(e);
-    if (scrubbing) video.currentTime = timeAt(e.clientX);
+    if (!userPaused) pause(true);
+    seek(e);
   });
-  const end = () => {
-    armed = false;
-    if (!scrubbing) return;
-    scrubbing = false;
-    lastT = video.currentTime;
-    if (wasPlaying && !userPaused) video.play().catch(() => {});
-  };
-  dock.addEventListener('pointerup', end);
-  dock.addEventListener('pointercancel', end);
+  dock.addEventListener('pointermove', (e) => scrubbing && seek(e));
+  dock.addEventListener('pointerup', () => (scrubbing = false));
 
-  playBtn.addEventListener('click', () => {
-    userPaused = !video.paused ? true : false;
-    playBtn.classList.toggle('paused', userPaused);
-    playBtn.setAttribute('aria-label', userPaused ? 'Play' : 'Pause');
-    userPaused ? video.pause() : video.play().catch(() => {});
-  });
-
-  video.loop = true;
-  video.muted = true;
-  render(0);
-  load(0);
-  new IntersectionObserver(
-    ([en]) => {
-      const was = inView;
-      inView = en.isIntersecting;
-      if (inView && !was) {
-        if (!userPaused && !reduced) video.play().catch(() => {});
-        requestAnimationFrame(tick);
-      } else if (!inView) video.pause();
-    },
-    { threshold: 0.3 },
-  ).observe(root);
   if (reduced) {
     userPaused = true;
-    playBtn.classList.add('paused');
+    play.classList.add('paused');
+    play.setAttribute('aria-label', 'Play');
   }
+  new IntersectionObserver(
+    ([en]) => {
+      const first = en.isIntersecting && !videos[steps.index].src;
+      inView = en.isIntersecting;
+      if (first) show(steps.index);
+      const v = videos[steps.index];
+      if (inView && !userPaused && !reduced) {
+        v.play().then(run, () => {});
+        steps.play();
+      } else {
+        v.pause();
+        steps.pause();
+      }
+    },
+    { threshold: 0.35 },
+  ).observe(frame);
 }

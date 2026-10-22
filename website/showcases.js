@@ -2,9 +2,546 @@
 // and its timeline rows exactly as the motion editor lays them out.
 export const SHOWCASES = [
  {
+  "id": "y2k-set",
+  "title": "Y2K set",
+  "no": 1,
+  "material": "Puffy · Contour lines",
+  "settings": [
+   {
+    "label": "Flow",
+    "value": 0,
+    "min": -10,
+    "max": 10,
+    "to": 1.6
+   },
+   {
+    "label": "Mark size",
+    "value": 55,
+    "min": 4,
+    "max": 400
+   },
+   {
+    "label": "Line end",
+    "value": 1,
+    "min": 0,
+    "max": 1,
+    "to": 0
+   }
+  ],
+  "palette": [
+   "#ebebec",
+   "#2347ff",
+   "#15171c",
+   "#6f747e",
+   "#c98cff",
+   "#5ce84e"
+  ],
+  "bg": [
+   "#ebebec"
+  ],
+  "duration": 4,
+  "layers": 15,
+  "flavor": "A topo-line puff, speckled foam and a chrome flower tube that wipes off and draws itself back on.",
+  "rows": [
+   {
+    "name": "Chrome flower",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Sway",
+      "period": 4
+     },
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Chrome star",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Spin",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Script y",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Topo blob",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Float",
+      "period": 4
+     },
+     {
+      "kind": "param",
+      "label": "Flow",
+      "period": 4
+     },
+     {
+      "kind": "param",
+      "label": "Puff",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Speckled foam",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Float",
+      "period": 2
+     }
+    ]
+   },
+   {
+    "name": "Eyes",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Blink",
+      "period": 2
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "inflatable",
+  "title": "Inflatable",
+  "no": 2,
+  "material": "Inflatable vinyl",
+  "settings": [
+   {
+    "label": "Line end",
+    "value": 1,
+    "min": 0,
+    "max": 1,
+    "to": 0.25
+   },
+   {
+    "label": "Pinch",
+    "value": 0.7,
+    "min": 0,
+    "max": 1,
+    "to": 0.2
+   },
+   {
+    "label": "Ring spacing",
+    "value": 40,
+    "min": 6,
+    "max": 400
+   }
+  ],
+  "palette": [
+   "#fbfbfb",
+   "#3d6bff",
+   "#ff5ec4",
+   "#4dff2e",
+   "#e9ecf2",
+   "#0a0a0a"
+  ],
+  "bg": [
+   "#fbfbfb"
+  ],
+  "duration": 4,
+  "layers": 11,
+  "flavor": "Blow-up vinyl tubes on pen lines: the pinched hash wipes back to one bar and redraws, the silver star breathes.",
+  "rows": [
+   {
+    "name": "Vol tag",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "enter",
+      "label": "Grow",
+      "start": 0.3,
+      "end": 1.11
+     },
+     {
+      "kind": "loop",
+      "label": "Sway",
+      "period": 2
+     }
+    ]
+   },
+   {
+    "name": "Silver star",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Pulse",
+      "period": 2
+     },
+     {
+      "kind": "param",
+      "label": "Pinch",
+      "period": 2
+     }
+    ]
+   },
+   {
+    "name": "Arrow",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Float",
+      "period": 2
+     }
+    ]
+   },
+   {
+    "name": "Hash",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Blue wave",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "pixel-badge",
+  "title": "Pixel badge",
+  "no": 3,
+  "material": "Pixel badge",
+  "settings": [
+   {
+    "label": "Pixels · Dissolve",
+    "value": 0,
+    "min": 0,
+    "max": 1,
+    "to": 1
+   },
+   {
+    "label": "Pixels · Pixel size",
+    "value": 0.075,
+    "min": 0.01,
+    "max": 0.3
+   },
+   {
+    "label": "Weight · Amount",
+    "value": 0.14,
+    "min": -0.1,
+    "max": 0.2
+   }
+  ],
+  "palette": [
+   "#e6e6e3",
+   "#0a0a0a",
+   "#2fe07a",
+   "#ff8fd6"
+  ],
+  "bg": [
+   "#e6e6e3"
+  ],
+  "duration": 4,
+  "layers": 8,
+  "flavor": "Script on stepped pixel badges that scatter into cells and build back, one after the other.",
+  "rows": [
+   {
+    "name": "Rách badge",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Pixels · Dissolve",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Sạch badge",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Pixels · Dissolve",
+      "period": 4
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "tube-burst",
+  "title": "Tube burst",
+  "no": 4,
+  "material": "Puffy tubes",
+  "settings": [
+   {
+    "label": "Line end",
+    "value": 1,
+    "min": 0,
+    "max": 1,
+    "to": 0.12
+   },
+   {
+    "label": "Puff",
+    "value": 21,
+    "min": 4,
+    "max": 300
+   },
+   {
+    "label": "Gloss",
+    "value": 0.55,
+    "min": 0,
+    "max": 1.5
+   }
+  ],
+  "palette": [
+   "#050505",
+   "#a8e63c",
+   "#4d8a12",
+   "#ffffff"
+  ],
+  "bg": [
+   "#050505"
+  ],
+  "duration": 4,
+  "layers": 21,
+  "flavor": "Sixteen soft tubes grow out of the middle one after another while the burst slowly turns.",
+  "rows": [
+   {
+    "name": "Underline",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Burst",
+    "depth": 0,
+    "tracks": [
+     {
+      "kind": "loop",
+      "label": "Spin",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 16",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 15",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 14",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 13",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 12",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 11",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 10",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 9",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 8",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 7",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 6",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 5",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 4",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 3",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 2",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   },
+   {
+    "name": "Tube 1",
+    "depth": 1,
+    "tracks": [
+     {
+      "kind": "param",
+      "label": "Line · End",
+      "period": 4
+     }
+    ]
+   }
+  ]
+ },
+ {
   "id": "shape-shifter",
   "title": "Shape shifter",
-  "no": 1,
+  "no": 5,
   "material": "Font morph",
   "settings": [
    {
@@ -85,7 +622,7 @@ export const SHOWCASES = [
  {
   "id": "glass-lens",
   "title": "Glass lens",
-  "no": 2,
+  "no": 6,
   "material": "Lens glass",
   "settings": [
    {
@@ -141,7 +678,7 @@ export const SHOWCASES = [
  {
   "id": "crystal",
   "title": "Crystal",
-  "no": 3,
+  "no": 7,
   "material": "Cut glass",
   "settings": [
    {
@@ -210,7 +747,7 @@ export const SHOWCASES = [
  {
   "id": "frosted-404",
   "title": "Frosted 404",
-  "no": 4,
+  "no": 8,
   "material": "Frosted glass",
   "settings": [
    {
@@ -290,7 +827,7 @@ export const SHOWCASES = [
  {
   "id": "thermal-wings",
   "title": "Thermal wings",
-  "no": 5,
+  "no": 9,
   "material": "Thermal",
   "settings": [
    {
@@ -370,7 +907,7 @@ export const SHOWCASES = [
  {
   "id": "holo-card",
   "title": "Holo card",
-  "no": 6,
+  "no": 10,
   "material": "Holographic",
   "settings": [
    {
@@ -455,7 +992,7 @@ export const SHOWCASES = [
  {
   "id": "glow-glass",
   "title": "Glow glass",
-  "no": 7,
+  "no": 11,
   "material": "Glow glass",
   "settings": [
    {
@@ -520,7 +1057,7 @@ export const SHOWCASES = [
  {
   "id": "puffy",
   "title": "Puffy",
-  "no": 8,
+  "no": 12,
   "material": "Puffy",
   "settings": [
    {
@@ -627,7 +1164,7 @@ export const SHOWCASES = [
  {
   "id": "aura",
   "title": "Aura",
-  "no": 9,
+  "no": 13,
   "material": "Aura gradient",
   "settings": [
    {
@@ -774,7 +1311,7 @@ export const SHOWCASES = [
  {
   "id": "pop-3d",
   "title": "Pop 3D",
-  "no": 10,
+  "no": 14,
   "material": "Retro 3D",
   "settings": [
    {
@@ -878,3 +1415,9 @@ export const SHOWCASES = [
   ]
  }
 ];
+
+/** The poster deck: new posters and favourites from before, as cards. */
+export const DECK = ["pop-3d","y2k-set","tube-burst","inflatable","glass-lens","pixel-badge"];
+
+/** The reel: one scene at a time with its timeline, the deck first. */
+export const REEL = ["y2k-set","glass-lens","inflatable","pixel-badge","pop-3d","tube-burst","shape-shifter","crystal","thermal-wings","holo-card"];
