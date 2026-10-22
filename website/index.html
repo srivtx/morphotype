@@ -73,41 +73,21 @@
       </div>
     </section>
 
-    <!-- Fanned cards, every one rendered by the app itself -->
-    <section class="made" id="made">
+    <!-- A hand of collectible cards, one per animated showcase, with real settings -->
+    <section class="deck" id="made">
       <div class="section-head">
-        <p class="eyebrow px">Made with Morphotype</p>
-        <h2>Every frame on this page<br />came out of the app.</h2>
+        <p class="eyebrow px">The material deck</p>
+        <h2>Ten cards, dealt <br />straight from the app.</h2>
+        <p class="sub">Each card is a real template with its real settings. Tilt one to catch the foil, then click it to turn it over.</p>
       </div>
-      <div class="fan" data-fan>
-        <figure class="card" style="--r:-9deg; --x:-330px; --y:30px; --z:1" tabindex="0">
-          <video src="/media/neon-sign.mp4" poster="/media/neon-sign.webp" muted loop playsinline preload="none"></video>
-          <figcaption><b>Neon sign</b><span>Neon material, with flicker and glow keyframed.</span></figcaption>
-        </figure>
-        <figure class="card" style="--r:4deg; --x:-165px; --y:-10px; --z:2" tabindex="0">
-          <video src="/media/holo-card.mp4" poster="/media/holo-card.webp" muted loop playsinline preload="none"></video>
-          <figcaption><b>Holo card</b><span>A holographic shift that ramps over the clock.</span></figcaption>
-        </figure>
-        <figure class="card" style="--r:-2deg; --x:0px; --y:-40px; --z:5" tabindex="0">
-          <video src="/media/liquid-chrome.mp4" poster="/media/liquid-chrome.webp" muted loop playsinline preload="none"></video>
-          <figcaption><b>Liquid chrome</b><span>Chrome that flows by itself, with orbiting sparkles.</span></figcaption>
-        </figure>
-        <figure class="card" style="--r:3deg; --x:165px; --y:0px; --z:3" tabindex="0">
-          <video src="/media/sticker-pack.mp4" poster="/media/sticker-pack.webp" muted loop playsinline preload="none"></video>
-          <figcaption><b>Sticker pack</b><span>Group motion, staggered one by one.</span></figcaption>
-        </figure>
-        <figure class="card" style="--r:9deg; --x:330px; --y:40px; --z:2" tabindex="0">
-          <video src="/media/pop-3d.mp4" poster="/media/pop-3d.webp" muted loop playsinline preload="none"></video>
-          <figcaption><b>Pop 3D</b><span>Extrusion whose angle turns as it plays.</span></figcaption>
-        </figure>
-      </div>
+      <div class="hand" data-hand></div>
     </section>
 
     <!-- Features with pixel icons -->
     <section class="features" id="features">
       <div class="section-head">
         <p class="eyebrow px">What it does</p>
-        <h2>A whole type studio,<br />in one small app.</h2>
+        <h2>A whole type studio, <br />in one small app.</h2>
       </div>
       <ul class="feature-grid">
         <li><i class="picon" data-icon="morph"></i><h3>Morph fonts</h3><p>Blend any two typefaces curve to curve. Letters stay on the baseline and x-height.</p></li>
@@ -121,29 +101,37 @@
       </ul>
     </section>
 
-    <!-- A Pasito-style stepper over the animated showcases -->
-    <section class="reel" id="reel">
+    <!-- The motion timeline, laid out exactly as the app's dock lays it out -->
+    <section class="motion" id="motion">
       <div class="section-head">
-        <p class="eyebrow px">Ten materials, all moving</p>
-        <h2>Open any of these in Learn<br />and take it apart.</h2>
+        <p class="eyebrow px">Motion, frame for frame</p>
+        <h2>The timeline you edit <br />is the one that plays.</h2>
+        <p class="sub">These are the real tracks from each showcase. Drag across the timeline to scrub.</p>
       </div>
-      <div class="reel-frame" data-reel>
-        <div class="reel-media"></div>
-        <button class="reel-nav prev" aria-label="Previous"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg></button>
-        <button class="reel-nav next" aria-label="Next"><svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" /></svg></button>
-        <div class="reel-bar">
-          <div class="pasito pasito-glass" role="tablist" aria-label="Showcase"></div>
-          <button class="reel-play" aria-label="Pause"><svg viewBox="0 0 16 16"><path class="i-pause" d="M5 3v10M11 3v10" /><path class="i-play" d="M5 3l8 5-8 5z" /></svg></button>
+      <div class="tl" data-tl>
+        <div class="tl-bar">
+          <button class="tl-play" aria-label="Pause" data-tl-play><svg viewBox="0 0 16 16"><path class="i-pause" d="M5 3v10M11 3v10" /><path class="i-play" d="M5 3l8 5-8 5z" /></svg></button>
+          <span class="tl-title" data-tl-title>Animated · Shape shifter</span>
+          <span class="tl-time px" data-tl-time>0.00 s · f0</span>
+        </div>
+        <div class="tl-stage">
+          <video muted playsinline preload="auto" data-tl-video></video>
+          <canvas class="tl-fx" data-tl-fx aria-hidden="true"></canvas>
+        </div>
+        <div class="tl-dock" data-tl-dock>
+          <div class="tl-ruler" data-tl-ruler></div>
+          <div class="tl-rows" data-tl-rows></div>
+          <div class="tl-head" data-tl-head><i></i></div>
         </div>
       </div>
-      <p class="reel-caption"><b data-reel-title></b> <span data-reel-note></span></p>
+      <div class="tl-picker" role="tablist" aria-label="Showcase" data-tl-picker></div>
     </section>
 
     <!-- The editor itself -->
     <section class="editor" id="editor">
       <div class="section-head">
         <p class="eyebrow px">Two modes</p>
-        <h2>Design for logos and posts.<br />Type for whole fonts.</h2>
+        <h2>Design for logos and posts. <br />Type for whole fonts.</h2>
       </div>
       <div class="seg" role="tablist" aria-label="Mode">
         <span class="seg-pill" aria-hidden="true"></span>
@@ -222,5 +210,17 @@
       </span>
     </div>
   </footer>
+
+  <!-- Card inspector: the picked card, large, and its back -->
+  <div class="inspector" data-inspector hidden>
+    <div class="inspector-backdrop" data-close></div>
+    <div class="inspector-stage" data-stage></div>
+    <div class="inspector-bar">
+      <button class="ibtn" data-prev aria-label="Previous card"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg></button>
+      <button class="ibtn wide" data-flip><span class="px">Turn over</span></button>
+      <button class="ibtn" data-next aria-label="Next card"><svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" /></svg></button>
+      <button class="ibtn" data-close aria-label="Close"><svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
+    </div>
+  </div>
 </body>
 </html>
