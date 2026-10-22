@@ -219,12 +219,8 @@ export function deck() {
 
   const setHover = (i) => {
     if (i === hover) return;
-    if (hover >= 0) {
-      playIn(cards[hover], false);
-      tilts[hover].leave();
-    }
+    if (hover >= 0) tilts[hover].leave();
     hover = i;
-    if (i >= 0) playIn(cards[i], true);
     layout();
   };
 
@@ -277,11 +273,12 @@ export function deck() {
     { threshold: 0.3 },
   ).observe(hand);
 
-  // On phones the fan is a swipeable row: only the card nearest the middle
-  // plays, and only while the row is on screen.
+  // The whole fan plays while it's on screen, like v1's cards, and pauses
+  // once it scrolls away. On phones the fan is a swipeable row: only the card
+  // nearest the middle plays.
   let onScreen = false, playing = -1;
   const centred = () => {
-    if (!narrow()) return;
+    if (!narrow()) return cards.forEach((c) => playIn(c, onScreen));
     const r = hand.getBoundingClientRect(), mid = r.left + r.width / 2;
     let best = -1, dist = Infinity;
     cards.forEach((c, i) => {
