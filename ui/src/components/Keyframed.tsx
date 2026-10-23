@@ -1,6 +1,8 @@
+import { useSyncExternalStore } from 'react';
 import { clock, timelineOf } from '../state/clock';
-import type { ParamAnim } from '../state/motion';
-import { store } from '../state/store';
+import { keyAt, nextKey, prevKey, setKey } from '../state/keys';
+import { keyedValue, type Key, type ParamAnim } from '../state/motion';
+import { store, useStore } from '../state/store';
 import { ColorField } from './ColorPicker';
 import { Icon } from './icons';
 import { CycleSlider } from './MotionPanel';
@@ -9,12 +11,77 @@ import { Segmented, Slider } from './ui';
 /** Turn a setting's animation on (from `init`), change it, or off (null). */
 export type SetAnimOf = (fn: ((a: ParamAnim) => void) | null, init?: ParamAnim) => void;
 
+/** Change a setting's keys: edit them in place, return new ones, or null to clear them (see keys.ts updateKeys). */
+export type SetKeysOf = (fn: (keys: Key[]) => Key[] | null | void) => void;
+
+/** The playhead: re-renders on play, pause and seek (not every frame while playing). */
+export function usePlayhead(): number {
+  const tl = useStore((s) => timelineOf(s.project));
+  useSyncExternalStore(clock.subscribe, () => clock.version);
+  return clock.time(tl);
+}
+
+/** What a setting shows: its keys' value at the playhead, or its own. */
+export function useKeyed<T extends number | string>(keys: Key[] | undefined, value: T): T {
+  const t = usePlayhead();
+  return keys?.length ? (keyedValue(keys, t) as T) : value;
+}
+
+const pauseAt = (t: number) => {
+  const tl = timelineOf(store.get().project);
+  clock.pause(tl);
+  clock.seek(t);
+};
+
 /**
- * A setting with a keyframe button: turned on, the setting moves between its
- * own value and To on the scene clock, swinging back and forth, ramping round
- * or flickering. Used for materials, modifiers and shapes.
+ * ‹ ◆ › for one property, as in Figma: ◆ keys its value at the playhead (a
+ * new key, or the one there), ⌥-click removes the key there; the arrows,
+ * shown once it has keys, jump to the key before or after.
  */
-export function Keyframed({ label, anim, from, color, range, start, set, children }: { label: string; anim: ParamAnim | undefined; from: number | string; color?: boolean; range: { min: number; max: number; step: number }; start?: Partial<ParamAnim>; set: SetAnimOf; children: React.ReactNode }) {
+export function KeyButtons({ label, keys, value, set }: { label: string; keys: Key[] | undefined; value: number | string; set: SetKeysOf }) {
+  const t = usePlayhead();
+  const keyed = !!keys?.length;
+  const on = keyAt(keys, t) >= 0;
+  const [prev, next] = [prevKey(keys, t), nextKey(keys, t)];
+  const tip = on ? `${label} has a key here: click to set it, ⌥-click to remove it` : keyed ? `Add a ${label} key at the playhead` : `Key ${label}: start keys at the playhead`;
+  return (
+    <span className="key-buttons">
+      {keyed && (
+        <button className="keyframe step" disabled={!prev} aria-label={`Previous ${label} key`} data-tip="Previous key" onClick={() => prev && pauseAt(prev.t)}>
+          <Icon name="chevronLeft" size={10} />
+        </button>
+      )}
+      <button
+        className={`keyframe ${keyed ? 'keyed' : ''} ${on ? 'at' : ''}`}
+        aria-pressed={on}
+        aria-label={`Key ${label}`}
+        data-tip={tip}
+        onClick={(e) => {
+          clock.pause(timelineOf(store.get().project));
+          if (e.altKey && on) set((ks) => ks.filter((k) => Math.abs(k.t - t) >= 1 / 60));
+          else set((ks) => setKey(ks, t, value));
+        }}
+      >
+        <Icon name="keyframe" size={11} />
+      </button>
+      {keyed && (
+        <button className="keyframe step" disabled={!next} aria-label={`Next ${label} key`} data-tip="Next key" onClick={() => next && pauseAt(next.t)}>
+          <Icon name="chevronRight" size={10} />
+        </button>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A setting that can move on the scene clock, two ways: keys (◆, see
+ * KeyButtons) at any times with any values, or a cycle (↻) between its own
+ * value and To, swinging back and forth, ramping round or flickering. The two
+ * are exclusive: a key drops the cycle, a cycle drops the keys. Used for
+ * materials, modifiers and shapes.
+ */
+export function Keyframed({ label, anim, from, color, range, start, set, keys, setKeys, children }: { label: string; anim: ParamAnim | undefined; from: number | string; color?: boolean; range: { min: number; max: number; step: number }; start?: Partial<ParamAnim>; set: SetAnimOf; keys?: Key[]; setKeys?: SetKeysOf; children: React.ReactNode }) {
+  const shown = useKeyed(keys, from);
   const toggle = () => {
     if (anim) return set(null);
     // A sensible far end: the other half of the range, or a contrasting colour.
@@ -26,13 +93,17 @@ export function Keyframed({ label, anim, from, color, range, start, set, childre
     set(() => undefined, { to, period: 2, phase: 0, mode: 'swing', ...start });
     clock.play(timelineOf(store.get().project));
   };
+  const keyed = !!keys?.length;
   return (
     <div className={`animatable ${anim ? 'on' : ''}`}>
       <div className="animatable-row">
         {children}
-        <button className={`keyframe ${anim ? 'on' : ''}`} aria-pressed={!!anim} aria-label={`Animate ${label}`} data-tip={anim ? `Stop animating ${label}` : `Animate ${label}`} onClick={toggle}>
-          <Icon name="keyframe" size={11} />
-        </button>
+        <span className="key-buttons">
+          {setKeys && <KeyButtons label={label} keys={keys} value={shown} set={setKeys} />}
+          <button className={`keyframe cycle ${anim ? 'on' : ''}`} aria-pressed={!!anim} aria-label={`Animate ${label}`} data-tip={anim ? `Stop ${label} cycling` : keyed ? `Cycle ${label} on its own instead of its keys` : `Cycle ${label}: to and fro on its own`} onClick={toggle}>
+            <Icon name="repeat" size={11} />
+          </button>
+        </span>
       </div>
       {anim && (
         <div className="anim-sub">
@@ -59,6 +130,16 @@ export function Keyframed({ label, anim, from, color, range, start, set, childre
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** A field with ‹ ◆ › and no cycle: the transform and opacity. */
+export function KeyedField({ label, keys, value, set, children, className = 'animatable-row' }: { label: string; keys: Key[] | undefined; value: number | string; set: SetKeysOf; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={className}>
+      {children}
+      <KeyButtons label={label} keys={keys} value={value} set={set} />
     </div>
   );
 }

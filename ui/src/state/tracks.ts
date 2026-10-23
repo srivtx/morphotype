@@ -7,12 +7,14 @@
 //   Then       the same, with a segment for each stop on its path
 //   Loop       cycles across the whole timeline, fitted to it when looping
 //   Setting    a material, modifier or shape setting going to and fro
+//   Keys       a property's keys, one diamond each (see keys.ts)
 //   Pattern    a pattern with Speed, flowing the whole time
 import { effectById } from '../render/effects';
 import type { Timeline } from './clock';
 import { textPieces } from './letters';
+import { isTransformProp, TRANSFORM_LABELS, type KeyScope } from './keys';
 import { isGroup, MODIFIER_UI, SYMBOL_UI, type Group, type Node, type Project } from './model';
-import { ENTER_OPTIONS, lastSlot, LEAVE_OPTIONS, leaveEnd, legsOf, loopPeriod, LOOP_OPTIONS, seedOf, settleTime, staggerSlot, type Motion, type ParamAnim } from './motion';
+import { ENTER_OPTIONS, lastSlot, LEAVE_OPTIONS, leaveEnd, legsOf, loopPeriod, LOOP_OPTIONS, seedOf, settleTime, staggerSlot, type Key, type Motion, type ParamAnim } from './motion';
 
 /** An entrance or Then: a clip from when it starts to when it settles. */
 export interface Clip {
@@ -37,6 +39,8 @@ export type Track =
   | (Clip & { kind: 'leave' })
   | { kind: 'loop'; owner: string; motion: Motion; period: number; label: string }
   | { kind: 'param'; owner: string; scope: 'style' | 'geo'; key: string; anim: ParamAnim; period: number; label: string; color: boolean; from: number | string; range: { min: number; max: number; step: number } }
+  /** A property's keys: `scope` says which bag they're in (the style's for materials). */
+  | { kind: 'keys'; owner: string; scope: KeyScope; key: string; keys: Key[]; label: string; color: boolean; range: { min: number; max: number; step: number } }
   /** A material that moves by itself (a pattern's or chrome's Speed, a neon's Flicker). */
   | { kind: 'flow'; owner: string; key: string; value: number; title: string; label: string; range: { min: number; max: number; step: number } };
 
@@ -90,8 +94,19 @@ export function paramInfo(n: Node, scope: 'style' | 'geo', key: string): { label
   return { label: field, color: false, from: 0, range: { min: 0, max: 1, step: 0.01 } };
 }
 
+/** A transform property's name and range; any other key's from paramInfo. */
+export function keyInfo(n: Node, scope: KeyScope, key: string, p?: Project): { label: string; color: boolean; range: { min: number; max: number; step: number } } {
+  if (scope === 'node' && isTransformProp(key)) {
+    const w = Math.max(p?.canvas.width ?? 2000, p?.canvas.height ?? 2000);
+    const range = { x: { min: -w, max: w, step: 1 }, y: { min: -w, max: w, step: 1 }, rotation: { min: -720, max: 720, step: 0.5 }, scale: { min: 0, max: 5, step: 0.01 }, opacity: { min: 0, max: 1, step: 0.01 } }[key];
+    return { label: TRANSFORM_LABELS[key], color: false, range };
+  }
+  const { label, color, range } = paramInfo(n, scope === 'style' ? 'style' : 'geo', key);
+  return { label, color, range };
+}
+
 /** The tracks on one node: its own motion, a staggered parent's entrance, its moving settings. */
-export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: number }): Track[] {
+export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: number }, p?: Project): Track[] {
   const L = loopLengthOf(tl);
   const out: Track[] = [];
   const g = parent?.group;
@@ -121,11 +136,17 @@ export function tracksOf(n: Node, tl: Timeline, parent?: { group: Group; index: 
     }
     if (m.loop !== 'none') out.push({ kind: 'loop', owner: n.id, motion: m, period: loopPeriod(m.period, L), label: optionLabel(LOOP_OPTIONS, m.loop) });
   }
+  // Keys, transform first; a setting with keys follows them, not its cycle.
+  for (const [scope, bag] of [['node', n.keys], ['style', n.style.keys]] as const) {
+    for (const [key, keys] of Object.entries(bag ?? {})) if (keys.length) out.push({ kind: 'keys', owner: n.id, scope, key, keys, ...keyInfo(n, scope, key, p) });
+  }
   for (const [key, anim] of Object.entries(n.style.animate ?? {})) {
+    if (n.style.keys?.[key]?.length) continue;
     const info = paramInfo(n, 'style', key);
     out.push({ kind: 'param', owner: n.id, scope: 'style', key, anim, period: loopPeriod(anim.period, L), ...info });
   }
   for (const [key, anim] of Object.entries(n.animate ?? {})) {
+    if (n.keys?.[key]?.length) continue;
     const info = paramInfo(n, 'geo', key);
     out.push({ kind: 'param', owner: n.id, scope: 'geo', key, anim, period: loopPeriod(anim.period, L), ...info });
   }
@@ -152,7 +173,7 @@ export function rowsOf(p: Project, selection: string[]): Row[] {
     // Top of the stack first, as in the Layers panel.
     for (let i = nodes.length - 1; i >= 0; i--) {
       const n = nodes[i];
-      const tracks = tracksOf(n, tl, parent ? { group: parent, index: i } : undefined);
+      const tracks = tracksOf(n, tl, parent ? { group: parent, index: i } : undefined, p);
       const inner = isGroup(n) && !n.merge ? walkNodes(n.children, depth + 1, n) : [];
       if (!tracks.length && !inner.length && !picked.has(n.id)) continue;
       rows.push({ node: n, depth, parent: inner.length > 0, tracks }, ...inner);

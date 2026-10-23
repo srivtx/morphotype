@@ -3,36 +3,39 @@
 // layer that moves and a track for each thing that moves it, placed in time
 // exactly as it plays: entrances as clips from start to settle, loops and
 // moving settings as their cycles with the real curve drawn in, colours as
-// the colours they pass through. Drag a clip to change when it starts, its
-// end to change how long it takes, a cycle to shift it, a cycle mark to
-// change its length; click to edit it. The ruler counts seconds and frames.
+// the colours they pass through, keys as diamonds on a row per property.
+// Drag a clip to change when it starts, its end to change how long it takes,
+// a cycle to shift it, a cycle mark to change its length, a diamond to
+// retime its key; click to edit it. The ruler counts seconds and frames, and
+// the record switch (autokey) keys every change at the playhead.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { exportVideo } from '../../app/actions';
 import { effectById } from '../../render/effects';
 import { clock, DEFAULT_TIMELINE, timelineOf, type Timeline } from '../../state/clock';
-import { addStop, animatedValue, animMix, ENTER_UI, isStill, lastSlot, legsOf, LOOP_UI, motionEnd, newMotion, poseAt, progressAt, seedOf, settleTime, staggerSlot, thenTransition, type LoopKind, type Motion, type ParamAnim, type Transition } from '../../state/motion';
+import { autokey, easeName, easeNamed, hasKeys, KEY_SNAP, lastKeyTime, onFrame, updateKeys } from '../../state/keys';
+import { addStop, animatedValue, animMix, ENTER_UI, isStill, KEY_EASE, keyedValue, lastSlot, legsOf, LOOP_UI, motionEnd, newMotion, poseAt, progressAt, seedOf, settleTime, staggerSlot, thenTransition, type Key, type LoopKind, type Motion, type ParamAnim, type Transition } from '../../state/motion';
 import { isGroup, type Node, type Project } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, useStore } from '../../state/store';
 import { frameAt, loopLengthOf, rowsOf, snapTime, type Clip, type Row, type Track } from '../../state/tracks';
 import { findNode } from '../../state/tree';
 import { ColorField } from '../ColorPicker';
 import { Icon } from '../icons';
-import { AdvancedSwitch, ChildrenControls, CycleSlider, EnterControls, LettersControls, LoopControls, StopControls, ThenControls } from '../MotionPanel';
+import { AdvancedSwitch, ChildrenControls, CycleSlider, EnterControls, LettersControls, LoopControls, StopControls, ThenControls, TransitionEditor, useMotionAdvanced } from '../MotionPanel';
 import { textPieces } from '../../state/letters';
-import { Popover, Segmented, Slider } from '../ui';
+import { Popover, Segmented, Select, Slider } from '../ui';
 
 /** Frames per second: what video export renders, and what the ruler and drags count in. */
 export const FPS = 30;
 
-/** Anything on the clock: motion on a node, a moving material or moving geometry. */
+/** Anything on the clock: motion on a node, a moving material, moving geometry or keys. */
 export function sceneMoves(p: Project): boolean {
-  const any = (ns: Node[]): boolean => ns.some((n) => !isStill(n.motion) || Object.keys(n.style.animate ?? {}).length > 0 || Object.keys(n.animate ?? {}).length > 0 || !!effectById(n.style.effect).animated?.(n.style.params) || (isGroup(n) && any(n.children)));
+  const any = (ns: Node[]): boolean => ns.some((n) => !isStill(n.motion) || Object.keys(n.style.animate ?? {}).length > 0 || Object.keys(n.animate ?? {}).length > 0 || hasKeys(n) || !!effectById(n.style.effect).animated?.(n.style.params) || (isGroup(n) && any(n.children)));
   return any(p.layers);
 }
 
-/** When the last entrance or Then settles, so the timeline can be fitted to it. */
+/** When the last entrance or Then settles, or the last key, so the timeline can be fitted to it. */
 function lastEntrance(ns: Node[]): number {
-  return Math.max(0, ...ns.map((n) => Math.max(n.motion ? motionEnd(n.motion, isGroup(n) && !n.merge ? n.children.length : textPieces(n)) : 0, isGroup(n) ? lastEntrance(n.children) : 0)));
+  return Math.max(lastKeyTime(ns), ...ns.map((n) => Math.max(n.motion ? motionEnd(n.motion, isGroup(n) && !n.merge ? n.children.length : textPieces(n)) : 0, isGroup(n) ? lastEntrance(n.children) : 0)));
 }
 
 /** Re-render every frame while playing, and on play / pause / seek (scrubbing while paused included). */
@@ -133,9 +136,30 @@ function TimeReadout({ tl, frames }: { tl: Timeline; frames?: boolean }) {
   );
 }
 
+/** Autokey: while it's on, changing any setting writes a key at the playhead (see keys.ts). */
+function RecordButton({ tl }: { tl: Timeline }) {
+  const on = useSyncExternalStore(autokey.subscribe, () => autokey.on);
+  return (
+    <button
+      className={`icon-btn tl-rec ${on ? 'on' : ''}`}
+      aria-pressed={on}
+      aria-label="Autokey"
+      data-tip={on ? 'Autokey is on: every change you make writes a key at the playhead' : 'Autokey: record every change as a key at the playhead'}
+      onClick={() => {
+        autokey.set(!on);
+        // Keys go where the playhead stands.
+        if (!on) clock.pause(tl);
+      }}
+    >
+      <Icon name="record" size={15} />
+    </button>
+  );
+}
+
 function LoopAndExport({ tl }: { tl: Timeline }) {
   return (
     <>
+      <RecordButton tl={tl} />
       <button className={`icon-btn ${tl.loop ? 'on' : ''}`} aria-pressed={tl.loop} aria-label="Loop" data-tip={tl.loop ? 'Looping: loops are adjusted to fit a whole number of times' : 'Plays once'} onClick={() => setTl({ loop: !tl.loop })}>
         <Icon name="repeat" size={15} />
       </button>
@@ -213,11 +237,11 @@ interface Editing {
   row: string;
   id: string;
   anchor: HTMLElement;
-  /** Then with stops: which step of the path (0 is Move to… itself). */
+  /** Then with stops: which step of the path (0 is Move to… itself); keys: which key. */
   step?: number;
 }
 
-const trackId = (k: Track) => (k.kind === 'param' ? `${k.kind}:${k.scope}:${k.key}` : (k.kind === 'enter' || k.kind === 'leave') && k.index !== undefined ? `${k.kind}:inherited` : k.kind);
+const trackId = (k: Track) => (k.kind === 'param' || k.kind === 'keys' ? `${k.kind}:${k.scope}:${k.key}` : (k.kind === 'enter' || k.kind === 'leave') && k.index !== undefined ? `${k.kind}:inherited` : k.kind);
 
 function Dock({ project, height, onHeight, onFold }: { project: Project; height: number; onHeight: (h: number) => void; onFold: () => void }) {
   const tl = timelineOf(project);
@@ -296,7 +320,7 @@ function Dock({ project, height, onHeight, onFold }: { project: Project; height:
             </div>
           </div>
           <Rows rows={shown} tl={tl} laneW={laneW} selection={selection} folded={folded} onFold={toggleFold} onEdit={setEditing} />
-          {!rows.length && <p className="tl-empty">Select a layer to give it an entrance or a loop. To move a colour or any setting, click ◆ next to it in the panel.</p>}
+          {!rows.length && <p className="tl-empty">Select a layer to give it an entrance or a loop. To key a colour, a position or any setting, click ◆ next to it in the panel.</p>}
           <Playhead tl={tl} />
         </div>
       </div>
@@ -359,17 +383,17 @@ interface RowsProps {
 /** The rows don't depend on the playhead, so they only re-render when the design or selection changes. */
 const Rows = memo(function Rows({ rows, tl, laneW, selection, folded, onFold, onEdit }: RowsProps) {
   const all = rows.flatMap((r) => r.tracks);
-  // Clip edges anything can snap to.
-  const edges = [0, ...all.flatMap((k) => (k.kind === 'enter' || k.kind === 'leave' ? [k.start, k.end, ...(k.steps ?? []).flatMap((p) => [p.start, p.end])] : []))];
+  // Clip edges and keys anything can snap to.
+  const edges = [0, ...all.flatMap((k) => (k.kind === 'enter' || k.kind === 'leave' ? [k.start, k.end, ...(k.steps ?? []).flatMap((p) => [p.start, p.end])] : k.kind === 'keys' ? k.keys.map((x) => x.t) : []))];
   const ctx: LaneCtx = { tl, laneW, edges, onEdit };
   return (
     <>
       {rows.map((r) => {
         const sel = selection.includes(r.node.id);
         const pick = (e: React.MouseEvent) => select(e.shiftKey || e.metaKey ? (sel ? selection.filter((x) => x !== r.node.id) : [...selection, r.node.id]) : [r.node.id]);
-        // One track sits on the layer's own row; more get a row each under it.
-        const own = r.tracks.length === 1 ? r.tracks : [];
-        const subs = r.tracks.length > 1 ? r.tracks : [];
+        // One track sits on the layer's own row; more (or keys, which need their property's name) get a row each under it.
+        const own = r.tracks.length === 1 && r.tracks[0].kind !== 'keys' ? r.tracks : [];
+        const subs = own.length ? [] : r.tracks;
         return (
           <div key={r.node.id} className={`tl-layer ${sel ? 'selected' : ''}`} data-row={r.node.id}>
             <div className="tl-row">
@@ -417,7 +441,7 @@ const Rows = memo(function Rows({ rows, tl, laneW, selection, folded, onFold, on
   );
 });
 
-const trackName = (k: Track) => (k.kind === 'enter' ? 'Comes in' : k.kind === 'leave' ? 'Then' : k.kind === 'loop' ? 'Loop' : k.kind === 'flow' ? k.title : k.label);
+const trackName = (k: Track) => (k.kind === 'enter' ? 'Comes in' : k.kind === 'leave' ? 'Then' : k.kind === 'loop' ? 'Loop' : k.kind === 'flow' ? k.title : k.kind === 'keys' ? `◆ ${k.label}` : k.label);
 
 /** A layer's tracks summed up on its own row: where each one is busy. */
 function Overview({ tracks, tl }: { tracks: Track[]; tl: Timeline }) {
@@ -425,7 +449,7 @@ function Overview({ tracks, tl }: { tracks: Track[]; tl: Timeline }) {
   return (
     <div className="tl-overview">
       {tracks.map((k) => {
-        const [a, b] = k.kind === 'enter' || k.kind === 'leave' ? [Math.min(k.start, d), Math.min(k.end, d)] : [0, d];
+        const [a, b] = k.kind === 'enter' || k.kind === 'leave' ? [Math.min(k.start, d), Math.min(k.end, d)] : k.kind === 'keys' ? [Math.min(k.keys[0].t, d), Math.min(k.keys[k.keys.length - 1].t, d)] : [0, d];
         return <i key={trackId(k)} style={{ left: pct(a, d), width: pct(b - a, d) }} />;
       })}
     </div>
@@ -509,7 +533,7 @@ function AddMenu({ node }: { node: Node }) {
             <span className="mi-label">Add a stop</span>
             <kbd>after Then</kbd>
           </button>
-          <p className="menu-note">To move a colour or any setting, click ◆ next to it in the Design or Style panel.</p>
+          <p className="menu-note">To key a position, a colour or any setting, click ◆ next to it in the Design or Style panel; ↻ makes it cycle on its own.</p>
         </Popover>
       )}
     </>
@@ -572,6 +596,7 @@ function TrackView({ row, track: k, ctx }: { row: Node; track: Track; ctx: LaneC
   // Snap to frames, the playhead and other clips' edges within 6 px.
   const snap = (t: number) => snapTime(t, FPS, [...ctx.edges, clock.time(tl)], (6 * tl.duration) / Math.max(1, ctx.laneW));
   if (k.kind === 'enter' || k.kind === 'leave') return <EnterClip k={k} ctx={ctx} open={open} snap={snap} />;
+  if (k.kind === 'keys') return <KeyLane row={row} k={k} ctx={ctx} open={open} />;
   if (k.kind === 'flow')
     return (
       <div className="tl-clip tl-flow" onPointerDown={dragger(ctx, open, () => {})} data-tip={k.key === 'speed' ? 'It moves by itself the whole time, a whole number of times round each loop' : 'It flickers by itself the whole time'}>
@@ -820,6 +845,7 @@ function CycleClip({ row, k, ctx, open }: { row: Node; k: Extract<Track, { kind:
 
 /** The editor that opens on a clip: everything about that one track, with the same controls as the Motion panel. */
 function ClipEditor({ row, track: k, step, onDone }: { row: Node; track: Track; step?: number; onDone: () => void }) {
+  if (k.kind === 'keys') return <KeyEditor row={row} k={k} index={step ?? 0} onDone={onDone} />;
   const owner = k.owner;
   const setMotion = (fn: (m: Motion) => void, key = '') =>
     editNode(
@@ -947,5 +973,180 @@ function ParamAdvanced({ anim, set }: { anim: ParamAnim; set: (fn: (a: ParamAnim
       </div>
       <Slider label="Offset" min={0} max={1} step={0.01} reset={0} value={anim.phase} onChange={(v) => set((x) => (x.phase = v), 'phase')} />
     </>
+  );
+}
+
+type KeyTrack = Extract<Track, { kind: 'keys' }>;
+
+/** Change one property's keys on the row's node (see keys.ts updateKeys). */
+const editKeys = (row: Node, k: KeyTrack, fn: (keys: Key[]) => Key[] | null | void, field = '') => editNode(row.id, (n) => updateKeys(n, k.scope, k.key, fn), field && `tl:${row.id}:${trackId(k)}:${field}`);
+
+/** Stop at a key: paused there, so the panels show (and edit) its value. */
+const seekTo = (t: number, tl: Timeline) => {
+  clock.pause(tl);
+  clock.seek(t);
+};
+
+/**
+ * A property's keys: a diamond at each over the value they trace (or the
+ * colours they pass through). Drag a diamond to retime its key, click it to
+ * edit it, ⌫ to delete it, ← → to nudge it a frame (⇧: ten).
+ */
+function KeyLane({ row, k, ctx, open }: { row: Node; k: KeyTrack; ctx: LaneCtx; open: (el: HTMLElement, step?: number) => void }) {
+  const { tl } = ctx;
+  const d = tl.duration;
+  const { path, gradient } = useMemo(() => {
+    const N = 200;
+    const v = Array.from({ length: N + 1 }, (_, i) => keyedValue(k.keys, (i / N) * d));
+    if (k.color) return { path: '', gradient: `linear-gradient(90deg, ${v.filter((_, i) => i % 5 === 0).map((c, j, all) => `${c} ${((j / (all.length - 1)) * 100).toFixed(1)}%`).join(', ')})` };
+    const nums = v.map(Number);
+    const lo = Math.min(...nums);
+    const hi = Math.max(...nums);
+    return { path: nums.map((y, i) => `${i ? 'L' : 'M'}${((i / N) * 1000).toFixed(1)} ${(88 - ((y - lo) / (hi - lo || 1)) * 76).toFixed(2)}`).join(' '), gradient: undefined };
+  }, [k.keys, k.color, d]);
+  const first = Math.min(k.keys[0].t, d);
+  const last = Math.min(k.keys[k.keys.length - 1].t, d);
+  // Snap to frames, the playhead, clip edges and other keys within 6 px.
+  const snap = (t: number) => snapTime(t, FPS, [...ctx.edges, clock.time(tl)], (6 * d) / Math.max(1, ctx.laneW));
+  /** Key `i` moved to `t`: a key it lands on gives way. */
+  const retime = (i: number, t: number, field: string) =>
+    editKeys(
+      row,
+      k,
+      () => {
+        const at = Math.max(0, Math.min(d, onFrame(t)));
+        return [...k.keys.filter((x, j) => j !== i && Math.abs(x.t - at) >= KEY_SNAP), { ...k.keys[i], t: at }];
+      },
+      field,
+    );
+  return (
+    <div className={`tl-keys ${gradient ? 'colour' : ''}`} data-tip={`${k.label}: ${k.keys.length} key${k.keys.length === 1 ? '' : 's'}. Drag a diamond to retime it, click to edit it, ⌫ to delete it`}>
+      {gradient ? (
+        <i className="tl-keys-colour" style={{ background: gradient }} />
+      ) : (
+        <svg className="tl-wave" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden>
+          <path d={path} />
+        </svg>
+      )}
+      <i className="tl-keys-span" style={{ left: pct(first, d), width: pct(last - first, d) }} />
+      {k.keys.map((key, i) => (
+        <button
+          key={`${i}:${key.t}`}
+          className="tl-key"
+          style={{ left: pct(Math.min(key.t, d), d) }}
+          aria-label={`${k.label} key at ${key.t.toFixed(2)} s`}
+          data-tip={`${k.label} ${typeof key.v === 'number' ? +key.v.toFixed(2) : key.v} at ${key.t.toFixed(2)} s (frame ${frameAt(key.t, FPS)})${i ? `, ${easeName(key.ease)}` : ''}`}
+          onPointerDown={dragger(
+            ctx,
+            (el) => {
+              seekTo(key.t, tl);
+              open(el, i);
+            },
+            (ds) => retime(i, snap(key.t + ds), `key${i}`),
+          )}
+          onKeyDown={(e) => {
+            if (e.key === 'Backspace' || e.key === 'Delete') {
+              e.preventDefault();
+              e.stopPropagation();
+              editKeys(row, k, (keys) => keys.filter((_, j) => j !== i));
+            } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+              e.preventDefault();
+              e.stopPropagation();
+              retime(i, key.t + (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 10 : 1) / FPS, `nudge${i}`);
+            }
+          }}
+        >
+          <Icon name="keyframe" size={11} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Curves a key can come in on, by name (Advanced edits any curve or spring). */
+const KEY_CURVES = ['ease in out', 'ease out', 'ease in', 'linear', 'back out', 'bouncy', 'snappy'].map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }));
+
+/** The editor on a key: its value, when it is, and the curve into it. */
+function KeyEditor({ row, k, index, onDone }: { row: Node; k: KeyTrack; index: number; onDone: () => void }) {
+  const adv = useMotionAdvanced();
+  const tl = timelineOf(store.get().project);
+  // Found by its time, which this editor can change.
+  const [at, setAt] = useState(k.keys[index]?.t ?? 0);
+  const i = k.keys.findIndex((x) => Math.abs(x.t - at) < 1e-6);
+  const key = k.keys[i];
+  if (!key) return null;
+  const set = (fn: (x: Key, all: Key[]) => void, field: string) =>
+    editKeys(
+      row,
+      k,
+      (keys) => {
+        const x = keys.find((y) => Math.abs(y.t - at) < 1e-6);
+        if (x) fn(x, keys);
+      },
+      field,
+    );
+  const go = (j: number) => {
+    const t = k.keys[j].t;
+    setAt(t);
+    seekTo(t, tl);
+  };
+  const curve = easeName(key.ease);
+  return (
+    <div className="tl-edit">
+      <header>
+        <b>◆ {k.label}</b>
+        <span>
+          {row.name} · key {i + 1} of {k.keys.length}
+        </span>
+        <AdvancedSwitch />
+      </header>
+      {k.color ? <ColorField label="Value" value={String(key.v)} onChange={(v) => set((x) => (x.v = v), 'v')} /> : <Slider label="Value" min={k.range.min} max={k.range.max} step={k.range.step} value={Number(key.v)} onChange={(v) => set((x) => (x.v = v), 'v')} />}
+      <Slider
+        label="At"
+        min={0}
+        max={tl.duration}
+        step={1 / FPS}
+        suffix="s"
+        value={key.t}
+        onChange={(v) => {
+          const t = Math.max(0, Math.min(tl.duration, onFrame(v)));
+          set((x, all) => {
+            for (let j = all.length - 1; j >= 0; j--) if (all[j] !== x && Math.abs(all[j].t - t) < KEY_SNAP) all.splice(j, 1);
+            x.t = t;
+          }, 't');
+          setAt(t);
+        }}
+      />
+      {i > 0 &&
+        (adv ? (
+          <>
+            <TransitionEditor value={key.ease ?? KEY_EASE} onChange={(tr, field) => set((x) => (x.ease = tr), `ease.${field}`)} />
+            <p className="hint">Stretched over the {(key.t - k.keys[i - 1].t).toFixed(2)} s from the key before (a physics spring keeps its own pace).</p>
+          </>
+        ) : (
+          <div className="dial-row">
+            <span>Curve in</span>
+            <Select value={curve} options={KEY_CURVES.some((c) => c.value === curve) ? KEY_CURVES : [...KEY_CURVES, { value: curve, label: 'Custom' }]} onChange={(v) => set((x) => (v === 'ease in out' ? delete x.ease : (x.ease = easeNamed(v))), 'ease')} />
+          </div>
+        ))}
+      {i === 0 && <p className="hint">The first key: it holds this value until here.</p>}
+      <div className="button-row">
+        <button className="btn small" disabled={i === 0} onClick={() => go(i - 1)} aria-label="Previous key">
+          <Icon name="chevronLeft" size={12} /> Previous
+        </button>
+        <button className="btn small" disabled={i === k.keys.length - 1} onClick={() => go(i + 1)} aria-label="Next key">
+          Next <Icon name="chevronRight" size={12} />
+        </button>
+      </div>
+      <button
+        className="btn tl-remove"
+        onClick={() => {
+          set((x, all) => all.splice(all.indexOf(x), 1), '');
+          onDone();
+        }}
+      >
+        Delete key
+      </button>
+    </div>
   );
 }

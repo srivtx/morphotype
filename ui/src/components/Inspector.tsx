@@ -15,13 +15,14 @@ import { edit, select, setSettings, store, toast, undo, useStore } from '../stat
 import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../state/icon';
 import { allLayers, findNode } from '../state/tree';
 import { lineAnimKey, modAnimKey, MORPH_KEY, pruneGeoAnims, symAnimKey, TRIM_DEFAULT } from '../state/geoMotion';
-import type { ParamAnim } from '../state/motion';
+import { updateKeys, type KeyTracks } from '../state/keys';
+import { keyedNumber, type ParamAnim } from '../state/motion';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
 import { MotionSection } from './MotionPanel';
 import { Icon } from './icons';
 import { EffectThumb } from './StylePanel';
-import { Keyframed, type SetAnimOf } from './Keyframed';
+import { Keyframed, KeyedField, useKeyed, usePlayhead, type SetAnimOf, type SetKeysOf } from './Keyframed';
 import { ModifierPicker, ShapePicker } from './pickers';
 import { IconButton, Menu, MenuItem, MenuSep, NumberBox, Popover, Section, Segmented, Select, Slider, Toggle } from './ui';
 
@@ -176,11 +177,14 @@ function shownColors(st: Style) {
 
 /** Material and colour, right where you select: the most common edits. */
 function Appearance({ nodes }: { nodes: Node[] }) {
+  const t = usePlayhead();
   const owners = nodes.filter((n) => !isGroup(n) || n.merge);
   const plainGroup = nodes.length === 1 && isGroup(nodes[0]) && !nodes[0].merge;
   if (plainGroup) return null;
   if (!owners.length) return null;
   const st = styleOf(owners.at(-1)!)!;
+  const opacityKeys = owners.at(-1)!.keys?.opacity;
+  const opacity = keyedNumber(opacityKeys, t, st.opacity ?? 1);
   const def = effectById(st.effect);
   const clipOnly = owners.every((n) => n.op !== 'add');
   const colors = shownColors(st);
@@ -227,7 +231,9 @@ function Appearance({ nodes }: { nodes: Node[] }) {
       </div>
       <div className="blend-row">
         <Slider label="Soften" value={st.soften ?? 0} min={0} max={120} step={0.5} suffix="px" reset={0} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.soften = v || undefined; }), `soft:${ids.join()}`)} />
-        <Slider label="Opacity" value={st.opacity ?? 1} min={0} max={1} step={0.01} reset={1} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.opacity = v; }), `op:${ids.join()}`)} />
+        <KeyedField label="Opacity" keys={opacityKeys} value={opacity} set={(fn) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) updateKeys(n, 'node', 'opacity', fn); }), `opkeys:${ids.join()}`)}>
+          <Slider label="Opacity" value={opacity} min={0} max={1} step={0.01} reset={1} onChange={(v) => edit((p) => ids.forEach((id) => { const n = findNode(p.layers, id); if (n) n.style.opacity = v; }), `op:${ids.join()}`)} />
+        </KeyedField>
         <div className="field">
           <span>Blend</span>
           <Segmented
@@ -313,6 +319,7 @@ function DepthEditor({ ids, value }: { ids: string[]; value: Depth | null }) {
 function TransformSection({ nodes }: { nodes: Node[] }) {
   const build = useStore((s) => s.build);
   const [lockRatio, setLockRatio] = useState(true);
+  const t = usePlayhead();
   const only = nodes.length === 1 && !isGroup(nodes[0]) ? (nodes[0] as ShapeLayer) : null;
   const local = only ? build?.layers.find((o) => o.id === only.id)?.local : null;
   const box = unionBox(nodes);
@@ -330,6 +337,12 @@ function TransformSection({ nodes }: { nodes: Node[] }) {
     const lh = local[3] - local[1];
     const w = Math.abs(lw * only.scale * (only.sx ?? 1));
     const h = Math.abs(lh * only.scale * (only.sy ?? 1));
+    // Keyed, the fields show the keys' values at the playhead; typing moves the key there (see keys.ts keyEdits).
+    const x = keyedNumber(only.keys?.x, t, only.x);
+    const y = keyedNumber(only.keys?.y, t, only.y);
+    const rotation = keyedNumber(only.keys?.rotation, t, only.rotation);
+    const scale = keyedNumber(only.keys?.scale, t, only.scale);
+    const setKeys = (k: string): SetKeysOf => (fn) => updateNode(only.id, (n) => updateKeys(n, 'node', k, fn), `keys:${only.id}:${k}`);
     const setSize = (nw: number, nh: number) =>
       updateNode(only.id, (n) => {
         if (isGroup(n) || lw <= 0 || lh <= 0) return;
@@ -341,15 +354,23 @@ function TransformSection({ nodes }: { nodes: Node[] }) {
     return (
       <Section title="Position and size" id="transform">
         <div className="grid2">
-          <NumberBox label="X" value={only.x} onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.x = v), 'x')} title="Horizontal position of the layer origin (0 = artboard centre)" />
-          <NumberBox label="Y" value={only.y} onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.y = v), 'y')} title="Vertical position (0 = artboard centre)" />
+          <KeyedField className="keyed-box" label="X" keys={only.keys?.x} value={x} set={setKeys('x')}>
+            <NumberBox label="X" value={x} onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.x += v - x), 'x')} title="Horizontal position of the layer origin (0 = artboard centre)" />
+          </KeyedField>
+          <KeyedField className="keyed-box" label="Y" keys={only.keys?.y} value={y} set={setKeys('y')}>
+            <NumberBox label="Y" value={y} onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.y += v - y), 'y')} title="Vertical position (0 = artboard centre)" />
+          </KeyedField>
           <NumberBox label="W" value={w} min={1} onChange={(v) => setSize(v, lockRatio ? (v / (w || 1)) * h : h)} />
           <div className="with-lock">
             <NumberBox label="H" value={h} min={1} onChange={(v) => setSize(lockRatio ? (v / (h || 1)) * w : w, v)} />
             <IconButton icon={lockRatio ? 'lock' : 'unlock'} title={lockRatio ? 'Proportions locked' : 'Proportions free'} active={lockRatio} onClick={() => setLockRatio(!lockRatio)} size={13} className="tiny" />
           </div>
-          <NumberBox label="↻" value={only.rotation} step={0.5} suffix="°" title="Rotation" onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.rotation = v), 'rot')} />
-          <NumberBox label="%" value={only.scale * 100} step={1} min={1} title="Overall scale" onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.scale = Math.max(0.01, v / 100)), 'scale')} />
+          <KeyedField className="keyed-box" label="Rotation" keys={only.keys?.rotation} value={rotation} set={setKeys('rotation')}>
+            <NumberBox label="↻" value={rotation} step={0.5} suffix="°" title="Rotation" onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.rotation += v - rotation), 'rot')} />
+          </KeyedField>
+          <KeyedField className="keyed-box" label="Scale" keys={only.keys?.scale} value={scale} set={setKeys('scale')}>
+            <NumberBox label="%" value={scale * 100} step={1} min={1} title="Overall scale" onChange={(v) => updateNode(only.id, (n) => !isGroup(n) && (n.scale = Math.max(0.01, (n.scale * Math.max(0.01, v / 100)) / Math.max(1e-3, scale))), 'scale')} />
+          </KeyedField>
         </div>
         {(Math.abs((only.sx ?? 1) - 1) > 1e-3 || Math.abs((only.sy ?? 1) - 1) > 1e-3) && (
           <button className="link-btn" onClick={() => updateNode(only.id, (n) => !isGroup(n) && ((n.sx = Math.sign(n.sx ?? 1) || 1), (n.sy = Math.sign(n.sy ?? 1) || 1)))}>
@@ -512,10 +533,12 @@ function GroupEditor({ g }: { g: Group }) {
   );
 }
 
-/** Keyframes on a node's modifier and shape settings: they rebuild its outline on the scene clock. */
+/** Cycles and keys on a node's modifier and shape settings: they rebuild its outline on the scene clock. */
 interface GeoAnims {
   of: Record<string, ParamAnim> | undefined;
   set: (key: string) => SetAnimOf;
+  keys: KeyTracks | undefined;
+  setKeys: (key: string) => SetKeysOf;
 }
 
 function geoAnims(n: Node): GeoAnims {
@@ -527,20 +550,27 @@ function geoAnims(n: Node): GeoAnims {
         (x) => {
           const all = (x.animate ??= {});
           if (!fn) delete all[k];
-          else fn((all[k] ??= structuredClone(init ?? { to: 0, period: 2, phase: 0, mode: 'swing' })));
+          else {
+            // A cycle replaces keys on the same setting.
+            if (!all[k]) updateKeys(x, 'node', k, () => null);
+            fn((all[k] ??= structuredClone(init ?? { to: 0, period: 2, phase: 0, mode: 'swing' })));
+          }
           if (!Object.keys(all).length) delete x.animate;
         },
         fn ? `ganim:${n.id}:${k}` : '',
       ),
+    keys: n.keys,
+    setKeys: (k) => (fn) => updateNode(n.id, (x) => updateKeys(x, 'node', k, fn), `gkeys:${n.id}:${k}`),
   };
 }
 
-/** A number slider, with a keyframe button where the setting can move. */
+/** A number slider, with keys and a cycle where the setting can move (showing its keys' value at the playhead). */
 function KeyedSlider({ anims, k, label, min, max, step, value, reset, start, onChange }: { anims?: GeoAnims; k: string; label: string; min: number; max: number; step: number; value: number; reset?: number; start?: Partial<ParamAnim>; onChange: (v: number) => void }) {
-  const slider = <Slider label={label} min={min} max={max} step={step} value={value} reset={reset} onChange={onChange} />;
+  const shown = useKeyed(anims?.keys?.[k], value);
+  const slider = <Slider label={label} min={min} max={max} step={step} value={Number(shown)} reset={reset} onChange={onChange} />;
   if (!anims) return slider;
   return (
-    <Keyframed label={label} anim={anims.of?.[k]} from={value} range={{ min, max, step }} start={start} set={anims.set(k)}>
+    <Keyframed label={label} anim={anims.of?.[k]} from={value} range={{ min, max, step }} start={start} set={anims.set(k)} keys={anims.keys?.[k]} setKeys={anims.setKeys(k)}>
       {slider}
     </Keyframed>
   );
