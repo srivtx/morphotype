@@ -100,6 +100,7 @@ npm install
 | Build the web app | `npm run build` (output in `dist/`) |
 | Rust and UI unit tests | `npm test` |
 | Browser end-to-end test | `npm run build && npm run test:e2e` |
+| Design from the command line, for AI agents and scripts (catalog, describe, edit, render, variations, checks; see [docs/AGENT-TOOLS.md](docs/AGENT-TOOLS.md)) | `npm run morpho -- help` |
 | Live render studio (templates → PNG, compare with a reference) | `node scripts/studio.mjs`, then e.g. `curl '127.0.0.1:7799/compare?tpl=UFO%20poster&ref=ref.png&out=diff.png'` |
 | Frame cost of moving geometry (1, 10, 50 animated pen lines, on the GPU) | `npx vite --port 1437`, then `node scripts/perf-geo.mjs` |
 | Measure an outline on a reference picture | `cargo run --release --example refpath -- mask.pgm` (a white-on-black PGM mask → path data) |
@@ -155,8 +156,9 @@ src-tauri            Desktop shell: system fonts, font install, dialogs
 ui/src/engine        Worker + client for the engine
 ui/src/render        WebGL2 renderer, SDF passes and effect shaders
 ui/src/components    Editor UI
+ui/src/agent         The morpho CLI's side of the app: catalog, describe, edits, checks
 ui/public/fonts      Bundled OFL fonts
-scripts              WASM build and end-to-end test
+scripts              WASM build, end-to-end test and the morpho CLI
 website              Landing page (static; Vercel deploys it from main to morphotype.srivtx.xyz)
 ```
 

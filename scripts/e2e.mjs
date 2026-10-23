@@ -893,6 +893,23 @@ try {
   check(await until((st) => st.mode === 'design' && st.fonts.some((f) => f.name.startsWith('Testa Grotesk'))), 'Use in Design adds the font under its own name');
   s = await state();
   check(layersOf(s).some((l) => l.content?.font?.startsWith('custom-')), 'a text layer is set in the new font');
+
+  // ---- The agent handle the morpho CLI drives: load, edit, draw, vary and check in words ----
+  const agent = await page.evaluate(async () => {
+    const a = await window.morphotype.agent();
+    return a.quietly(async () => {
+      await a.open('Animated · Y2K set');
+      const changes = await a.edit(['"Serif K".fill="#ff2d55"', 'Brand.x=2000']);
+      const still = await a.render({ size: 300 });
+      const strip = await a.render({ at: [0, 1, 2], size: 200 });
+      const grid = await a.vary([{ label: 'blue', edits: ['"Serif K".fill="#2347ff"'] }, { label: 'red', edits: [] }], { size: 200 });
+      const report = await a.check({ size: 240, layers: 4 });
+      return { changes, still: [still.width, still.height], strip: [strip.width, strip.height], grid: [grid.width, grid.height], report, text: a.describe() };
+    });
+  });
+  check(agent.changes.length === 2 && agent.text.includes('flat {fill #ff2d55}'), `agent edits the design (${agent.changes[0]})`);
+  check(agent.still[0] === 300 && agent.strip[0] > 600 && agent.grid[0] > 400, `agent draws a still ${agent.still.join('×')}, a filmstrip ${agent.strip.join('×')} and a grid ${agent.grid.join('×')}`);
+  check(/✗ "Brand" .*entirely outside the canvas/.test(agent.report), `agent check finds the layer moved off the canvas: ${agent.report.split('\n')[0]}`);
 } catch (e) {
   errors.push(`crashed: ${e.message.split('\n').slice(0, 12).join(' / ')}`);
   const pages = browser.contexts().flatMap((c) => c.pages());
