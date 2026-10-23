@@ -25,6 +25,8 @@ import './styles.css';
   get renderer() {
     return getRenderer();
   },
+  // The morpho CLI's handle (see agent/page.ts), in its own chunk.
+  agent: () => import('./agent/page').then((m) => m.agent),
 };
 
 createRoot(document.getElementById('root')!).render(

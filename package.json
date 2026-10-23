@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "cargo test --workspace --exclude morphotype-app && vitest run",
     "test:e2e": "node scripts/e2e.mjs",
+    "morpho": "node scripts/morpho.mjs",
     "typecheck": "tsc --noEmit -p ui",
     "tauri": "tauri"
   },
