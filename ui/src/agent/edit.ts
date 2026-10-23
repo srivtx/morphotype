@@ -12,11 +12,13 @@
 // key. Numbers are checked against the setting's range, and unknown layers
 // or settings fail with the names that would have worked.
 import { defaultParams, EFFECTS, effectById } from '../render/effects';
-import { newMotion } from '../state/motion';
+import { ENTER_UI, LEAVE_UI, LOOP_UI, newMotion } from '../state/motion';
 import { isChoice, isGroup, MODIFIER_UI, SYMBOL_UI, type Field, type Node, type Project } from '../state/model';
 import type { ModifierKind } from '../engine/types';
+import { applyLook } from './build';
+import { allNodes, EditError, findNode } from './find';
 
-export class EditError extends Error {}
+export { EditError, findNode };
 
 export interface Edit {
   project: Project;
@@ -53,28 +55,6 @@ export function parseAssignment(a: string): { target: string; path: string[]; va
   }
   if (!rest) throw new EditError(`"${lhs}" needs a setting after the layer: ${target}.<setting>=…`);
   return { target, path: rest.split('.'), value: parseValue(a.slice(eq + 1)) };
-}
-
-function allNodes(nodes: Node[], out: Node[] = []): Node[] {
-  for (const n of nodes) {
-    out.push(n);
-    if (isGroup(n)) allNodes(n.children, out);
-  }
-  return out;
-}
-
-export function findNode(p: Project, target: string): Node {
-  const all = allNodes(p.layers);
-  const id = target.replace(/^#/, '');
-  const byId = all.find((n) => n.id === id);
-  if (byId) return byId;
-  for (const same of [(n: Node) => n.name === target, (n: Node) => n.name?.toLowerCase() === target.toLowerCase()]) {
-    const hits = all.filter(same);
-    if (hits.length === 1) return hits[0];
-    if (hits.length > 1) throw new EditError(`${hits.length} layers are called "${target}"; use an id: ${hits.map((n) => '#' + n.id).join(', ')}`);
-  }
-  const names = all.map((n) => (n.name ? `"${n.name}"` : `#${n.id}`));
-  throw new EditError(`No layer "${target}". Layers: ${names.join(', ')}`);
 }
 
 function checkField(f: Field | undefined, key: string, v: unknown, where: string) {
@@ -168,6 +148,10 @@ export function applyEdit(p: Project, assignment: string): Edit {
     put(project as unknown as Obj, full, value, target);
     return { project, change: `${full.join('.')}: ${fmtv(before)} → ${fmtv(value)}` };
   }
+  if (path.length === 1 && (path[0] === 'preset' || path[0] === 'recipe')) {
+    if (typeof value !== 'string') throw new EditError(`${path[0]} takes a name (catalog ${path[0]}s)`);
+    return applyLook(p, target, path[0], value);
+  }
   const n = findNode(project, target);
   const r = resolve(n, path);
   r.check?.(value);
@@ -182,6 +166,14 @@ export function applyEdit(p: Project, assignment: string): Edit {
     n.style = { ...n.style, effect: value, params: { ...d, ...Object.fromEntries(Object.entries(n.style.params).filter(([k]) => k in d)) }, animate: undefined };
   } else {
     put(n as unknown as Obj, r.path, value, n.name ?? n.id);
+    // A new loop, entrance or exit kind starts at its own amount (spin is in turns, sway in degrees…).
+    const m = n.motion;
+    const k = r.path.join('.');
+    if (m && typeof value === 'string' && value !== before) {
+      if (k === 'motion.loop' && value in LOOP_UI) m.amount = LOOP_UI[value as keyof typeof LOOP_UI].default;
+      if (k === 'motion.enter' && value in ENTER_UI) m.distance = ENTER_UI[value as keyof typeof ENTER_UI].default;
+      if (k === 'motion.leave' && value in LEAVE_UI) m.leaveDistance = LEAVE_UI[value as keyof typeof LEAVE_UI].default;
+    }
   }
   return { project, change: `${n.name ? `"${n.name}"` : '#' + n.id} ${r.path.join('.')}: ${fmtv(before)} → ${fmtv(value)}` };
 }

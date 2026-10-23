@@ -4,15 +4,17 @@
 // and check it. Everything returns text or one PNG, so a caller spends one
 // image on what would otherwise be a dozen screenshots.
 import { engine } from '../engine/client';
-import { fromBase64 } from '../fonts/library';
+import type { Box } from '../engine/types';
+import { fontId, fromBase64 } from '../fonts/library';
 import { effectById } from '../render/effects';
-import { getRenderer, loadProjectFonts } from '../app/actions';
+import { getRenderer, loadProjectFonts, placeReference } from '../app/actions';
+import { fitToReference, tunables, type Tunable } from '../app/compare';
 import { geometryFrames, holdLiveGeometry } from '../app/geoMotion';
-import { unpackImages } from '../state/assets';
+import { addImage, encodeImage, imageElement, packImages, unpackImages } from '../state/assets';
 import { clock, timelineOf } from '../state/clock';
 import { anyGeoAnim } from '../state/geoMotion';
 import { migrate } from '../state/migrate';
-import { isGroup, type Node, type Project } from '../state/model';
+import { isGroup, style, symbolLayer, type Node, type Project, type ShapeLayer } from '../state/model';
 import { isStill } from '../state/motion';
 import { replaceProject, store } from '../state/store';
 import { loadedTemplates, loadTemplates } from '../state/templateCatalog';
@@ -20,7 +22,8 @@ import { buildScene } from '../state/tree';
 import { catalog, findTemplate } from './catalog';
 import { label, motionFindings, outside, presence, report, spread, structural, type Finding, type Pixels, diff } from './check';
 import { describe, num } from './describe';
-import { applyEdits } from './edit';
+import { applyEdits, findNode } from './edit';
+import { boxTable, itemsOf, layoutFindings, lookFindings } from './layout';
 
 /** Geometry quality for output (the preview builds at 120), as exports use. */
 const OUTPUT_QUALITY = 360;
@@ -43,7 +46,8 @@ async function load(raw: unknown, quality = OUTPUT_QUALITY): Promise<{ ms: numbe
   const p = migrate(raw);
   await loadProjectFonts((p.fonts ?? []).flatMap((f) => (f.data ? [{ id: f.id, name: f.name, bytes: fromBase64(f.data) }] : [])));
   unpackImages(p.images);
-  replaceProject({ ...p, fonts: [], images: undefined });
+  // Embedded fonts stay in the project (the editor's own Open leaves them out), so reloads and saves keep them.
+  replaceProject({ ...p, images: undefined });
   store.set({ selection: [], toasts: [] });
   // Let the app's build loop ask for its (preview) build first: the engine
   // answers every waiting caller with the newest result, so ours wins.
@@ -271,20 +275,26 @@ async function checkAll(o: { size?: number; layers?: number }): Promise<string> 
   const scale = fit(p, o.size ?? 360);
   const tl = timelineOf(p);
   try {
-    // Motion: pairs of frames one video frame apart, across the clock and over the seam.
+    // Motion: runs of three frames one video frame apart, across the clock and around the seam.
     if (moves(p)) {
       const dt = 1 / 30, n = 12, D = tl.duration;
-      const starts = Array.from({ length: n }, (_, i) => ((i + 0.5) * D) / n).filter((t) => t + dt <= D);
-      const at = starts.flatMap((t) => [t, t + dt]);
-      if (tl.loop) at.push(D - dt, 0);
+      const starts = Array.from({ length: n }, (_, i) => ((i + 0.5) * D) / n).filter((t) => t + 2 * dt <= D);
+      const at = starts.flatMap((t) => [t, t + dt, t + 2 * dt]);
+      if (tl.loop) at.push(D - 2 * dt, D - dt, 0, dt);
       const imgs = await frames(at, scale);
-      const steps = starts.map((t, i) => ({ t, d: diff(imgs[2 * i], imgs[2 * i + 1]) }));
-      findings.push(...motionFindings(steps, tl.loop ? diff(imgs[imgs.length - 2], imgs[imgs.length - 1]) : null, true));
+      const runs = starts.map((t, i) => ({ t: t + dt, a: diff(imgs[3 * i], imgs[3 * i + 1]), b: diff(imgs[3 * i + 1], imgs[3 * i + 2]) }));
+      const k = starts.length * 3;
+      const seam = tl.loop ? { a: diff(imgs[k], imgs[k + 1]), b: diff(imgs[k + 1], imgs[k + 2]), c: diff(imgs[k + 2], imgs[k + 3]) } : null;
+      findings.push(...motionFindings(runs, seam, true));
     } else findings.push({ level: 'info', text: 'still design: nothing moves' });
     // What shows: the design against itself with each layer hidden, at the same quality.
     await load(p, PREVIEW_QUALITY);
     const [still] = await frames([null], scale);
     if (spread(still) < 2) findings.push({ level: 'warn', text: 'the design looks empty: one flat colour' });
+    findings.push(...layoutFindings(p, itemsOf(p, store.get().build)));
+    await load({ ...p, layers: [] }, PREVIEW_QUALITY);
+    const [bare] = await frames([null], scale);
+    findings.push(...lookFindings(still, bare));
     const all = drawn(p.layers);
     const cap = o.layers ?? 16;
     const picked = [...all.filter((n) => !isGroup(n) && n.content.type === 'text'), ...all.filter((n) => isGroup(n) || n.content.type !== 'text')].slice(0, cap);
@@ -305,6 +315,157 @@ async function checkAll(o: { size?: number; layers?: number }): Promise<string> 
     await load(p);
   }
   return report(`"${p.name}" ${p.canvas.width}×${p.canvas.height}${moves(p) ? `, ${num(tl.duration)}s${tl.loop ? ' loop' : ''}` : ''}`, findings);
+}
+
+/** The current design as a file would save it: imported fonts and pictures packed in. */
+function saved(extraFonts: Project['fonts'] = []): Project {
+  const p = structuredClone(store.get().project);
+  const fonts = new Map([...(p.fonts ?? []), ...extraFonts].map((f) => [f.id, f]));
+  p.fonts = [...fonts.values()];
+  const images = packImages(p);
+  if (images.length) p.images = images;
+  return p;
+}
+
+/** Embed a font file (base64) in the design; returns its id for content.font. */
+async function importFont(b64: string) {
+  const bytes = fromBase64(b64);
+  const id = await fontId(bytes);
+  await loadProjectFonts([{ id, bytes }]);
+  const name = store.get().fonts.find((f) => f.id === id)?.name ?? id;
+  return { project: saved([{ id, name, data: b64 }]), change: `embedded font "${name}" as ${id} (use: --font ${id})` };
+}
+
+async function decode(b64: string): Promise<ImageBitmap> {
+  return createImageBitmap(await (await fetch(`data:image/*;base64,${b64}`)).blob());
+}
+
+/** A picture (base64) as a Photo-filled rectangle, or inside an existing layer. */
+async function importImage(b64: string, name: string, target?: string) {
+  const bmp = await decode(b64);
+  const c = new OffscreenCanvas(bmp.width, bmp.height);
+  c.getContext('2d')!.drawImage(bmp, 0, 0);
+  const enc = encodeImage(c as unknown as HTMLCanvasElement, !/\.(png|webp|svg)$/i.test(name));
+  const id = addImage(enc.data, enc.w, enc.h, name);
+  let change: string;
+  if (target) {
+    // The picture isn't a listed setting of the Photo material, so it's set here rather than through an edit.
+    const project = structuredClone(store.get().project);
+    const n = findNode(project, target);
+    const was = n.style.effect;
+    n.style = { ...style('photo', { image: id }), stroke: n.style.stroke, depth: n.style.depth, opacity: n.style.opacity };
+    await load(project);
+    change = `"${n.name ?? n.id}": material ${was} → photo, filled with a ${enc.w}×${enc.h} picture`;
+  } else {
+    const p = store.get().project;
+    const side = Math.min(p.canvas.width, p.canvas.height) * 0.7;
+    const l = symbolLayer('roundRect', side, { name: name.replace(/\.[a-z]+$/i, ''), style: style('photo', { image: id }) }, { radius: 0, aspect: enc.w / enc.h });
+    await load({ ...p, layers: [...p.layers, l] });
+    change = `added "${l.name}" #${l.id}: a ${enc.w}×${enc.h} picture in a rectangle (shape roundRect, material photo)`;
+  }
+  return { project: saved(), change };
+}
+
+const EDGES: Record<string, { axis: 0 | 1; at: (b: Box) => number }> = {
+  left: { axis: 0, at: (b) => b[0] },
+  right: { axis: 0, at: (b) => b[2] },
+  centre: { axis: 0, at: (b) => (b[0] + b[2]) / 2 },
+  top: { axis: 1, at: (b) => b[1] },
+  bottom: { axis: 1, at: (b) => b[3] },
+  middle: { axis: 1, at: (b) => (b[1] + b[3]) / 2 },
+};
+
+/**
+ * Line layers up by what they draw (not their anchors): each edge of `edges`
+ * (left, right, centre, top, bottom, middle) of each target meets the same
+ * edge of `to` (the canvas, or another layer).
+ */
+async function align(targets: string[], to: string, edges: string[]) {
+  const p = store.get().project;
+  const { width: W, height: H } = p.canvas;
+  const boxOf = (id: string) => store.get().build?.layers.find((l) => l.id === id)?.bbox ?? null;
+  const ref = to === 'canvas' ? ([-W / 2, -H / 2, W / 2, H / 2] as Box) : boxOf(findNode(p, to).id);
+  if (!ref) throw new Error(`${to} has no outline to align to`);
+  const edits: string[] = [];
+  for (const t of targets) {
+    const n = findNode(p, t);
+    if (isGroup(n)) throw new Error(`align moves layers; ${n.name ?? n.id} is a group (align its layers)`);
+    const b = boxOf(n.id);
+    if (!b) throw new Error(`${n.name ?? n.id} has no outline to align`);
+    const move = [0, 0];
+    for (const e of edges) {
+      const E = EDGES[e === 'center' ? 'centre' : e];
+      if (!E) throw new Error(`align edges are ${Object.keys(EDGES).join(', ')}; not "${e}"`);
+      move[E.axis] = E.at(ref) - E.at(b);
+    }
+    const id = JSON.stringify('#' + n.id);
+    if (Math.abs(move[0]) > 0.01) edits.push(`${id}.x=${+(n.x + move[0]).toFixed(2)}`);
+    if (Math.abs(move[1]) > 0.01) edits.push(`${id}.y=${+(n.y + move[1]).toFixed(2)}`);
+  }
+  const { project, changes } = applyEdits(p, edits);
+  await load(project);
+  return { project: saved(), change: changes.length ? changes.join('\n') : 'already aligned' };
+}
+
+/** Every layer's box and the layout notes, in words. */
+async function layout(): Promise<string> {
+  const p = store.get().project;
+  const items = itemsOf(p, store.get().build);
+  const notes = layoutFindings(p, items);
+  return [boxTable(p, items), ...notes.map((f) => `${f.level === 'warn' ? '!' : '·'} ${f.text}`)].join('\n');
+}
+
+/**
+ * A run of video frames as PNGs (base64): `count` from frame `from`, at
+ * `fps`. A looping clock leaves out its last frame (it's the first again).
+ */
+async function frameBatch(o: { fps: number; from: number; count: number; scale?: number; size?: number }) {
+  const p = store.get().project;
+  const tl = timelineOf(p);
+  const total = Math.max(1, Math.round(tl.duration * o.fps)) + (tl.loop ? 0 : 1);
+  const times = Array.from({ length: Math.max(0, Math.min(o.count, total - o.from)) }, (_, i) => Math.min((o.from + i) / o.fps, tl.duration));
+  const scale = o.scale ?? (o.size ? fit(p, o.size) : 1);
+  const imgs = times.length ? await frames(times, scale) : [];
+  const out: string[] = [];
+  for (const img of imgs) out.push(await png(toCanvas(img)));
+  return { frames: out, total, duration: tl.duration, loop: tl.loop, width: imgs[0]?.width ?? 0, height: imgs[0]?.height ?? 0 };
+}
+
+/** Where `Layer.key` lands among a layer's tunable settings. */
+function tunable(n: ShapeLayer, key: string): Tunable {
+  const all = tunables(n);
+  const t = all.find((x) => x.key === key) ?? all.find((x) => x.key === `content.${key}`) ?? all.find((x) => x.key === `style.${key}`) ?? all.find((x) => x.key.endsWith(`.${key}`));
+  if (!t) throw new Error(`fit can't tune ${n.name ?? n.id}.${key}. Numbers it can: ${all.map((x) => x.key.replace(/^(content|style)\./, '')).join(', ')}`);
+  return t;
+}
+
+/**
+ * Tune settings until the design matches a reference picture: each
+ * `Layer.setting` in turn, searching around its value. Returns the design
+ * without the reference, and before → after for each.
+ */
+async function fitTo(ref: string, targets: string[]) {
+  const bmp = await decode(ref);
+  const c = new OffscreenCanvas(bmp.width, bmp.height);
+  const g = c.getContext('2d')!;
+  g.drawImage(bmp, 0, 0);
+  placeReference(g.getImageData(0, 0, bmp.width, bmp.height), 'reference');
+  const refLayer = store.get().project.layers[0];
+  await until(() => !!imageElement(String(refLayer.style.params.image))?.complete && !!store.get().build?.layers.some((l) => l.id === refLayer.id && l.bbox), 'the reference picture');
+  const lines: string[] = [];
+  for (const target of targets) {
+    const dot = target.lastIndexOf('.');
+    if (dot < 0) throw new Error(`fit takes Layer.setting, got "${target}"`);
+    const n = findNode(store.get().project, target.slice(0, dot).replace(/^"|"$/g, ''));
+    if (isGroup(n)) throw new Error(`fit tunes layers, and ${n.name ?? n.id} is a group`);
+    const t = tunable(n, target.slice(dot + 1));
+    const r = await fitToReference(n.id, t);
+    if (!r) throw new Error(`${n.name ?? n.id} doesn't overlap the reference`);
+    lines.push(`${n.name ?? '#' + n.id} ${t.key}: ${num(t.get(n))} → ${num(r.value)} (difference ${num(r.before)} → ${num(r.after)})`);
+  }
+  const p = store.get().project;
+  await load({ ...p, layers: p.layers.filter((l) => l.id !== refLayer.id) });
+  return { project: saved(), text: lines.join('\n') };
 }
 
 /**
@@ -341,4 +502,10 @@ export const agent = {
   vary,
   check,
   compare,
+  importFont,
+  importImage,
+  fit: fitTo,
+  frameBatch,
+  layout,
+  align,
 };

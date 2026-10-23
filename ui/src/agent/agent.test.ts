@@ -1,6 +1,10 @@
 import { describe as group, expect, it } from 'vitest';
 import { EFFECTS, PRESETS } from '../render/effects';
-import { group as groupNode, lineLayer, MODIFIER_UI, mods, newModifier, style, SYMBOL_UI, symbolLayer, textLayer, type Project, type ShapeLayer } from '../state/model';
+import { group as groupNode, lineLayer, MODIFIER_UI, mods, newModifier, style, SYMBOL_UI, symbolLayer, textLayer, type Group, type Project, type ShapeLayer } from '../state/model';
+import { newMotion } from '../state/motion';
+import { addGroup, addLayer, addModifier, arrange, blank, duplicateLayer, removeLayers } from './build';
+import { boxTable, itemsOf, layoutFindings, lookFindings } from './layout';
+import { timing } from './timing';
 import { SHAPE_RECIPES } from '../state/recipes';
 import { TEMPLATES } from '../state/templates';
 import type { BuildResult } from '../engine/client';
@@ -171,12 +175,15 @@ group('check', () => {
     expect(text).not.toContain('#h');
   });
 
-  it('finds jumps and loop seams in the motion', () => {
-    const smooth = Array.from({ length: 10 }, (_, i) => ({ t: i, d: 1 }));
-    expect(motionFindings(smooth, 1, true)).toEqual([{ level: 'info', text: 'the loop joins smoothly' }]);
-    expect(motionFindings(smooth, 9, true)[0].text).toMatch(/loop jumps where it starts over/);
-    expect(motionFindings([...smooth, { t: 4.5, d: 12 }], null, true)[0].text).toMatch(/jump at 4.5s/);
-    expect(motionFindings(smooth.map((s) => ({ ...s, d: 0 })), 0, true)[0].text).toMatch(/nothing visibly changes/);
+  it('finds pops and loop seams in the motion, not fast smooth moves', () => {
+    const smooth = Array.from({ length: 10 }, (_, i) => ({ t: i, a: 1, b: 1 }));
+    expect(motionFindings(smooth, { a: 1, b: 1, c: 1 }, true)).toEqual([{ level: 'info', text: 'the loop joins smoothly' }]);
+    expect(motionFindings(smooth, { a: 1, b: 12, c: 1 }, true)[0].text).toMatch(/loop jumps where it starts over/);
+    // An entrance that replays: still before the restart, moving fast after it.
+    expect(motionFindings(smooth, { a: 0, b: 20, c: 25 }, true)[0].text).toMatch(/loop jumps/);
+    expect(motionFindings([...smooth, { t: 4.5, a: 0.2, b: 12 }], null, true)[0].text).toMatch(/pop at 4.5s/);
+    expect(motionFindings([{ t: 0.2, a: 30, b: 26 }, ...smooth], null, true)).toEqual([]);
+    expect(motionFindings(smooth.map((s) => ({ ...s, a: 0, b: 0 })), { a: 0, b: 0, c: 0 }, true)[0].text).toMatch(/nothing visibly changes/);
   });
 
   it('measures presence and contrast from pixels', () => {
@@ -196,4 +203,144 @@ group('check', () => {
 it('uses modifier entries shaped like the catalog says', () => {
   expect(newModifier('glitch')).toMatchObject({ kind: 'glitch', on: true });
   expect(catalog('glitch')).toContain("{ kind: 'glitch', …fields, on: true, uid: 'm1' }");
+});
+
+group('build', () => {
+  const ids = (p: Project) => p.layers.map((n) => n.name);
+
+  it('starts blank at a size and background', () => {
+    const p = blank({ name: 'Gig', canvas: '1080x1350', background: '#111111,#222222', duration: 4 });
+    expect(p).toMatchObject({ name: 'Gig', canvas: { width: 1080, height: 1350 }, layers: [], timeline: { duration: 4, loop: true } });
+    expect(p.background.fill).toMatchObject({ kind: 'linear', colors: ['#111111', '#222222'] });
+    expect(blank({ canvas: 'Instagram post' }).canvas.width).toBeGreaterThan(0);
+    expect(() => blank({ canvas: 'Nowhere' })).toThrow(/WxH or one of/);
+    expect(() => blank({ background: 'Plaid' })).toThrow(/No background/);
+  });
+
+  it('adds text, shapes and lines with unique names, looks and places', () => {
+    let p = blank();
+    p = addLayer(p, 'text', 'HELLO', { size: 200, preset: 'Ice chrome', at: '10,-20' }).project;
+    p = addLayer(p, 'shape', 'star', { color: '#ff0000' }).project;
+    p = addLayer(p, 'shape', 'Star', { material: 'inflate', recipe: 'Wavy', below: 'HELLO' }).project;
+    p = addLayer(p, 'line', 'M-0.5 0 L0.5 0', { width: 20 }).project;
+    expect(ids(p)).toEqual(['Star 2', 'HELLO', 'Star', 'Line']);
+    const [s2, t, s] = p.layers as ShapeLayer[];
+    expect(t).toMatchObject({ x: 10, y: -20, style: { effect: 'chrome' }, content: { size: 200 } });
+    expect(s.style).toMatchObject({ effect: 'flat', params: { fill: '#ff0000' } });
+    expect(s2.style.effect).toBe('inflate');
+    expect(s2.modifiers.map((m) => m.kind)).toEqual(['wave']);
+    expect(() => addLayer(p, 'text', 'x', { font: 'comic' })).toThrow(/No font "comic". Bundled: archivo/);
+    expect(() => addLayer(p, 'shape', 'hexagonz')).toThrow(/Shapes: circle/);
+    expect(() => addLayer(p, 'line', 'hello')).toThrow(/isn't SVG path data/);
+  });
+
+  it('adds modifiers and recipes, checking fields', () => {
+    const p = addLayer(blank(), 'text', 'HI').project;
+    const a = addModifier(p, 'HI', 'glitch', { amount: 0.8 }).project;
+    expect((a.layers[0] as ShapeLayer).modifiers[0]).toMatchObject({ kind: 'glitch', amount: 0.8, size: 0.05, on: true });
+    expect(addModifier(p, 'HI', 'Melting').change).toMatch(/recipe Melting/);
+    expect(() => addModifier(p, 'HI', 'glitch', { nope: 1 })).toThrow(/glitch has no nope/);
+    expect(() => addModifier(p, 'HI', 'zap')).toThrow(/No modifier "zap"/);
+  });
+
+  it('groups, duplicates, restacks and removes', () => {
+    let p = blank();
+    for (const t of ['A', 'B', 'C']) p = addLayer(p, 'text', t).project;
+    p = addModifier(p, 'B', 'wave').project;
+    const uid = (p.layers[1] as ShapeLayer).modifiers[0].uid;
+    p = applyEdit(p, `B.animate.mod:${uid}:phase={"to":1,"period":2,"phase":0,"mode":"ramp"}`).project;
+    p = duplicateLayer(p, 'B', { at: '50,0' }).project;
+    expect(ids(p)).toEqual(['A', 'B', 'B 2', 'C']);
+    const [b, b2] = [p.layers[1], p.layers[2]] as ShapeLayer[];
+    expect(b2.id).not.toBe(b.id);
+    expect(b2.modifiers[0].uid).not.toBe(uid);
+    expect(Object.keys(b2.animate!)).toEqual([`mod:${b2.modifiers[0].uid}:phase`]);
+    expect(b2.x).toBe(50);
+    p = arrange(p, 'A', 'top').project;
+    expect(ids(p)).toEqual(['B', 'B 2', 'C', 'A']);
+    p = arrange(p, 'A', 'below', 'B').project;
+    expect(ids(p)).toEqual(['A', 'B', 'B 2', 'C']);
+    p = addGroup(p, ['B', 'C'], { name: 'Pair' }).project;
+    expect(ids(p)).toEqual(['A', 'B 2', 'Pair']);
+    expect((p.layers[2] as Group).children.map((n) => n.name)).toEqual(['B', 'C']);
+    p = addLayer(p, 'shape', 'heart', { into: 'Pair' }).project;
+    expect((p.layers[2] as Group).children.map((n) => n.name)).toEqual(['B', 'C', 'Heart']);
+    p = removeLayers(p, ['A', 'Heart']).project;
+    expect(ids(p)).toEqual(['B 2', 'Pair']);
+    expect(() => arrange(p, 'Pair', 'sideways')).toThrow(/top, bottom, up, down/);
+  });
+
+  it('applies presets and recipes by assignment, and gives each loop its own amount', () => {
+    let p = addLayer(blank(), 'text', 'HI').project;
+    p = applyEdits(p, ['HI.preset="Molten"', 'HI.recipe=Heavy', 'HI.motion.loop="spin"']).project;
+    const t = p.layers[0] as ShapeLayer;
+    expect(t.style).toMatchObject({ effect: 'chrome', params: { c3: '#ff6a00' } });
+    expect(t.modifiers.map((m) => m.kind)).toEqual(['weight']);
+    expect(t.motion).toMatchObject({ loop: 'spin', amount: 1 });
+    expect(applyEdits(p, ['HI.motion.loop="sway"', 'HI.motion.amount=20']).project.layers[0]).toMatchObject({ motion: { amount: 20 } });
+    expect(() => applyEdit(p, 'HI.preset="Nope"')).toThrow(/No preset/);
+  });
+});
+
+group('layout', () => {
+  const W = 1000, H = 1000;
+  const p = (layers: Project['layers']): Project => ({ ...project(layers), canvas: { width: W, height: H } });
+  const build = (boxes: Record<string, [number, number, number, number]>): BuildResult => ({ renders: [], bbox: null, points: 0, ms: 0, layers: Object.entries(boxes).map(([id, bbox]) => ({ id, bbox, error: null, d: null, local: null, frames: [] })) });
+
+  it('finds near-miss edges, nearly-centred things and crowded edges', () => {
+    const q = p([textLayer('Headline', 'archivo', { id: 'a', name: 'A' }), symbolLayer('star', 100, { id: 'b', name: 'B' }), symbolLayer('circle', 100, { id: 'c', name: 'C' })]);
+    const items = itemsOf(q, build({ a: [-300, -200, 300, -100], b: [-305, 0, -205, 100], c: [380, 350, 490, 460] }));
+    const f = layoutFindings(q, items).map((x) => x.text).join('\n');
+    expect(f).toContain('"A" and "B": lefts 5px apart, nearly lined up');
+    expect(f).toContain('"C": only 10px from the right edge');
+    expect(f).not.toContain('"A": ');
+  });
+
+  it('ignores differences nobody can see', () => {
+    const q = p([textLayer('One', 'archivo', { id: 'a' }), textLayer('Two', 'archivo', { id: 'b' })]);
+    const f = layoutFindings(q, itemsOf(q, build({ a: [-100, -50, 100, 0], b: [-101, 50, 99, 90] })));
+    expect(f.filter((x) => /nearly/.test(x.text))).toEqual([]);
+  });
+
+  it('notes a missing lead among the biggest texts', () => {
+    const q = p([textLayer('Big words', 'archivo', { id: 'a' }, { size: 200 }), textLayer('Also big', 'archivo', { id: 'b' }, { size: 190 }), textLayer('K', 'archivo', { id: 'k' }, { size: 600 })]);
+    const boxes = build({ a: [-300, -300, 300, -100], b: [-300, 0, 300, 180], k: [-100, 200, 100, 480] });
+    expect(layoutFindings(q, itemsOf(q, boxes)).some((x) => /no clear lead/.test(x.text))).toBe(false);
+    const r = p(q.layers.slice(0, 2));
+    expect(layoutFindings(r, itemsOf(r, boxes)).find((x) => /no clear lead/.test(x.text))?.text).toContain('"Big words" (200px) and "Also big" (190px)');
+  });
+
+  it('tables every box with its margins', () => {
+    const q = p([symbolLayer('star', 100, { id: 'b', name: 'B' })]);
+    expect(boxTable(q, itemsOf(q, build({ b: [-500, -500, -400, -400] })))).toContain('margins L 0 R 900 T 0 B 900');
+  });
+
+  it('reads balance and palette from pixels', () => {
+    const w = 10, h = 10;
+    const img = (f: (x: number, y: number) => number[]) => ({ data: new Uint8ClampedArray(Array.from({ length: w * h }, (_, i) => [...f(i % w, Math.floor(i / w)), 255]).flat()), width: w, height: h });
+    const bare = img(() => [0, 0, 0]);
+    const left = lookFindings(img((x) => (x < 3 ? [255, 0, 0] : [0, 0, 0])), bare).map((f) => f.text);
+    expect(left[0]).toMatch(/sits left/);
+    expect(left[1]).toBe('palette: 1 main hue (red), mostly neutrals');
+    const rainbow = lookFindings(img((x) => [[255, 0, 0], [255, 150, 0], [255, 255, 0], [0, 200, 0], [0, 200, 255], [0, 0, 255], [160, 0, 255], [255, 0, 160], [255, 0, 0], [0, 0, 255]][x]), bare);
+    expect(rainbow[1]).toMatchObject({ level: 'warn' });
+    expect(lookFindings(img(() => [200, 200, 200]), bare)[0].text).toBe('visual weight: balanced around the centre');
+  });
+});
+
+group('timing', () => {
+  it('charts every move and notes rhythm', () => {
+    const stars = [0, 1, 2].map((i) => symbolLayer('star', 100, { name: `S${i}`, motion: { ...newMotion({ enter: 'rise' }) } }));
+    const q: Project = { ...project(stars), timeline: { duration: 6, loop: true } };
+    const t = timing(q);
+    expect(t).toContain('in rise');
+    expect(t).toContain('3 entrances start together at 0s');
+    expect(t).toMatch(/nothing moves from 0\.\d+s to 6s \(then it loops\)/);
+    expect(timing(project([textLayer('Still')]))).toContain('nothing moves');
+  });
+
+  it('flags moves the clock cuts off', () => {
+    const s = symbolLayer('star', 100, { motion: newMotion({ enter: 'rise', delay: 5.8 }) });
+    expect(timing({ ...project([s]), timeline: { duration: 6, loop: false } })).toContain('gets cut off');
+  });
 });
