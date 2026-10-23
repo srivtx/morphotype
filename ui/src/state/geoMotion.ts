@@ -9,12 +9,17 @@
 //   sym:<field>         a library shape's number field
 //   morph:t             the blend of a text's font morph, or of a morph layer
 //   line:<field>        how much of a pen line is drawn (its Trim: start, end, offset)
+//
+// The same keys on the node's `keys` are free keyframes (see keys.ts); where a
+// setting has both, its keys win.
 import type { EngineDocument, ModEntry, Trim } from '../engine/types';
 import { isChoice, isGroup, MODIFIER_UI, SYMBOL_UI, type Field, type Node, type NumberField, type Project, type ShapeLayer } from './model';
-import { animatedValue, type ParamAnim } from './motion';
+import { geoKeysOf } from './keys';
+import { animatedValue, keyedValue, type Key, type ParamAnim } from './motion';
 import { buildScene, walk } from './tree';
 
-export type GeoAnims = Record<string, ParamAnim>;
+/** What drives each moving setting: a cycle, or keys. */
+export type GeoAnims = Record<string, ParamAnim | Key[]>;
 
 export const modAnimKey = (uid: string, field: string) => `mod:${uid}:${field}`;
 export const symAnimKey = (field: string) => `sym:${field}`;
@@ -37,8 +42,14 @@ function applies(n: Node, key: string): boolean {
   return typeof (n.content.symbol as unknown as Record<string, unknown>)[key.slice(4)] === 'number';
 }
 
+/** A node's moving geometry settings: its cycles, with keys in place of any it has keys for. */
+export const geoDrivers = (n: Node): GeoAnims | undefined => (n.keys ? { ...n.animate, ...geoKeysOf(n) } : n.animate);
+
 /** Whether a node has any moving geometry setting. */
-export const hasGeoAnim = (n: Node) => !!n.animate && Object.keys(n.animate).some((k) => applies(n, k));
+export const hasGeoAnim = (n: Node) => {
+  const d = geoDrivers(n);
+  return !!d && Object.keys(d).some((k) => applies(n, k));
+};
 
 /** Whether anything in the tree has moving geometry. */
 export function anyGeoAnim(nodes: Node[]): boolean {
@@ -48,9 +59,9 @@ export function anyGeoAnim(nodes: Node[]): boolean {
 const numberField = (fields: Field[], key: string) => fields.find((f): f is NumberField => f.key === key && !isChoice(f));
 
 /** A number setting at `t`: whole-number fields (counts, seeds) step. */
-function valueAt(from: number, a: ParamAnim, t: number, loopLength: number | undefined, f: NumberField | undefined): number {
-  if (typeof a.to !== 'number') return from;
-  const v = animatedValue(from, a, t, loopLength) as number;
+function valueAt(from: number, a: ParamAnim | Key[], t: number, loopLength: number | undefined, f: NumberField | undefined): number {
+  const v = Array.isArray(a) ? (a.length ? keyedValue(a, t) : from) : typeof a.to === 'number' ? animatedValue(from, a, t, loopLength) : from;
+  if (typeof v !== 'number') return from;
   return f?.integer ? Math.round(v) : v;
 }
 
@@ -109,9 +120,10 @@ export function contentAt(c: ShapeLayer['content'], anims: GeoAnims | undefined,
 /** A node as it is at `t` (the same object when it has no moving geometry). */
 export function nodeAt<T extends Node>(n: T, t: number, loopLength?: number): T {
   if (!hasGeoAnim(n)) return n;
-  if (isGroup(n)) return { ...n, modifiers: modifiersAt(n.modifiers, n.animate, t, loopLength) };
+  const d = geoDrivers(n);
+  if (isGroup(n)) return { ...n, modifiers: modifiersAt(n.modifiers, d, t, loopLength) };
   const l = n as ShapeLayer;
-  return { ...l, modifiers: modifiersAt(l.modifiers, l.animate, t, loopLength), content: contentAt(l.content, l.animate, t, loopLength) } as T;
+  return { ...l, modifiers: modifiersAt(l.modifiers, d, t, loopLength), content: contentAt(l.content, d, t, loopLength) } as T;
 }
 
 function nodesAt(nodes: Node[], t: number, loopLength?: number): Node[] {
@@ -165,13 +177,16 @@ export function movingDocAt(p: Project, t: number, loopLength?: number, quality?
   return { layers: doc.layers.filter((l) => need.has(l.id)), renders, quality: doc.quality };
 }
 
-/** Drop keyframes whose modifier is gone (after removing a modifier). */
+/** Drop cycles and keys whose modifier is gone (after removing a modifier). */
 export function pruneGeoAnims(n: Node) {
-  if (!n.animate) return;
   const uids = new Set(n.modifiers.map((m) => m.uid));
-  for (const k of Object.keys(n.animate)) {
-    const m = /^mod:([^:]+):/.exec(k);
-    if (m && !uids.has(m[1])) delete n.animate[k];
+  for (const bag of ['animate', 'keys'] as const) {
+    const o = n[bag];
+    if (!o) continue;
+    for (const k of Object.keys(o)) {
+      const m = /^mod:([^:]+):/.exec(k);
+      if (m && !uids.has(m[1])) delete o[k];
+    }
+    if (!Object.keys(o).length) delete n[bag];
   }
-  if (!Object.keys(n.animate).length) delete n.animate;
 }

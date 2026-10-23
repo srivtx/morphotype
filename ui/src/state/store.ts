@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from 'react';
 import type { BuildResult } from '../engine/client';
 import type { FontEntry } from '../fonts/library';
+import { clock, timelineOf } from './clock';
+import { autokey, keyEdits } from './keys';
 import { emptyProject, uid, type Project } from './model';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { find } from './tree';
@@ -128,12 +130,14 @@ export function useStore<T>(select: (s: State) => T): T {
 
 /**
  * Apply an edit to the project. Edits sharing `key` within a short window
- * (e.g. one slider drag) collapse into a single undo step.
+ * (e.g. one slider drag) collapse into a single undo step. A keyed property
+ * it changes takes a key at the playhead instead (see keys.ts).
  */
 export function edit(fn: (draft: Project) => void, key = '') {
   const before = state.project;
   const draft = structuredClone(before);
   fn(draft);
+  keyEdits(before, draft, clock.time(timelineOf(draft)), autokey.on);
   const now = performance.now();
   const coalesce = key !== '' && key === lastKey && (gesture || now - lastTime < COALESCE_MS);
   lastKey = key;

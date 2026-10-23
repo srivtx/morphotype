@@ -6,7 +6,7 @@
 // in the text's order, as a staggered group does with its children.
 import type { Box, RenderOut } from '../engine/types';
 import { isGroup, type Node, type ShapeLayer } from './model';
-import { isStill, seedOf, staggerSlot, type LetterMode, type Motion, type StaggerOrder } from './motion';
+import { isStill, seedOf, staggerSlot, type KeyedTransform, type LetterMode, type Motion, type StaggerOrder } from './motion';
 
 /** A text layer whose letters or words move on their own. */
 export const splitsText = (n: Node | undefined): n is ShapeLayer => !!n && !isGroup(n) && n.content.type === 'text' && !!n.motion?.letters && !isStill(n.motion);
@@ -74,6 +74,8 @@ export interface PlacedLink {
   motion: Motion;
   pivot: [number, number];
   offset: number;
+  /** Transform keys (a link of their own, see tree.ts). */
+  keys?: KeyedTransform;
 }
 
 /**

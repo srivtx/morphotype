@@ -1,3 +1,4 @@
+import { cleanKeys } from './keys';
 import type { EngineLayer } from '../engine/types';
 import { defaultParams, effectById, type ParamValues } from '../render/effects';
 import { background, fill, group, isGroup, tile, type Background, type Node, type Project, type ShapeLayer, type Style } from './model';
@@ -63,6 +64,12 @@ function normalize(p: Project): Project {
       n.style ??= { effect: 'flat', params: defaultParams(effectById('flat')) };
     }
     if (!isGroup(n) || n.style) n.style.params = { ...defaultParams(effectById(n.style.effect)), ...n.style.params };
+    // Keys: well-formed and in time order (files from before them have none).
+    for (const o of [n, n.style]) {
+      const k = cleanKeys(o.keys);
+      if (k) o.keys = k;
+      else delete o.keys;
+    }
   };
   p.layers.forEach(fix);
   p.background ??= background();

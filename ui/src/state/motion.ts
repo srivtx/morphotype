@@ -371,14 +371,84 @@ export function animMix(a: ParamAnim, t: number, loopLength?: number): number {
   return 0.5 - 0.5 * Math.cos(2 * Math.PI * u);
 }
 
-/** The setting's value at `t`: numbers blend, colours blend in RGB. */
-export function animatedValue(from: number | string, a: ParamAnim, t: number, loopLength?: number): number | string {
-  const k = animMix(a, t, loopLength);
-  if (typeof from === 'string' || typeof a.to === 'string') {
-    const [p, q] = [hexRgb(String(from)), hexRgb(String(a.to))];
+/** `k` of the way from `a` to `b`: numbers blend, colours blend in RGB. */
+export function mixValue(a: number | string, b: number | string, k: number): number | string {
+  if (typeof a === 'string' || typeof b === 'string') {
+    const [p, q] = [hexRgb(String(a)), hexRgb(String(b))];
     return rgbHex(p.map((v, i) => v + (q[i] - v) * k));
   }
-  return from + (a.to - from) * k;
+  return a + (b - a) * k;
+}
+
+/** The setting's value at `t`: numbers blend, colours blend in RGB. */
+export function animatedValue(from: number | string, a: ParamAnim, t: number, loopLength?: number): number | string {
+  return mixValue(from, a.to, animMix(a, t, loopLength));
+}
+
+// ---------- free keys ----------
+
+/**
+ * One key on a property (see keys.ts for where keys live): its value at `t`
+ * seconds on the clock, reached from the key before through `ease`.
+ */
+export interface Key {
+  t: number;
+  v: number | string;
+  /** The curve into this key from the one before (KEY_EASE when absent). */
+  ease?: Transition;
+}
+
+/** Keys ease in and out unless they say otherwise. */
+export const KEY_EASE: Transition = { type: 'easing', duration: 1, ease: [0.65, 0, 0.35, 1], bounce: 0.25, stiffness: 200, damping: 20, mass: 1 };
+
+/**
+ * Progress from one key to the next, `gap` s apart, `dt` s after the first:
+ * an easing curve and a time spring are stretched over the gap; a physics
+ * spring runs at its own pace (and may still be moving at the next key).
+ */
+export function keyProgress(tr: Transition, dt: number, gap: number): number {
+  if (gap <= 1e-6) return 1;
+  if (tr.type === 'easing') return bezierAt(tr.ease, dt / gap);
+  return progressAt(tr.type === 'time' ? { ...tr, duration: gap } : tr, dt);
+}
+
+/** A keyed property's value at `t`: the first key's before it, the last key's after (keys sorted by time). */
+export function keyedValue(keys: Key[], t: number): number | string {
+  if (t <= keys[0].t) return keys[0].v;
+  const i = keys.findIndex((k) => k.t > t);
+  if (i < 0) return keys[keys.length - 1].v;
+  const [a, b] = [keys[i - 1], keys[i]];
+  return mixValue(a.v, b.v, keyProgress(b.ease ?? KEY_EASE, t - a.t, b.t - a.t));
+}
+
+/** A number at `t` from its keys, or `rest` when it has none. */
+export const keyedNumber = (keys: Key[] | undefined, t: number, rest: number) => (keys?.length ? Number(keyedValue(keys, t)) : rest);
+
+/**
+ * Transform keys acting on a scene object: absolute values (a layer's own x,
+ * y, rotation and scale; a group's offsets from rest), drawn as a pose away
+ * from `rest` about the layer's origin, so the result is the layer as if it
+ * had those values. `fade`: opacity keys act here too (a group's; a layer's
+ * opacity goes straight to its material, see SceneItem.opacityKeys).
+ */
+export interface KeyedTransform {
+  tracks: Record<string, Key[]>;
+  rest: { x: number; y: number; rotation: number; scale: number };
+  /** Artboard point keys turn and scale about (a layer's origin); a group's centre when absent. */
+  origin?: [number, number];
+  fade?: boolean;
+}
+
+/** The pose transform keys give at `t`. */
+export function keyPose(k: KeyedTransform, t: number): Pose {
+  const { tracks: tr, rest } = k;
+  return {
+    x: keyedNumber(tr.x, t, rest.x) - rest.x,
+    y: keyedNumber(tr.y, t, rest.y) - rest.y,
+    rotate: keyedNumber(tr.rotation, t, rest.rotation) - rest.rotation,
+    scale: Math.abs(rest.scale) > 1e-6 ? keyedNumber(tr.scale, t, rest.scale) / rest.scale : 1,
+    opacity: k.fade ? Math.min(1, Math.max(0, keyedNumber(tr.opacity, t, 1))) : 1,
+  };
 }
 
 // ---------- poses ----------
@@ -623,10 +693,17 @@ export interface MotionLink {
   at: string;
   /** Seconds this object runs behind (a group's stagger). */
   offset: number;
+  /** A node's transform keys (with STILL as the motion): a link of their own, outside the node's motion. */
+  keys?: KeyedTransform;
 }
 
+/** The motion of a link that only carries keys. */
+export const STILL: Motion = newMotion();
+
+type PlacedLink = { motion: Motion; pivot: [number, number]; offset: number; keys?: KeyedTransform };
+
 /** Farthest (px) any corner of `box` travels from rest over `times`. */
-export function motionReach(links: { motion: Motion; pivot: [number, number]; offset: number }[], box: [number, number, number, number], times: number[], loopLength?: number): number {
+export function motionReach(links: PlacedLink[], box: [number, number, number, number], times: number[], loopLength?: number): number {
   const corners: [number, number][] = [
     [box[0], box[1]],
     [box[2], box[1]],
@@ -645,11 +722,12 @@ export function motionReach(links: { motion: Motion; pivot: [number, number]; of
 }
 
 /** Where an object is drawn at `t`: its motions, innermost first, about their pivots. */
-export function placement(links: { motion: Motion; pivot: [number, number]; offset: number }[], t: number, loopLength?: number): { m: Mat; opacity: number } {
+export function placement(links: PlacedLink[], t: number, loopLength?: number): { m: Mat; opacity: number } {
   let m = IDENTITY;
   let opacity = 1;
   for (const l of links) {
-    const p = poseAt(l.motion, t - l.offset, loopLength);
+    let p = poseAt(l.motion, t - l.offset, loopLength);
+    if (l.keys) p = join(p, keyPose(l.keys, t - l.offset));
     m = compose(poseMatrix(p, l.pivot), m);
     opacity *= p.opacity;
   }

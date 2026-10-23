@@ -59,13 +59,15 @@ export function syncScene(r: Renderer) {
     const out = renders.get(o.id);
     if (!out) continue;
     const clipD = o.clip ? renders.get(o.clip)?.d : null;
-    const links = o.motion?.map((l) => ({ motion: l.motion, pivot: pivot(l.at), offset: l.offset }));
+    // Transform keys turn and scale about the layer's origin, as its own rotation and scale do.
+    const links = o.motion?.map((l) => ({ motion: l.motion, pivot: l.keys?.origin ?? pivot(l.at), offset: l.offset, keys: l.keys }));
     // A text moving letter by letter: one object per letter (or word), each about its own centre, in turn.
     const pieces = o.letters && links ? piecesOf(out, o.letters) : null;
     if (pieces?.length && links) {
       pieceLinks(links, pieces, o.id).forEach((motion, i) => {
         const item = sceneItem(`${o.id}#${i}`, pieces[i], o.style, o.guide, clipD);
         item.frame = out.bbox;
+        item.opacityKeys = o.opacityKeys;
         item.motion = motion;
         if (live?.has(o.id)) item.live = true;
         if (item.clipD) item.motionReach = motionReach(motion, pieces[i].bbox, reachTimes, loopLength);
@@ -74,6 +76,7 @@ export function syncScene(r: Renderer) {
       continue;
     }
     const item = sceneItem(o.id, out, o.style, o.guide, clipD);
+    item.opacityKeys = o.opacityKeys;
     if (live?.has(o.id)) item.live = true;
     if (links) {
       item.motion = links;
