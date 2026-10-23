@@ -152,22 +152,29 @@ export function spread(p: Pixels): number {
 }
 
 /**
- * Motion from pairs of frames one video frame apart: `steps` sampled across
- * the clock, `seam` the last frame against the first.
+ * Motion from runs of three frames one video frame apart: a pop is one step
+ * far bigger than the steps either side of it (fast but smooth motion has
+ * neighbours just as big). `seam` is the same around the loop's restart:
+ * the step into it (a), across it (b) and out of it (c).
  */
-export function motionFindings(steps: { t: number; d: number }[], seam: number | null, animated: boolean): Finding[] {
+export function motionFindings(runs: { t: number; a: number; b: number }[], seam: { a: number; b: number; c: number } | null, animated: boolean): Finding[] {
   const out: Finding[] = [];
-  const ds = steps.map((s) => s.d).sort((a, b) => a - b);
-  const median = ds[Math.floor(ds.length / 2)] ?? 0;
-  const moving = ds.some((d) => d > 0.05);
+  const moving = runs.some((r) => Math.max(r.a, r.b) > 0.05) || (seam && Math.max(seam.a, seam.b, seam.c) > 0.05);
   if (!moving) {
     if (animated) out.push({ level: 'warn', text: 'set to move, but nothing visibly changes over the clock' });
     return out;
   }
-  const floor = Math.max(median, 0.15);
-  for (const s of steps) if (s.d > floor * 6 && s.d > 2) out.push({ level: 'warn', text: `jump at ${num(s.t)}s: ${num(s.d / floor)}× a normal frame step` });
-  if (seam !== null && seam > floor * 4 && seam > 1.5) out.push({ level: 'warn', text: `the loop jumps where it starts over: ${num(seam / floor)}× a normal frame step` });
-  else if (seam !== null) out.push({ level: 'info', text: 'the loop joins smoothly' });
+  const floor = 0.15;
+  for (const r of runs) {
+    const [big, small] = r.a > r.b ? [r.a, r.b] : [r.b, r.a];
+    if (big > 2 && big > (small + floor) * 6) out.push({ level: 'warn', text: `pop at ${num(r.t)}s: one frame changes ${num(big / (small + floor))}× more than the next` });
+  }
+  if (seam) {
+    // Across a smooth seam the last frame flows into the first like any other step, so the step before is the measure.
+    const near = seam.a;
+    if (seam.b > 1.5 && seam.b > (near + floor) * 4) out.push({ level: 'warn', text: `the loop jumps where it starts over: ${num(seam.b / (near + floor))}× the frames around it (something that ends differently from how it starts, like an entrance that replays)` });
+    else out.push({ level: 'info', text: 'the loop joins smoothly' });
+  }
   return out;
 }
 

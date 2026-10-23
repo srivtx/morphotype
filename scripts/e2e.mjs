@@ -904,12 +904,18 @@ try {
       const strip = await a.render({ at: [0, 1, 2], size: 200 });
       const grid = await a.vary([{ label: 'blue', edits: ['"Serif K".fill="#2347ff"'] }, { label: 'red', edits: [] }], { size: 200 });
       const report = await a.check({ size: 240, layers: 4 });
-      return { changes, still: [still.width, still.height], strip: [strip.width, strip.height], grid: [grid.width, grid.height], report, text: a.describe() };
+      const layout = await a.layout();
+      const video = await a.frameBatch({ fps: 10, from: 0, count: 3, size: 120 });
+      const aligned = await a.align(['Caption'], 'canvas', ['centre']);
+      return { changes, still: [still.width, still.height], strip: [strip.width, strip.height], grid: [grid.width, grid.height], report, text: a.describe(), layout, video: [video.frames.length, video.total], aligned: aligned.change };
     });
   });
   check(agent.changes.length === 2 && agent.text.includes('flat {fill #ff2d55}'), `agent edits the design (${agent.changes[0]})`);
   check(agent.still[0] === 300 && agent.strip[0] > 600 && agent.grid[0] > 400, `agent draws a still ${agent.still.join('×')}, a filmstrip ${agent.strip.join('×')} and a grid ${agent.grid.join('×')}`);
   check(/✗ "Brand" .*entirely outside the canvas/.test(agent.report), `agent check finds the layer moved off the canvas: ${agent.report.split('\n')[0]}`);
+  check(/margins L .* R /.test(agent.layout) && /palette: /.test(agent.report), 'agent layout lists boxes and margins, and check reads the palette');
+  check(agent.video[0] === 3 && agent.video[1] === 40, `agent draws video frames in batches (${agent.video.join(' of ')})`);
+  check(/Caption" x:|already aligned/.test(agent.aligned), `agent aligns by what's drawn (${agent.aligned})`);
 } catch (e) {
   errors.push(`crashed: ${e.message.split('\n').slice(0, 12).join(' / ')}`);
   const pages = browser.contexts().flatMap((c) => c.pages());

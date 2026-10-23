@@ -12,3 +12,5 @@ export { migrate };
 
 export const catalog = (q = '') => catalogText(q, TEMPLATES);
 export const template = (name: string): Project => findTemplate(TEMPLATES, name).make();
+export { timing } from './timing';
+export { addGroup, addLayer, addModifier, arrange, blank, duplicateLayer, removeLayers } from './build';
