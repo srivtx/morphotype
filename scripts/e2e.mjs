@@ -729,11 +729,17 @@ try {
     // ◆ starts keys at the playhead; typing a value elsewhere on the clock adds a key there.
     await page.getByRole('button', { name: 'Key Rotation' }).click();
     const rot = page.locator('.keyed-box', { has: page.getByRole('button', { name: 'Key Rotation' }) }).locator('input');
+    // Typed as a person would: the box selects its text when it takes focus.
+    const typeInto = async (box, v) => {
+      await box.click();
+      await page.keyboard.press(`${mod}+a`);
+      await page.keyboard.type(String(v));
+      await page.keyboard.press('Enter');
+    };
     for (const [t, v] of [[1, 45], [2.5, 30], [3.5, -90]]) {
       await page.evaluate((t) => window.morphotype.clock.seek(t), t);
       await settle(150);
-      await rot.fill(String(v));
-      await rot.press('Enter');
+      await typeInto(rot, v);
     }
     let st = await state();
     check(JSON.stringify(keysOf(st)) === '[[0,0],[1,45],[2.5,30],[3.5,-90]]', `◆ and the rotation field key the star at four times (${JSON.stringify(keysOf(st))})`);
@@ -783,8 +789,7 @@ try {
     await page.evaluate(() => window.morphotype.clock.seek(2));
     await settle(150);
     const xBox = page.locator('.keyed-box', { has: page.getByRole('button', { name: 'Key X' }) }).locator('input');
-    await xBox.fill('120');
-    await xBox.press('Enter');
+    await typeInto(xBox, 120);
     await page.getByRole('button', { name: 'Autokey' }).click();
     st = await state();
     check(JSON.stringify(keysOf(st, 'x')) === '[[0,0],[2,120]]' && (await page.locator('.tl-sub .tl-name', { hasText: 'Position X' }).count()) === 1, `autokey keys a change at the playhead, from where it was (${JSON.stringify(keysOf(st, 'x'))})`);
