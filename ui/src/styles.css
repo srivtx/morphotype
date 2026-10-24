@@ -5261,3 +5261,42 @@ body.tl-dragging * {
 .button-row {
   gap: 6px;
 }
+
+/* Type mode style picker: weights down, upright and italic across. */
+.style-select .style-num {
+  color: var(--dk-label);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.style-menu .style-grid {
+  display: grid;
+  grid-template-columns: 34px 1fr 1fr;
+  column-gap: 2px;
+}
+.style-grid .style-row {
+  display: contents;
+}
+.style-grid > .menu-label {
+  padding-left: 30px;
+}
+.style-weight {
+  align-self: center;
+  justify-self: end;
+  padding-right: 4px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.style-base {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+.menu-item:hover .style-base {
+  color: inherit;
+}
+.text-field.style-name {
+  width: auto;
+  min-width: 0;
+  max-width: 65%;
+  text-align: right;
+}

@@ -19,6 +19,9 @@ pub struct FontMeta {
     pub cap_height: i16,
     pub x_height: i16,
     pub weight_class: u16,
+    /// An italic style (fsSelection, macStyle, the name and STAT tables),
+    /// whether or not it leans.
+    pub italic: bool,
     /// Degrees, negative leans right (OpenType convention).
     pub italic_angle: f64,
     pub copyright: String,
@@ -325,7 +328,7 @@ fn weight_name(class: u16) -> &'static str {
 /// STAT 1.1 with wght and ital axes and this font's place on each, so apps
 /// can group and name the style (Regular and Roman are elidable).
 fn stat_table(m: &FontMeta) -> Vec<u8> {
-    let italic = m.italic_angle.abs() > 0.5;
+    let italic = m.italic;
     let mut w = W(Vec::new());
     w.u16(1);
     w.u16(1);
@@ -361,7 +364,7 @@ fn name_table(m: &FontMeta) -> Vec<u8> {
         recs.push((2, m.style.clone()));
     } else {
         recs.push((1, format!("{} {}", m.family, m.style)));
-        recs.push((2, "Regular".into()));
+        recs.push((2, if m.italic { "Italic" } else { "Regular" }.into()));
     }
     recs.push((3, format!("{};MRPH;{}", m.version, ps_name(&m.family, &m.style))));
     recs.push((4, if m.style == "Regular" { m.family.clone() } else { format!("{} {}", m.family, m.style) }));
@@ -377,7 +380,7 @@ fn name_table(m: &FontMeta) -> Vec<u8> {
         }
     }
     // Names the STAT table refers to.
-    let italic = m.italic_angle.abs() > 0.5;
+    let italic = m.italic;
     recs.push((STAT_NAMES, "Weight".into()));
     recs.push((STAT_NAMES + 1, "Italic".into()));
     recs.push((STAT_NAMES + 2, weight_name(m.weight_class).into()));
@@ -1078,7 +1081,7 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
     head.i16(fx1);
     head.i16(fy1);
     let bold = m.weight_class >= 600;
-    let italic = m.italic_angle.abs() > 0.5;
+    let italic = m.italic;
     head.u16((bold as u16) | ((italic as u16) << 1));
     head.u16(8);
     head.i16(2);
@@ -1095,8 +1098,9 @@ pub fn write_ttf(m: &FontMeta, glyphs: &[OutGlyph]) -> Vec<u8> {
     hhea.i16(min_rsb);
     hhea.i16(max_extent);
     let slope = m.italic_angle.to_radians();
-    hhea.i16(if italic { 1000 } else { 1 });
-    hhea.i16(if italic { clamp16(-slope.tan() * 1000.0) } else { 0 });
+    let slanted = m.italic_angle.abs() > 0.5;
+    hhea.i16(if slanted { 1000 } else { 1 });
+    hhea.i16(if slanted { clamp16(-slope.tan() * 1000.0) } else { 0 });
     hhea.i16(0);
     for _ in 0..4 {
         hhea.i16(0);
@@ -1316,6 +1320,7 @@ mod tests {
             cap_height: 700,
             x_height: 500,
             weight_class: 400,
+            italic: false,
             italic_angle: 0.0,
             copyright: "test".into(),
             description: String::new(),
@@ -1369,6 +1374,42 @@ mod tests {
         assert!(face.glyph_bounding_box(GlyphId(0)).is_some());
         let fam = face.names().into_iter().find(|n| n.name_id == 1).and_then(|n| n.to_string());
         assert_eq!(fam.as_deref(), Some("Test Morph"));
+    }
+
+    #[test]
+    fn style_sets_weight_and_italic_flags() {
+        let glyphs = vec![OutGlyph { codepoint: Some('A' as u32), advance: 600.0, contours: vec![square(50.0, 500.0)] }];
+        let names = |bytes: &[u8]| {
+            let face = Face::parse(bytes, 0).unwrap();
+            let get = |id: u16| face.names().into_iter().find(|n| n.name_id == id).and_then(|n| n.to_string());
+            (get(1), get(2), get(17))
+        };
+        let head_mac_style = |bytes: &[u8]| {
+            let head = Face::parse(bytes, 0).unwrap().raw_face().table(rustybuzz::ttf_parser::Tag::from_bytes(b"head")).unwrap();
+            u16::from_be_bytes([head[44], head[45]])
+        };
+
+        // An upright italic: flagged italic though it doesn't lean.
+        let mut m = meta();
+        m.style = "Light Italic".into();
+        m.weight_class = 300;
+        m.italic = true;
+        let bytes = write_ttf(&m, &glyphs);
+        let face = Face::parse(&bytes, 0).unwrap();
+        assert_eq!(face.weight().to_number(), 300);
+        assert!(face.is_italic() && !face.is_bold() && !face.is_regular());
+        assert_eq!(face.italic_angle(), 0.0);
+        assert_eq!(head_mac_style(&bytes), 0b10);
+        assert_eq!(names(&bytes), (Some("Test Morph Light Italic".into()), Some("Italic".into()), Some("Light Italic".into())));
+
+        let mut m = meta();
+        m.style = "Bold".into();
+        m.weight_class = 700;
+        let bytes = write_ttf(&m, &glyphs);
+        let face = Face::parse(&bytes, 0).unwrap();
+        assert!(face.is_bold() && !face.is_italic());
+        assert_eq!(head_mac_style(&bytes), 0b01);
+        assert_eq!(names(&bytes), (Some("Test Morph".into()), Some("Bold".into()), None));
     }
 
     /// Writes kerning between `n` square glyphs and shapes every pair back.

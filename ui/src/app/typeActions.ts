@@ -8,6 +8,7 @@ import { allLayers } from '../state/tree';
 import { edit, store, toast, undo } from '../state/store';
 import { addShape, errorText, primaryNode, registerFontEntry, slug } from './actions';
 import { zip } from './zip';
+import { canonicalStyle, lookWeight, parseStyle } from './fontStyles';
 import { addClass, deleteClass, joinClass, leaveClass, resolveKerning, setClassMembers, setEntry } from './kerning';
 
 export const CHARSETS = {
@@ -48,13 +49,31 @@ export function newFontDefaults(): NewFontOptions {
   };
 }
 
+/** A font's own style name ("Black", "SemiBold"), standard spelling where it has one. */
+export function baseStyle(fontId: string): string {
+  const style = store.get().fonts.find((f) => f.id === fontId)?.info.style.trim();
+  return style ? canonicalStyle(style) : 'Regular';
+}
+
+/**
+ * Reshape a different font. A style still matching the old base's follows
+ * the new one; a style the user chose stays.
+ */
+export function setTypeBase(fontId: string) {
+  editType((tp) => {
+    if (!tp.blank && tp.style === baseStyle(tp.base)) tp.style = baseStyle(fontId);
+    tp.base = fontId;
+    tp.axes = {};
+  });
+}
+
 /** Start a font project. */
 export function createTypeProject(o: NewFontOptions): TypeProject {
   const tp: TypeProject = {
     id: uid('f'),
     blank: o.blank || undefined,
     family: o.family.trim() || 'Untitled Sans',
-    style: 'Regular',
+    style: o.blank ? 'Regular' : baseStyle(o.base),
     base: o.base,
     axes: o.axes ?? {},
     morph: o.blank ? null : (o.morph ?? null),
@@ -99,6 +118,10 @@ export function specOf(t: TypeProject, opts: { quality?: number; format?: 'ttf' 
     modifiers: t.modifiers,
     family: t.family,
     style: t.style,
+    // A named style sets the weight class and italic flags; a custom name
+    // leaves them to the look.
+    weightClass: parseStyle(t.style)?.weight,
+    italic: parseStyle(t.style)?.italic,
     charset: t.charset,
     glyphs,
     tracking: t.tracking,
@@ -228,14 +251,14 @@ export async function exportFontFile(format: 'ttf' | 'woff') {
 }
 
 export function fontFaceCss(t: TypeProject, base: string) {
-  const weight = t.style.match(/thin|light|regular|medium|semi|bold|black|heavy/i)?.[0]?.toLowerCase();
-  const w = { thin: 100, light: 300, regular: 400, medium: 500, semi: 600, bold: 700, black: 900, heavy: 900 }[weight ?? 'regular'] ?? 400;
+  const style = parseStyle(t.style);
+  const w = style?.weight ?? lookWeight(t.modifiers);
   return `@font-face {
   font-family: "${t.family}";
   src: url("${base}.woff") format("woff"),
        url("${base}.ttf") format("truetype");
   font-weight: ${w};
-  font-style: ${/italic|oblique/i.test(t.style) ? 'italic' : 'normal'};
+  font-style: ${style?.italic ? 'italic' : 'normal'};
   font-display: swap;
 }
 `;

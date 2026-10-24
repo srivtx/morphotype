@@ -2,6 +2,7 @@
 // from its base, and choose what happens to text set in the base font.
 import { useState } from 'react';
 import { customFontId, editType, fontChanges, nameClash, useInDesign, type UseMode } from '../../app/typeActions';
+import { STANDARD_STYLES } from '../../app/fontStyles';
 import { allLayers } from '../../state/tree';
 import { store, useStore } from '../../state/store';
 import { Icon } from '../icons';
@@ -58,7 +59,12 @@ export function UseFontDialog() {
           </label>
           <label className="ts-name">
             <span>Style</span>
-            <input value={style} onChange={(e) => setStyle(e.target.value)} spellCheck={false} />
+            <input value={style} onChange={(e) => setStyle(e.target.value)} spellCheck={false} list="font-styles" />
+            <datalist id="font-styles">
+              {STANDARD_STYLES.map((s) => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
           </label>
         </div>
         {clash && <p className="warn">{clash}</p>}
