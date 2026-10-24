@@ -360,7 +360,10 @@ export interface FontSpec {
   family: string;
   style: string;
   charset: string | null;
+  /** usWeightClass; from the look's Weight modifiers when absent. */
   weightClass?: number;
+  /** An italic style; when absent, italic if the look slants. */
+  italic?: boolean;
   quality?: number;
   glyphs?: GlyphEdit[];
   tracking?: number;

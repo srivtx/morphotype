@@ -118,7 +118,7 @@ export function Popover({
   // Arrow keys move between menu items.
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    const items = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role=menuitem]:not([disabled])') ?? []);
+    const items = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role^=menuitem]:not([disabled])') ?? []);
     if (!items.length) return;
     e.preventDefault();
     const i = items.indexOf(document.activeElement as HTMLElement);

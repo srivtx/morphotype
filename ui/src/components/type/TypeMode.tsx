@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { importImage } from '../../app/actions';
-import { addCharacters, addGlyphPart, CHARSETS, closeTypeProject, customFontId, customizeGlyph, editType, exportFontFile, exportWebKit, installOnMac, removeCharacter, resetGlyph, specOf } from '../../app/typeActions';
+import { addCharacters, addGlyphPart, baseStyle, CHARSETS, closeTypeProject, customFontId, customizeGlyph, editType, exportFontFile, exportWebKit, installOnMac, removeCharacter, resetGlyph, setTypeBase, specOf } from '../../app/typeActions';
+import { StylePicker } from './StylePicker';
 import { TypeStart } from './TypeStart';
 import { GlyphLayers, GlyphLook, GlyphPartPanel, PartsOverlay } from './GlyphLayers';
 import { TYPE_TERMS } from './TypeGuide';
@@ -550,13 +551,10 @@ function FontTab({ t }: { t: TypeProject }) {
         </p>
       </Section>
       <Section title={t.blank ? 'Metrics' : 'Base'} id="type-family">
-        <label className="field">
-          <span>Style</span>
-          <input className="text-field" value={t.style} onChange={(e) => editType((tp) => (tp.style = e.target.value), 'style')} />
-        </label>
+        <StylePicker value={t.style} base={t.blank ? undefined : baseStyle(t.base)} mods={t.modifiers} onChange={(v) => editType((tp) => (tp.style = v), 'style')} />
         <div className="field">
           <span>{t.blank ? 'Lines from' : 'Base font'}</span>
-          <FontPicker value={t.base} onChange={(id) => id && editType((tp) => ((tp.base = id), (tp.axes = {})))} />
+          <FontPicker value={t.base} onChange={(id) => id && setTypeBase(id)} />
         </div>
         {!t.blank && (
           <>

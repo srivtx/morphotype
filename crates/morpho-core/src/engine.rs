@@ -1712,6 +1712,7 @@ impl Engine {
             cap_height: self.font_metric(spec, upm, |i| i.cap_height)?,
             x_height: self.font_metric(spec, upm, |i| i.x_height)?,
             weight_class: weight,
+            italic: spec.italic.unwrap_or(slant.abs() > 0.5),
             italic_angle: -slant,
             copyright,
             description: format!("Derived from {} with Morphotype.", sources.iter().map(|i| i.full_name.as_str()).collect::<Vec<_>>().join(" and ")),
@@ -1853,8 +1854,12 @@ pub struct FontSpec {
     pub style: String,
     #[serde(default)]
     pub charset: Option<String>,
+    /// usWeightClass; worked out from the Weight modifiers when absent.
     #[serde(default)]
     pub weight_class: Option<u16>,
+    /// An italic style; when absent, italic if the look slants.
+    #[serde(default)]
+    pub italic: Option<bool>,
     #[serde(default)]
     pub quality: Option<f64>,
     #[serde(default)]
