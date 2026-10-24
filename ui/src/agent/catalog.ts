@@ -11,8 +11,10 @@ import { ENTER_OPTIONS, ENTER_UI, EASES, FEELS, LEAVE_OPTIONS, LEAVE_UI, LOOP_OP
 import { CANVAS_PRESETS, isChoice, MODIFIER_DEFAULTS, MODIFIER_UI, SYMBOL_DEFAULTS, SYMBOL_UI, type Field } from '../state/model';
 import type { ModifierKind, SymbolKind } from '../engine/types';
 import type { Template } from '../state/templates';
+import { KITS, kitsText, kitText } from './kits';
+import { recipesText } from './moves';
 
-export const SECTIONS = ['materials', 'presets', 'modifiers', 'recipes', 'shapes', 'motion', 'keyframes', 'layers', 'fonts', 'backgrounds', 'canvas', 'templates'] as const;
+export const SECTIONS = ['kits', 'materials', 'presets', 'modifiers', 'recipes', 'shapes', 'motion', 'keyframes', 'layers', 'fonts', 'backgrounds', 'canvas', 'templates'] as const;
 export type Section = (typeof SECTIONS)[number];
 
 const fmt = (v: unknown) => (typeof v === 'number' ? String(+v.toFixed(4)) : typeof v === 'string' ? v : JSON.stringify(v));
@@ -91,6 +93,7 @@ const MOTION = (): string =>
     '  stagger: s between children (groups) or letters · order: ' + STAGGER_ORDERS.map((o) => o.value).join('|'),
     '  letters: letters|words (text: each moves in turn) · slide: dir right|left|up|down, oneWay, easePass',
     'scene clock: project.timeline = { duration: s, loop: bool } (default 6 s, looping)',
+    recipesText(),
   ].join('\n');
 
 const KEYFRAMES = (): string =>
@@ -152,6 +155,8 @@ function templatesText(list: Template[] | null): string {
 
 function section(s: Section, templates: Template[] | null): string {
   switch (s) {
+    case 'kits':
+      return kitsText();
     case 'materials':
       return EFFECTS.map((e) => `${e.id} — ${e.name}: ${first(e.description)}`).join('\n') + '\n(details: catalog <id>)';
     case 'presets':
@@ -183,6 +188,7 @@ function index(templates: Template[] | null): string {
   const names = (xs: string[]) => xs.join(', ');
   return [
     'Morphotype catalog. Ask for a section or any name below for details.',
+    `kits (${KITS.length}): ${names(KITS.map((k) => k.name))} (background, palette, fonts and looks in one word)`,
     `materials (${EFFECTS.length}): ${names(EFFECTS.map((e) => e.id))}`,
     `presets (${PRESETS.length}): material looks by name`,
     `modifiers (${Object.keys(MODIFIER_UI).length}): ${names(Object.keys(MODIFIER_UI))}`,
@@ -217,6 +223,8 @@ export function catalog(query = '', templates: Template[] | null = null): string
   if (pre) out.push(`preset ${pre.name}: material ${pre.effect}, background ${pre.bg}\n  params: ${JSON.stringify(pre.params)}\n  (other params keep the material's defaults: catalog ${pre.effect})`);
   const rec = SHAPE_RECIPES.find((r) => norm(r.name) === k);
   if (rec) out.push(`recipe ${rec.name}: ${rec.mods.map((m) => JSON.stringify(m)).join(' + ')}`);
+  const kit = KITS.find((x) => norm(x.name) === k);
+  if (kit) out.push(`kit ${kitText(kit)}`);
   const tpl = templates?.find((t) => norm(t.name) === k);
   if (tpl) out.push(`template ${tpl.name} (${tpl.category}) — ${tpl.hint}\n  (see it as layers: describe "${tpl.name}")`);
   if (out.length) return out.join('\n\n');
@@ -233,6 +241,7 @@ function search(k: string, templates: Template[] | null): string {
   for (const r of SHAPE_RECIPES) if (has(r.name, r.tags)) hits.push(`recipe ${r.name}`);
   for (const [s, ui] of Object.entries(SYMBOL_UI)) if (has(s, ui.label)) hits.push(`shape ${s} — ${ui.label}`);
   for (const t of templates ?? []) if (has(t.name, t.hint)) hits.push(`template ${t.name}`);
+  for (const x of KITS) if (has(x.name, x.blurb)) hits.push(`kit ${x.name}`);
   if (!hits.length) return `Nothing matches "${k}". Sections: ${SECTIONS.join(', ')}.`;
   const more = hits.length > 40 ? `\n… and ${hits.length - 40} more` : '';
   return hits.slice(0, 40).join('\n') + more;

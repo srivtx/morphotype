@@ -9,11 +9,21 @@ import { effectById, EFFECTS } from '../render/effects';
 import { timelineOf } from '../state/clock';
 import { isChoice, isGroup, MODIFIER_UI, SYMBOL_UI, type Node, type Project } from '../state/model';
 import { MORPH_KEY } from '../state/geoMotion';
+import { rowsOf } from '../state/tracks';
 import { num } from './describe';
+import type { LayoutOp } from './place';
+import { retime } from './fix';
+import { handle } from './find';
 
 export interface Finding {
   level: 'error' | 'warn' | 'info';
   text: string;
+  /** A rule of taste rather than a mistake: `--style abstract` turns these into notes. */
+  style?: boolean;
+  /** What `check --fix` does about it: assignments, and layout to resolve against the build. */
+  fix?: { edits?: string[]; layout?: LayoutOp[]; does: string; redo?: (p: Project) => Finding['fix'] | null };
+  /** A ready-to-run command for what --fix leaves to you ({file} is the design). */
+  hint?: string;
 }
 
 export const label = (n: Node) => (n.name ? `"${n.name}" #${n.id}` : `#${n.id}`);
@@ -85,8 +95,8 @@ export function structural(p: Project, build: BuildResult | null): Finding[] {
     }
     // Timing.
     const mo = n.motion;
-    if (mo && mo.enter !== 'none' && mo.delay >= tl.duration) out.push({ level: 'warn', text: `${who}: enters at ${num(mo.delay)}s, after the ${num(tl.duration)}s clock ends` });
-    if (mo?.leave && mo.leave !== 'none' && (mo.leaveAt ?? 0) >= tl.duration) out.push({ level: 'warn', text: `${who}: leaves at ${num(mo.leaveAt ?? 0)}s, after the ${num(tl.duration)}s clock ends` });
+    if (mo && mo.enter !== 'none' && mo.delay >= tl.duration) out.push({ level: 'warn', text: `${who}: enters at ${num(mo.delay)}s, after the ${num(tl.duration)}s clock ends`, fix: retime(p, n.id, 'enter') });
+    if (mo?.leave && mo.leave !== 'none' && (mo.leaveAt ?? 0) >= tl.duration) out.push({ level: 'warn', text: `${who}: leaves at ${num(mo.leaveAt ?? 0)}s, after the ${num(tl.duration)}s clock ends`, fix: retime(p, n.id, 'leave') });
     // Geometry.
     if (isGroup(n) || hidden || merged || (!isGroup(n) && n.guide)) return;
     const o = outs.get(n.id);
@@ -95,12 +105,25 @@ export function structural(p: Project, build: BuildResult | null): Finding[] {
     else if (!o.bbox) out.push({ level: 'warn', text: `${who}: has no outline (empty text or shape?)` });
     else {
       const { share, sides } = outside(o.bbox, W, H);
-      if (share > 0.995) out.push({ level: 'error', text: `${who}: entirely outside the canvas (box ${o.bbox.map(num).join(', ')})` });
-      else if (share > 0.02) out.push({ level: 'warn', text: `${who}: ${Math.round(share * 100)}% off the ${sides.join(' and ')} edge${sides.length > 1 ? 's' : ''}` });
+      const text = n.content.type === 'text';
+      // Text cut off is a mistake to fix; a shape bleeding off may be the point.
+      const inside = { layout: [{ target: '#' + n.id, contain: true }], does: 'shrunk to fit inside the margins and moved in' };
+      const hint = `set {file} '"${handle(p, n)}".contain=true'`;
+      if (share > 0.995) out.push({ level: 'error', text: `${who}: entirely outside the canvas (box ${o.bbox.map(num).join(', ')})`, ...(text ? { fix: inside } : { hint }) });
+      else if (share > 0.02) out.push({ level: 'warn', text: `${who}: ${Math.round(share * 100)}% off the ${sides.join(' and ')} edge${sides.length > 1 ? 's' : ''}${text ? ': cut off' : ''}`, ...(text ? { fix: inside } : { hint }) });
       const tall = o.bbox[3] - o.bbox[1];
-      if (n.content.type === 'text' && tall < Math.min(W, H) * 0.012) out.push({ level: 'warn', text: `${who}: text is only ${num(tall)}px tall on a ${W}×${H} canvas` });
+      if (n.content.type === 'text' && tall < Math.min(W, H) * 0.012) out.push({ level: 'warn', text: `${who}: text is only ${num(tall)}px tall on a ${W}×${H} canvas`, hint: `set {file} '"${handle(p, n)}".size=${Math.round((n.content.size * Math.min(W, H) * 0.025) / Math.max(1, tall))}'` });
     }
   });
+  // Moves the clock cuts off: an entrance or exit still under way when it ends.
+  const D = tl.duration;
+  for (const r of rowsOf(p, [])) {
+    for (const t of r.tracks) {
+      if ((t.kind !== 'enter' && t.kind !== 'leave') || t.index !== undefined || t.start >= D || t.end <= D + 1e-3) continue;
+      const n = r.node;
+      out.push({ level: 'warn', text: `${label(n)}: ${t.kind === 'enter' ? 'its entrance' : 'its exit'} ends at ${num(t.end)}s, after the ${num(D)}s clock: cut off`, fix: retime(p, t.owner, t.kind) });
+    }
+  }
   return out;
 }
 
@@ -125,18 +148,26 @@ const lin = (c: number) => {
 export const luminance = (r: number, g: number, b: number) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 export const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 
-/** How many pixels a layer changes, and its contrast against what's behind it there. */
-export function presence(shown: Pixels, without: Pixels): { px: number; contrast: number } {
-  let px = 0, fg = 0, bg = 0;
+/**
+ * How many pixels a layer changes, and its contrast against what's behind it
+ * there: the contrast that the best-separated quarter of its pixels reaches,
+ * so an outline, a hard shadow or a lit edge counts the way it reads, rather
+ * than being averaged away by a fill close to the background.
+ */
+export function presence(shown: Pixels, without: Pixels): { px: number; contrast: number; behind: number } {
+  let px = 0, bg = 0;
   const d = shown.data, e = without.data;
+  const ratios: number[] = [];
   for (let i = 0; i < d.length; i += 4) {
     // Low enough to catch text a shade off its background; drawing is deterministic, so no noise.
     if (Math.abs(d[i] - e[i]) + Math.abs(d[i + 1] - e[i + 1]) + Math.abs(d[i + 2] - e[i + 2]) < 9) continue;
     px++;
-    fg += luminance(d[i], d[i + 1], d[i + 2]);
-    bg += luminance(e[i], e[i + 1], e[i + 2]);
+    const b = luminance(e[i], e[i + 1], e[i + 2]);
+    bg += b;
+    ratios.push(contrast(luminance(d[i], d[i + 1], d[i + 2]), b));
   }
-  return { px, contrast: px ? contrast(fg / px, bg / px) : 1 };
+  ratios.sort((a, b) => a - b);
+  return { px, contrast: px ? ratios[Math.floor((px - 1) * 0.75)] : 1, behind: px ? bg / px : 0 };
 }
 
 /** Spread of brightness: near 0 means a flat, empty-looking frame. */
@@ -152,12 +183,14 @@ export function spread(p: Pixels): number {
 }
 
 /**
- * Motion from runs of three frames one video frame apart: a pop is one step
- * far bigger than the steps either side of it (fast but smooth motion has
- * neighbours just as big). `seam` is the same around the loop's restart:
- * the step into it (a), across it (b) and out of it (c).
+ * Motion from runs of frames one video frame apart: a pop is one step far
+ * bigger than the steps either side of it (fast but smooth motion has
+ * neighbours just as big). With a third step (c), only the middle step can be
+ * a pop: a move that starts from rest has a still step before it, but a big
+ * one after. `seam` is the same around the loop's restart: the step into it
+ * (a), across it (b) and out of it (c).
  */
-export function motionFindings(runs: { t: number; a: number; b: number }[], seam: { a: number; b: number; c: number } | null, animated: boolean): Finding[] {
+export function motionFindings(runs: { t: number; a: number; b: number; c?: number }[], seam: { a: number; b: number; c: number } | null, animated: boolean): Finding[] {
   const out: Finding[] = [];
   const moving = runs.some((r) => Math.max(r.a, r.b) > 0.05) || (seam && Math.max(seam.a, seam.b, seam.c) > 0.05);
   if (!moving) {
@@ -166,7 +199,7 @@ export function motionFindings(runs: { t: number; a: number; b: number }[], seam
   }
   const floor = 0.15;
   for (const r of runs) {
-    const [big, small] = r.a > r.b ? [r.a, r.b] : [r.b, r.a];
+    const [big, small] = r.c !== undefined ? [r.b, Math.max(r.a, r.c)] : r.a > r.b ? [r.a, r.b] : [r.b, r.a];
     if (big > 2 && big > (small + floor) * 6) out.push({ level: 'warn', text: `pop at ${num(r.t)}s: one frame changes ${num(big / (small + floor))}× more than the next` });
   }
   if (seam) {
@@ -183,5 +216,12 @@ export function report(title: string, findings: Finding[]): string {
   const warns = findings.filter((f) => f.level === 'warn');
   const info = findings.filter((f) => f.level === 'info');
   const head = `${title}: ${errors.length ? `${errors.length} problem${errors.length > 1 ? 's' : ''}` : 'no problems'}, ${warns.length} warning${warns.length === 1 ? '' : 's'}`;
-  return [head, ...errors.map((f) => `✗ ${f.text}`), ...warns.map((f) => `! ${f.text}`), ...info.map((f) => `· ${f.text}`)].join('\n');
+  const line = (mark: string) => (f: Finding) => `${mark} ${f.text}${f.fix ? ' [--fix]' : ''}`;
+  return [head, ...errors.map(line('✗')), ...warns.map(line('!')), ...info.map(line('·'))].join('\n');
+}
+
+/** Under `--style abstract`, rules of taste become notes; mistakes stay what they are. */
+export function forStyle(findings: Finding[], style: string | undefined): Finding[] {
+  if (style !== 'abstract') return findings;
+  return findings.map((f) => (f.style && f.level === 'warn' ? { ...f, level: 'info', fix: undefined } : f));
 }
