@@ -13,6 +13,8 @@ import { EditError, findNode } from './find';
 export interface Change {
   project: Project;
   change: string;
+  /** The new node's id, for what adds one. */
+  id?: string;
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[\s_·-]+/g, '');
@@ -151,7 +153,7 @@ export interface Add extends Place {
   font?: string;
   /** Pen lines: stroke width in px. */
   width?: number;
-  /** Flat colour shortcut (sets the material's fill, or flat with that fill). */
+  /** Colour shortcut: the material's main colour (fill, colour or ink), or flat in that colour. */
   color?: string;
 }
 
@@ -181,11 +183,13 @@ export function addLayer(p0: Project, kind: LayerKind, what: string, o: Add = {}
   look(n, o);
   if (o.color) {
     if (!/^#[0-9a-f]{6}$/i.test(o.color)) throw new EditError(`--color is #rrggbb, got "${o.color}"`);
-    if ('fill' in n.style.params) n.style.params.fill = o.color;
+    // The material's one main colour when it has one (a fill, a neon's glow, an ink); else flat in that colour.
+    const main = ['fill', 'color', 'ink'].find((k) => k in n.style.params);
+    if (main) n.style.params[main] = o.color;
     else n.style = style('flat', { fill: o.color });
   }
   insert(p, n, o);
-  return { project: p, change: `added "${n.name}" #${n.id}: ${kind} ${kind === 'text' ? `"${what.replace(/\\n/g, '⏎')}"` : kind === 'shape' ? what : 'path'} · ${n.style.effect}${n.modifiers.length ? ` · ${n.modifiers.map((m) => m.kind).join('+')}` : ''}` };
+  return { project: p, id: n.id, change: `added "${n.name}" #${n.id}: ${kind} ${kind === 'text' ? `"${what.replace(/\\n/g, '⏎')}"` : kind === 'shape' ? what : 'path'} · ${n.style.effect}${n.modifiers.length ? ` · ${n.modifiers.map((m) => m.kind).join('+')}` : ''}` };
 }
 
 /** A modifier on a layer, with its defaults and any `fields` over them. */
@@ -223,7 +227,7 @@ export function addGroup(p0: Project, members: string[], o: Place & { merge?: bo
   for (const x of [...order].reverse()) list.splice(x.h.i, 1);
   list.splice(at, 0, g);
   if (o.merge) look(g, o);
-  return { project: p, change: `grouped ${nodes.map((n) => n.name ?? n.id).join(', ')} as "${g.name}" #${g.id}${o.merge ? ' (merged into one shape)' : ''}` };
+  return { project: p, id: g.id, change: `grouped ${nodes.map((n) => n.name ?? n.id).join(', ')} as "${g.name}" #${g.id}${o.merge ? ' (merged into one shape)' : ''}` };
 }
 
 export function removeLayers(p0: Project, targets: string[]): Change {
@@ -259,7 +263,7 @@ export function duplicateLayer(p0: Project, target: string, o: Place = {}): Chan
     const h = home(p, n.id);
     h.list.splice(h.i + 1, 0, copy);
   }
-  return { project: p, change: `duplicated "${n.name ?? n.id}" as "${copy.name}" #${copy.id}` };
+  return { project: p, id: copy.id, change: `duplicated "${n.name ?? n.id}" as "${copy.name}" #${copy.id}` };
 }
 
 /** Restack: top, bottom, up, down, or above / below another layer (in its own list). */

@@ -9,6 +9,7 @@ import type { Box } from '../engine/types';
 import { isGroup, nodeLabel, type Node, type Project } from '../state/model';
 import type { Finding, Pixels } from './check';
 import { num } from './describe';
+import { findNode, handle } from './find';
 
 export interface Item {
   id: string;
@@ -16,6 +17,8 @@ export interface Item {
   text: boolean;
   /** Text: its font size on the canvas, px, and how many characters it has. */
   size?: number;
+  /** Text: its own size setting (before scale). */
+  contentSize?: number;
   chars?: number;
   box: Box;
 }
@@ -33,7 +36,7 @@ export function itemsOf(p: Project, build: BuildResult | null): Item[] {
         if (!box) continue;
         const text = !isGroup(n) && n.content.type === 'text';
         const c = !isGroup(n) && n.content.type === 'text' ? n.content : null;
-        out.push({ id: n.id, name: nodeLabel(n), text, size: c ? c.size * (n as { scale: number }).scale * k : undefined, chars: c ? c.text.replace(/\s/g, '').length : undefined, box });
+        out.push({ id: n.id, name: nodeLabel(n), text, size: c ? c.size * (n as { scale: number }).scale * k : undefined, contentSize: c?.size, chars: c ? c.text.replace(/\s/g, '').length : undefined, box });
       }
     }
   };
@@ -42,6 +45,9 @@ export function itemsOf(p: Project, build: BuildResult | null): Item[] {
 }
 
 const who = (i: Item) => `"${i.name}"`;
+/** An item as a command names it. */
+const h = (p: Project, i: Item) => `"${handle(p, findNode(p, i.id))}"`;
+const area = (b: Box) => (b[2] - b[0]) * (b[3] - b[1]);
 
 /** Each layer's box and its distance to every edge, as a table. */
 export function boxTable(p: Project, items: Item[]): string {
@@ -64,14 +70,17 @@ export function layoutFindings(p: Project, items: Item[]): Finding[] {
   const inside = items.filter((i) => i.box[0] < W / 2 && i.box[2] > -W / 2 && i.box[1] < H / 2 && i.box[3] > -H / 2);
   // Edges that nearly line up.
   const edges = (b: Box) => ({ left: b[0], 'centre (x)': (b[0] + b[2]) / 2, right: b[2], top: b[1], 'middle (y)': (b[1] + b[3]) / 2, bottom: b[3] });
-  const misses: { d: number; text: string }[] = [];
+  const misses: (Finding & { d: number })[] = [];
+  const edge = (k: string) => k.replace(/ \(.\)/, '');
   for (let a = 0; a < inside.length; a++) {
     for (let b = a + 1; b < inside.length; b++) {
       const ea = edges(inside[a].box), eb = edges(inside[b].box);
-      let best: { d: number; text: string } | null = null;
+      let best: (Finding & { d: number }) | null = null;
       for (const k of Object.keys(ea) as (keyof typeof ea)[]) {
         const d = Math.abs(ea[k] - eb[k]);
-        if (d > seen && d <= tol && (!best || d < best.d)) best = { d, text: `${who(inside[a])} and ${who(inside[b])}: ${k.replace(/ \(.\)/, '')}s ${num(d)}px apart, nearly lined up` };
+        // The smaller one moves to the bigger one.
+        const [big, small] = area(inside[a].box) >= area(inside[b].box) ? [inside[a], inside[b]] : [inside[b], inside[a]];
+        if (d > seen && d <= tol && (!best || d < best.d)) best = { level: 'warn', style: true, d, text: `${who(inside[a])} and ${who(inside[b])}: ${edge(k)}s ${num(d)}px apart, nearly lined up`, hint: `align {file} ${h(p, small)} --to ${h(p, big)} --edge ${edge(k)}` };
         if (d <= seen) {
           best = null;
           break;
@@ -80,23 +89,23 @@ export function layoutFindings(p: Project, items: Item[]): Finding[] {
       if (best) misses.push(best);
     }
     const c = edges(inside[a].box);
-    for (const [k, v] of [['horizontally', c['centre (x)']], ['vertically', c['middle (y)']]] as const) {
-      if (Math.abs(v) > seen && Math.abs(v) <= tol) misses.push({ d: Math.abs(v), text: `${who(inside[a])}: ${num(Math.abs(v))}px off centre ${k}, nearly centred` });
+    for (const [k, v, axis] of [['horizontally', c['centre (x)'], 'x'], ['vertically', c['middle (y)'], 'y']] as const) {
+      if (Math.abs(v) > seen && Math.abs(v) <= tol) misses.push({ level: 'warn', style: true, d: Math.abs(v), text: `${who(inside[a])}: ${num(Math.abs(v))}px off centre ${k}, nearly centred`, fix: { layout: [{ target: '#' + inside[a].id, centre: axis }], does: `centred ${k} by its ink` } });
     }
   }
   misses.sort((x, y) => x.d - y.d);
-  for (const m of misses.slice(0, 6)) out.push({ level: 'warn', text: m.text });
-  if (misses.length > 6) out.push({ level: 'info', text: `${misses.length - 6} more near-misses like these` });
+  for (const { d: _, ...m } of misses.slice(0, 6)) out.push(m);
+  if (misses.length > 6) out.push({ level: 'info', style: true, text: `${misses.length - 6} more near-misses like these` });
   // Content as a whole: off centre by a little, or crowding an edge.
   if (inside.length) {
     const u = inside.reduce<Box>((b, i) => [Math.min(b[0], i.box[0]), Math.min(b[1], i.box[1]), Math.max(b[2], i.box[2]), Math.max(b[3], i.box[3])], [Infinity, Infinity, -Infinity, -Infinity]);
     const [L, R] = [u[0] + W / 2, W / 2 - u[2]];
-    if (L > 0 && R > 0 && u[2] - u[0] > W * 0.5 && Math.abs(L - R) > tol && Math.abs(L - R) < W * 0.08) out.push({ level: 'info', text: `the design sits ${num(Math.round(Math.abs(L - R) / 2))}px ${L > R ? 'right' : 'left'} of centre (margins left ${num(Math.round(L))}, right ${num(Math.round(R))})` });
+    if (L > 0 && R > 0 && u[2] - u[0] > W * 0.5 && Math.abs(L - R) > tol && Math.abs(L - R) < W * 0.08) out.push({ level: 'info', style: true, text: `the design sits ${num(Math.round(Math.abs(L - R) / 2))}px ${L > R ? 'right' : 'left'} of centre (margins left ${num(Math.round(L))}, right ${num(Math.round(R))})` });
     const close = Math.min(W, H) * 0.025;
     for (const i of inside) {
       const m: [string, number][] = [['left', i.box[0] + W / 2], ['right', W / 2 - i.box[2]], ['top', i.box[1] + H / 2], ['bottom', H / 2 - i.box[3]]];
       const near = m.filter(([, v]) => v > 0.75 && v < close);
-      if (near.length) out.push({ level: 'warn', text: `${who(i)}: only ${near.map(([s, v]) => `${num(Math.round(v))}px from the ${s}`).join(' and ')} edge: crowded (bleed it off or give it room)` });
+      if (near.length) out.push({ level: 'warn', style: true, text: `${who(i)}: only ${near.map(([s, v]) => `${num(Math.round(v))}px from the ${s}`).join(' and ')} edge: crowded (bleed it off or give it room)`, hint: `set {file} '${h(p, i)}.contain=true'` });
     }
   }
   // Type sizes.
@@ -105,11 +114,11 @@ export function layoutFindings(p: Project, items: Item[]): Finding[] {
   const biggest = Math.max(0, ...items.filter((i) => i.size).map((i) => i.size!));
   if (texts.length >= 2) {
     const [a, b] = texts;
-    if (b.size! / a.size! > 0.88 && a.name !== b.name && a.size! > biggest * 0.6) out.push({ level: 'warn', text: `no clear lead: ${who(a)} (${num(Math.round(a.size!))}px) and ${who(b)} (${num(Math.round(b.size!))}px) are about the same size` });
+    if (b.size! / a.size! > 0.88 && a.name !== b.name && a.size! > biggest * 0.6) out.push({ level: 'warn', style: true, text: `no clear lead: ${who(a)} (${num(Math.round(a.size!))}px) and ${who(b)} (${num(Math.round(b.size!))}px) are about the same size`, hint: `set {file} '${h(p, b)}.size=${Math.round((b.contentSize ?? b.size!) * 0.6)}'` });
     const sizes = new Set(texts.map((t) => Math.round(Math.log(t.size!) / Math.log(1.08))));
-    if (sizes.size > 4) out.push({ level: 'info', text: `${sizes.size} different text sizes: fewer reads cleaner` });
+    if (sizes.size > 4) out.push({ level: 'info', style: true, text: `${sizes.size} different text sizes: fewer reads cleaner` });
   }
-  if (items.length > 30) out.push({ level: 'info', text: `${items.length} separate things on the canvas: busy` });
+  if (items.length > 30) out.push({ level: 'info', style: true, text: `${items.length} separate things on the canvas: busy` });
   return out;
 }
 
@@ -145,6 +154,6 @@ export function lookFindings(design: Pixels, bare: Pixels): Finding[] {
   }
   const main = hues.map((n, k) => ({ n, k })).filter((x) => colored && x.n / colored > 0.04).sort((a, b) => b.n - a.n);
   const neutral = 1 - colored / (w * h);
-  out.push({ level: main.length >= 6 ? 'warn' : 'info', text: `palette: ${main.length ? `${main.length} main hue${main.length > 1 ? 's' : ''} (${main.map((x) => HUES[x.k]).join(', ')})` : 'no strong hues'}${neutral > 0.5 ? ', mostly neutrals' : ''}${main.length >= 6 ? ': busy, try fewer' : ''}` });
+  out.push({ level: main.length >= 6 ? 'warn' : 'info', style: true, text: `palette: ${main.length ? `${main.length} main hue${main.length > 1 ? 's' : ''} (${main.map((x) => HUES[x.k]).join(', ')})` : 'no strong hues'}${neutral > 0.5 ? ', mostly neutrals' : ''}${main.length >= 6 ? ': busy, try fewer' : ''}` });
   return out;
 }

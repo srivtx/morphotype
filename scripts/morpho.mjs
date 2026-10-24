@@ -3,7 +3,8 @@
 // design, editing it and judging it doesn't take source reading or a pile of
 // screenshots.
 //
-//   npm run morpho -- catalog [name|section]     what materials, modifiers, shapes, motion… exist
+//   npm run morpho -- make <spec.json> [-o f]     a whole design from one spec: built, placed, checked, one PNG
+//   npm run morpho -- catalog [name|section]     what kits, materials, modifiers, shapes, motion… exist
 //   npm run morpho -- describe <scene>            the design as a text tree (changed settings only)
 //   npm run morpho -- scene <template> [-o f]     save a template as an editable .morpho file
 //   npm run morpho -- set <file> <a=b>…           edit a .morpho file; prints what changed
@@ -32,19 +33,30 @@ const OUT_DIR = path.join(root, 'test-results/morpho');
 
 const HELP = `morpho <command> [args] [options]
 
-  catalog [query]          index; a section (materials, modifiers, shapes, motion, keyframes,
+  the workflow: make → check (--fix) → vary → video (docs/AGENT-TOOLS.md)
+
+  make <spec.json> [-o f]  a whole design from one spec (canvas, kit, layers, layout, motion):
+                           builds it, places it, fixes what's mechanical (--no-fix to skip),
+                           checks it and draws one PNG. Re-run after editing the spec.
+                           --kit name, --style poster|logo|abstract, --at 0,1,rest
+  catalog [query]          index; a section (kits, materials, modifiers, shapes, motion, keyframes,
                            layers, presets, recipes, fonts, backgrounds, canvas, templates);
-                           or any name (chrome, glitch, star, "Ice chrome")
+                           or any name (chrome, glitch, star, "Ice chrome", chrome-night)
   describe <scene>         every layer, top first, with the settings that differ from defaults
   scene <template> [-o f]  write a template as a .morpho file to edit (default: <slug>.morpho)
   set <file> <a=b>…        edit a .morpho file in place (--dry to only print the changes)
-                           also Layer.preset="Ice chrome" and Layer.recipe=Glitch
+                           also Layer.preset="Ice chrome" and Layer.recipe=Glitch, layout
+                           (Layer.place=top, .fitWidth=80, .margin=64, .centre=x, .contain=true),
+                           --stack A,B (or --row A,B) --gap 40 --align centre --place centre,
+                           --style poster|logo|abstract, and --check: what that did to the findings
   new <file>               a blank design: --canvas 1080x1350 | "Instagram post", --bg "#111" |
-                           "#a,#b" | Midnight, --name, --duration 4
+                           "#a,#b" | Midnight, --name, --duration 4, --kit name, --style poster|logo|abstract
   add <file> text "HI"     a layer: text "…" | shape star | line "<svg d>" | path "<svg d>", with
                            --name --at x,y --size --font --color --material chrome | --preset "Ice
                            chrome" --recipe Glitch --rotation --scale --width (lines) and
-                           --above L | --below L | --into Group (default: on top)
+                           --above L | --below L | --into Group (default: on top); with a kit,
+                           --role headline|accent|body; layout: --fit-width 80 --fit-height 30
+                           --place "top third" --margin 64 --centre x|y|both
   add <file> modifier glitch --to L [--fields '{"amount":0.6}']   (or a recipe name)
   add <file> group A B [--name G] [--merge]
   add <file> font f.ttf    embed a font; prints the id for --font
@@ -55,13 +67,19 @@ const HELP = `morpho <command> [args] [options]
                            top, bottom, middle (comma-separated for both axes)
   layout <scene>           every layer's box and margins, plus near-misses, crowding and hierarchy
   timing <scene>           when everything moves: bars on the clock and notes on rhythm
+  motion <file> [L…]       motion over several layers at once (default: all, bottom up): --recipe
+                           cascade|pop|type-on|slide-in|drop|drift|breathe, or --enter rise
+                           --stagger 0.15 --feel Smooth --start 0.2 --duration 0.6 --letters
+                           --loop float --spread 0.25 --leave auto|none|fade|rise…
   video <scene>            -o f.mp4 | f.webm | f.gif | dir/ (PNG frames); --fps (30, GIF 20),
                            --size (GIF default 480) or --scale
   fit <scene> <ref> L.k…   tune each setting until the design matches the reference picture;
                            writes the file (or --out), prints before → after
   render <scene>           PNG; one time draws the frame, several draw a captioned filmstrip
   vary <scene>             one PNG with a captioned cell per variation
-  check <scene>            structural and visual problems, as text
+  check <scene>            structural and visual problems, as text; --fix applies the mechanical
+                           fixes (cut-off text, nearly centred, loop seams, moves the clock cuts
+                           off) and prints the rest as commands; --style for this check only
   compare <scene> <image>  how close the design is to a reference (PNG/JPEG), with a difference image
   serve                    keep Vite and a browser running; drawing commands use it when up
 
@@ -91,7 +109,7 @@ options:
 
 function parse(argv) {
   const pos = [], opt = { set: [], vary: [], variant: [] };
-  const flags = new Set(['cpu', 'json', 'dry', 'transparent', 'merge', 'force']);
+  const flags = new Set(['cpu', 'json', 'dry', 'transparent', 'merge', 'force', 'fix', 'no-fix', 'check', 'letters']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-o') opt.out = argv[++i];
@@ -216,6 +234,7 @@ async function startApp(gpu) {
 async function runInPage({ scene, set, op, opts }) {
   const a = await window.morphotype.agent();
   return a.quietly(async () => {
+    if (op === 'make') return { changes: [], name: opts.spec?.name, ...(await a.make(opts.spec, opts)) };
     // Later batches of a video reuse the design the first one loaded.
     const key = JSON.stringify([scene, set]);
     let changes = [];
@@ -232,7 +251,9 @@ async function runInPage({ scene, set, op, opts }) {
     const name = p.name;
     if (op === 'render') return { changes, name, ...(await a.render(opts)) };
     if (op === 'vary') return { changes, name, ...(await a.vary(opts.variants, { ...opts, at: opts.at?.[0] ?? null })) };
-    if (op === 'check') return { changes, name, text: await a.check(opts) };
+    if (op === 'check') return { changes, name, ...(await (opts.fix ? a.checkFix(opts) : a.checkFull(opts))) };
+    if (op === 'checkdiff') return { changes, name, ...(await a.checkDiff(opts.before, opts.beforeProject, opts)) };
+    if (op === 'place') return { changes, name, ...(await a.place(opts.ops)) };
     if (op === 'compare') return { changes, name, ...(await a.compare(opts.ref, { ...opts, at: opts.at?.[0] ?? null })) };
     if (op === 'align') return { changes, name, ...(await a.align(opts.targets, opts.to, opts.edges)) };
     if (op === 'layout') return { changes, name, text: await a.layout() };
@@ -333,7 +354,7 @@ const placeOpts = (opt) => ({ name: opt.name, at: opt.at, rotation: num(opt.rota
 /** A page job that changes a file: send the design, write back what comes back. */
 async function pageEdit(file, opt, op, opts) {
   if (!file || !existsSync(file)) throw new Error(`Needs a .morpho file${file ? `; "${file}" doesn't exist` : ''}`);
-  const r = await drawJob({ scene: { project: JSON.parse(await readFile(file, 'utf8')) }, set: opt.set, op, opts }, !(opt.cpu || process.env.MORPHO_CPU));
+  const r = await drawJob({ scene: { project: JSON.parse(await readFile(file, 'utf8')) }, set: opt.set, op, opts }, gpu(opt));
   const out = opt.out ?? file;
   if (!opt.dry) await writeFile(out, JSON.stringify(r.project, null, 1));
   return [...(r.changes ?? []).map((c) => `set ${c}`), r.change ?? r.text, out !== file ? `wrote ${out}` : ''].filter(Boolean).join('\n');
@@ -391,10 +412,65 @@ async function video(s, opt) {
   return `wrote ${shown && !shown.startsWith('..') ? shown : out}: ${total} frames at ${fps} fps, ${info.width}×${info.height}, ${info.duration}s${info.loop ? ' (loops seamlessly)' : ''}`;
 }
 
+const gpu = (opt) => !(opt.cpu || process.env.MORPHO_CPU);
+const q = (f) => (/^[\w./-]+$/.test(f) ? f : JSON.stringify(f));
+
+// ---------- check results kept by file content, so set --check only checks the new version ----------
+
+const CHECKS = path.join(OUT_DIR, '.checks');
+const checkKey = async (text, style) => (await import('node:crypto')).createHash('sha1').update(`${style ?? ''}\n${text}`).digest('hex').slice(0, 20);
+async function keepFindings(text, style, findings) {
+  if (!findings) return;
+  await mkdir(CHECKS, { recursive: true });
+  await writeFile(path.join(CHECKS, `${await checkKey(text, style)}.json`), JSON.stringify(findings));
+}
+async function keptFindings(text, style) {
+  try {
+    return JSON.parse(await readFile(path.join(CHECKS, `${await checkKey(text, style)}.json`), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** What the findings leave to do: fixable ones, ones with a command, or nothing. */
+const left = (findings = []) => ({ fixable: findings.some((f) => f.level !== 'info' && f.fix), todo: findings.some((f) => f.level !== 'info' && !f.fix), problems: findings.filter((f) => f.level !== 'info').length });
+
+/** The likely next command after a design is in good shape: a video when it moves, a still when it doesn't. */
+const finish = (file, moving) => (moving ? `morpho video ${q(file)} -o ${slug(file)}.mp4 (or vary to compare options first)` : `morpho render ${q(file)} --out ${slug(file)}.png (or vary to compare options first)`);
+
+/** Layout from add's options: one placement for the new layer. */
+function addLayout(opt, id) {
+  const o = { target: `#${id}` };
+  if (opt['fit-width'] !== undefined) o.fitWidth = Number(opt['fit-width']);
+  if (opt['fit-height'] !== undefined) o.fitHeight = Number(opt['fit-height']);
+  if (opt.place) o.place = opt.place;
+  if (opt.margin !== undefined) o.margin = /%$/.test(opt.margin) ? opt.margin : Number(opt.margin);
+  if (opt.centre ?? opt.center) o.centre = opt.centre ?? opt.center;
+  return Object.keys(o).length > 1 ? [o] : [];
+}
+
+/** Stacks and rows from set's options. */
+function stackLayout(opt) {
+  const list = (v) => String(v).split(',').map((x) => x.trim()).filter(Boolean);
+  const out = [];
+  for (const k of ['stack', 'row']) {
+    if (!opt[k]) continue;
+    out.push({ [k]: list(opt[k]), gap: opt.gap !== undefined ? Number(opt.gap) : undefined, align: opt.align, place: opt.place, margin: opt.margin === undefined ? undefined : /%$/.test(opt.margin) ? opt.margin : Number(opt.margin) });
+  }
+  return out;
+}
+
+/** A motion recipe from the command line. */
+function moveSpec(opt, layers) {
+  const n = (k) => (opt[k] === undefined ? undefined : Number(opt[k]));
+  return { layers: layers.length ? layers : 'all', recipe: opt.recipe, enter: opt.enter, leave: opt.leave, loop: opt.loop, stagger: n('stagger'), start: n('start'), feel: opt.feel, duration: n('duration'), distance: n('distance'), letters: opt.letters ? (opt.words ? 'words' : 'letters') : undefined, letterStagger: n('letter-stagger'), period: n('period'), amount: n('amount'), spread: n('spread'), leaveAt: n('leave-at') };
+}
+
 async function main() {
   const { cmd, args, opt } = parse(process.argv.slice(2));
   const t0 = performance.now();
   const say = (s) => process.stdout.write(s.endsWith('\n') ? s : s + '\n');
+  const next = (s) => say(`next: ${s}`);
   const done = () => process.stderr.write(`(${((performance.now() - t0) / 1000).toFixed(1)} s)\n`);
   switch (cmd) {
     case undefined:
@@ -404,6 +480,31 @@ async function main() {
     case 'catalog': {
       const a = await nodeAgent();
       say(a.catalog(args.join(' ')));
+      next(args.length ? 'put it in a spec and run morpho make spec.json' : 'morpho catalog kits, then write a spec and run morpho make spec.json');
+      break;
+    }
+    case 'make': {
+      const [file] = args;
+      if (!file || !existsSync(file)) throw new Error(`make needs a spec file${file ? `; "${file}" doesn't exist` : ''} (JSON: { "canvas": "1080x1350", "kit": "chrome-night", "layers": [ … ] }; see docs/AGENT-TOOLS.md)`);
+      let spec;
+      try {
+        spec = JSON.parse(await readFile(file, 'utf8'));
+      } catch (e) {
+        throw new Error(`${file} isn't valid JSON: ${e.message}`);
+      }
+      const out = opt.out ?? file.replace(/\.json$/i, '') + '.morpho';
+      if (out === file) throw new Error('make writes a .morpho file next to the spec; give -o for another name');
+      const at = opt.at || opt.frames ? times(opt) : undefined;
+      const r = await drawJob({ scene: null, set: [], op: 'make', opts: { spec, kit: opt.kit, style: opt.style, fix: !opt['no-fix'], at, file: out } }, gpu(opt));
+      const text = JSON.stringify(r.project, null, 1);
+      await writeFile(out, text);
+      await keepFindings(text, undefined, r.findings);
+      say(`wrote ${out} from ${file}`);
+      say(r.text);
+      say(`wrote ${await writePng(r.png, { ...opt, out: undefined }, out, 'make')} (${r.width}×${r.height})`);
+      for (const e of r.pageErrors ?? []) process.stderr.write(`page error: ${e}\n`);
+      const l = left(r.findings);
+      next(l.todo ? `run the commands under "still to do" (add --check to see what each changes), or edit ${file} and make again` : finish(out, r.moving));
       break;
     }
     case 'describe': {
@@ -412,6 +513,7 @@ async function main() {
       let p = s.project ? a.migrate(s.project) : a.template(s.template);
       if (opt.set.length) p = a.applyEdits(p, opt.set).project;
       say(a.describe(p));
+      next(s.template ? `morpho scene ${q(args[0])} -o ${slug(p.name)}.morpho, then set or check it` : `morpho set ${q(args[0])} Layer.setting=value --check`);
       break;
     }
     case 'timing': {
@@ -420,17 +522,19 @@ async function main() {
       let p = s.project ? a.migrate(s.project) : a.template(s.template);
       if (opt.set.length) p = a.applyEdits(p, opt.set).project;
       say(a.timing(p));
+      next(s.project ? `morpho motion ${q(args[0])} <layers…> --recipe cascade (or set 'L.motion.delay=…'), then check` : `morpho scene ${q(args[0])} to edit it`);
       break;
     }
     case 'new': {
       const [file] = args;
-      if (!file) throw new Error('new needs a file name: morpho new poster.morpho --canvas 1080x1350 --bg "#111111"');
+      if (!file) throw new Error('new needs a file name: morpho new poster.morpho --canvas 1080x1350 --bg "#111111" (or --kit chrome-night)');
       if (existsSync(file) && !opt.force) throw new Error(`${file} already exists (add --force to replace it)`);
       const a = await nodeAgent();
-      let p = a.blank({ name: opt.name ?? slug(file).replace(/-/g, ' '), canvas: opt.canvas, background: opt.bg, duration: num(opt.duration) });
+      let p = a.newDesign({ name: opt.name ?? slug(file).replace(/-/g, ' '), canvas: opt.canvas, background: opt.bg, duration: num(opt.duration), kit: opt.kit, style: opt.style });
       if (opt.set.length) p = a.applyEdits(p, opt.set).project;
       await writeFile(file, JSON.stringify(p, null, 1));
-      say(`wrote ${file}: "${p.name}" ${p.canvas.width}×${p.canvas.height}, no layers yet. Next: morpho add ${file} text "HELLO" --size 200`);
+      say(`wrote ${file}: "${p.name}" ${p.canvas.width}×${p.canvas.height}${p.agent?.kit ? `, kit ${p.agent.kit}` : ''}${p.agent?.style ? `, ${p.agent.style}` : ''}, no layers yet`);
+      next(`morpho add ${q(file)} text "HELLO" --fit-width 80 --place "top third" (one spec and morpho make is quicker for a whole design)`);
       break;
     }
     case 'add': {
@@ -440,8 +544,10 @@ async function main() {
         if (!what || !existsSync(what)) throw new Error(`add ${kind} needs a file${what ? `; "${what}" doesn't exist` : ''}`);
         const data = (await readFile(what)).toString('base64');
         say(await pageEdit(file, opt, kind, { data, name: path.basename(what), to: opt.to }));
+        next(kind === 'font' ? `morpho add ${q(file)} text "HELLO" --font <the id above>` : `morpho check ${q(file)}`);
         break;
       }
+      let id = null;
       say(
         await editFile(file, opt, (a, p) => {
           if (kind === 'modifier' || kind === 'mod') {
@@ -450,19 +556,40 @@ async function main() {
           }
           if (kind === 'group') return a.addGroup(p, rest, { ...placeOpts(opt), merge: !!opt.merge });
           if (!kind || !what) throw new Error('add <file> text "HELLO" | shape star | line "<svg d>" | path "<svg d>" | modifier <kind> --to L | group A B | font f.ttf | image p.png');
-          return a.addLayer(p, kind, what, placeOpts(opt));
+          const r = a.addWithKit(p, kind, what, { ...placeOpts(opt), role: opt.role });
+          id = r.id;
+          return r;
         }),
       );
+      const ops = id && !opt.dry ? addLayout(opt, id) : [];
+      if (ops.length) say(await pageEdit(file, { ...opt, set: [] }, 'place', { ops }));
+      next(`morpho check ${q(file)} (or add the next layer)`);
+      break;
+    }
+    case 'motion': {
+      const [file, ...layers] = args;
+      const spec = moveSpec(opt, layers);
+      if (!spec.recipe && !spec.enter && !spec.loop && !spec.leave) throw new Error('motion needs --recipe (cascade, pop, type-on, slide-in, drop, drift, breathe) or --enter / --loop / --leave');
+      say(
+        await editFile(file, opt, (a, p) => {
+          const r = a.moveEdits(p, spec);
+          return { project: r.project, change: `${r.summary} (${r.edits.length} settings)` };
+        }),
+      );
+      next(`morpho timing ${q(file)} to see it on the clock, or morpho check ${q(file)}`);
       break;
     }
     case 'remove':
       say(await editFile(args[0], opt, (a, p) => a.removeLayers(p, args.slice(1))));
+      next(`morpho check ${q(args[0])}`);
       break;
     case 'duplicate':
       say(await editFile(args[0], opt, (a, p) => a.duplicateLayer(p, args[1], placeOpts(opt))));
+      next(`morpho set ${q(args[0])} '<copy>.x=…' --check`);
       break;
     case 'arrange':
       say(await editFile(args[0], opt, (a, p) => a.arrange(p, args[1], args[2], args[3])));
+      next(`morpho check ${q(args[0])}`);
       break;
     case 'fit': {
       const [file, ref, ...targets] = args;
@@ -475,16 +602,19 @@ async function main() {
         await writeFile(opt.out, JSON.stringify(a.template(s.template), null, 1));
         say(await pageEdit(opt.out, opt, 'fit', { ref: (await readFile(ref)).toString('base64'), targets }));
       } else say(await pageEdit(file, opt, 'fit', { ref: (await readFile(ref)).toString('base64'), targets }));
+      next(`morpho compare ${q(opt.out ?? file)} ${q(ref)}`);
       break;
     }
     case 'align': {
       const [file, ...targets] = args;
       if (!targets.length) throw new Error('align <file> <layer>… [--to canvas|Layer] [--edge centre,middle]');
       say(await pageEdit(file, opt, 'align', { targets, to: opt.to ?? 'canvas', edges: String(opt.edge ?? 'centre').split(',') }));
+      next(`morpho check ${q(file)}`);
       break;
     }
     case 'video':
       say(await video(await scene(args[0]), opt));
+      next('done: share the file; to change it, edit the spec and run morpho make again');
       break;
     case 'scene': {
       const a = await nodeAgent();
@@ -492,17 +622,41 @@ async function main() {
       const p = a.template(args[0]);
       const out = opt.out ?? `${slug(p.name)}.morpho`;
       await writeFile(out, JSON.stringify(p, null, 1));
-      say(`wrote ${out}: "${p.name}", ${p.layers.length} top-level layers. Edit with: morpho set ${out} Layer.setting=value`);
+      say(`wrote ${out}: "${p.name}", ${p.layers.length} top-level layers`);
+      next(`morpho describe ${q(out)}, then morpho set ${q(out)} Layer.setting=value --check`);
       break;
     }
     case 'set': {
       const [file, ...assign] = args;
-      if (!file || !existsSync(file)) throw new Error(`set needs a .morpho file first${file ? `; "${file}" doesn't exist` : ''} (make one with: morpho scene <template>)`);
-      if (!assign.length) throw new Error('set needs at least one Layer.setting=value');
+      if (!file || !existsSync(file)) throw new Error(`set needs a .morpho file first${file ? `; "${file}" doesn't exist` : ''} (make one with: morpho make spec.json, or morpho scene <template>)`);
+      const stacks = stackLayout(opt);
+      if (!assign.length && !stacks.length && !opt.style) throw new Error('set needs at least one Layer.setting=value (or --stack A,B, or --style)');
       const a = await nodeAgent();
-      const { project, changes } = a.applyEdits(a.migrate(JSON.parse(await readFile(file, 'utf8'))), assign);
-      if (!opt.dry) await writeFile(file, JSON.stringify(project, null, 1));
-      say(changes.join('\n') + (opt.dry ? '\n(dry run: file unchanged)' : ''));
+      const before = await readFile(file, 'utf8');
+      const { ops, rest } = a.layoutFromAssignments(assign);
+      let { project, changes } = a.applyEdits(a.migrate(JSON.parse(before)), rest);
+      if (opt.style) {
+        if (!['poster', 'logo', 'abstract'].includes(opt.style)) throw new Error(`--style is poster, logo or abstract, not "${opt.style}"`);
+        changes.push(`style: ${project.agent?.style ?? 'poster'} → ${opt.style}`);
+        project = { ...project, agent: { ...project.agent, style: opt.style } };
+      }
+      if (opt.dry) {
+        say([...changes, ...(ops.length || stacks.length ? ['(layout is resolved against the build, so a dry run leaves it out)'] : []), '(dry run: file unchanged)'].join('\n'));
+        break;
+      }
+      await writeFile(file, JSON.stringify(project, null, 1));
+      if (changes.length) say(changes.join('\n'));
+      const layout = [...ops, ...stacks];
+      if (layout.length) say(await pageEdit(file, { ...opt, set: [] }, 'place', { ops: layout }));
+      if (opt.check) {
+        const after = await readFile(file, 'utf8');
+        const kept = await keptFindings(before, undefined);
+        const r = await drawJob({ scene: { project: JSON.parse(after) }, set: [], op: 'checkdiff', opts: { before: kept, beforeProject: kept ? null : JSON.parse(before), layers: opt.layers ? Number(opt.layers) : undefined, file } }, gpu(opt));
+        await keepFindings(after, undefined, r.findings);
+        say(r.text);
+        const l = left(r.findings);
+        next(l.fixable ? `morpho check ${q(file)} --fix` : l.todo ? 'the commands under "to do", with --check' : finish(file, r.moving));
+      } else next(`morpho check ${q(file)} (or add --check to set: only what changed in the findings)`);
       break;
     }
     case 'render':
@@ -520,21 +674,42 @@ async function main() {
         opts.variants = variants(opt);
         if (!opts.variants.length) throw new Error('vary needs --vary Layer.setting=a,b,c or --variant "a=1; b=2"');
       }
-      const r = await drawJob({ scene: { template: s.template, project: s.project }, set: opt.set, op: cmd, opts }, !(opt.cpu || process.env.MORPHO_CPU));
+      if (cmd === 'check') {
+        if (opt.style && !['poster', 'logo', 'abstract'].includes(opt.style)) throw new Error(`--style is poster, logo or abstract, not "${opt.style}"`);
+        Object.assign(opts, { fix: !!opt.fix, style: opt.style, file: s.project ? args[0] : `${slug(s.name)}.morpho` });
+        if (opt.fix && s.template) opt.out ??= `${slug(s.name)}.morpho`;
+      }
+      const r = await drawJob({ scene: { template: s.template, project: s.project }, set: opt.set, op: cmd, opts }, gpu(opt));
       if (opt.json) {
-        const { png, ...rest } = r;
+        const { png, project, ...rest } = r;
         if (png) rest.out = await writePng(png, opt, s.name, cmd);
         say(JSON.stringify(rest, null, 1));
         break;
       }
       for (const c of r.changes ?? []) say(`set ${c}`);
+      if (cmd === 'check' && r.project && opt.fix && !opt.dry) {
+        // --fix writes the fixed design: over the file, or (for a template or --out) to a new one.
+        const out = opt.out ?? args[0];
+        const text = JSON.stringify(r.project, null, 1);
+        if (r.fixed || out !== args[0]) await writeFile(out, text);
+        await keepFindings(text, opt.style, r.findings);
+        if (out !== args[0]) say(`wrote ${out}`);
+      } else if (cmd === 'check' && s.project && !opt.set.length) await keepFindings(await readFile(args[0], 'utf8'), opt.style, r.findings);
       if (r.text) say(r.text);
       if (r.png) say(`wrote ${await writePng(r.png, opt, s.name, cmd === 'render' && (opts.at.frames || opts.at.length > 1) ? 'frames' : cmd)} (${r.width}×${r.height})`);
       for (const e of r.pageErrors ?? []) process.stderr.write(`page error: ${e}\n`);
+      const f = q(cmd === 'check' && opt.fix ? (opt.out ?? args[0]) : args[0]);
+      if (cmd === 'check') {
+        const l = left(r.findings);
+        next(l.fixable ? `morpho check ${f} --fix` : l.todo ? `run the commands above (set … --check shows what each changes)` : finish(opt.out ?? args[0], r.moving));
+      } else if (cmd === 'render') next(`morpho check ${f}`);
+      else if (cmd === 'vary') next(`morpho set ${s.project ? f : '<file>'} <the cell's settings> --check`);
+      else if (cmd === 'layout') next(`morpho set ${s.project ? f : '<file>'} 'Layer.place=top' 'Layer.margin=64' (or --stack A,B --gap 40)`);
+      else next(`morpho fit ${f} ${q(args[1])} Layer.x Layer.size …`);
       break;
     }
     case 'serve':
-      return serve(!(opt.cpu || process.env.MORPHO_CPU));
+      return serve(gpu(opt));
     case 'stop':
       await fetch(`http://127.0.0.1:${PORT}/stop`).catch(() => {});
       return say('stopped');

@@ -224,6 +224,8 @@ export interface Project {
   type?: TypeProject;
   /** Length and looping of the scene clock (animated materials and motion). */
   timeline?: Timeline;
+  /** What the morpho CLI keeps with a design: its style kit, and what kind of design it is (abstract turns style rules into notes). */
+  agent?: { kit?: string; style?: 'poster' | 'logo' | 'abstract' };
 }
 
 let counter = 0;
