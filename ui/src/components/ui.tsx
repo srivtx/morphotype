@@ -462,7 +462,9 @@ export function NumberBox({ label, value, onChange, step = 1, suffix, title, min
         value={text ?? shown + (suffix ?? '')}
         onFocus={(e) => {
           setText(shown);
-          requestAnimationFrame(() => e.target.select());
+          const el = e.target;
+          // Select it all for typing over, unless typing has already begun (a select then would eat the first keys).
+          requestAnimationFrame(() => el.value === shown && el.select());
         }}
         onChange={(e) => setText(e.target.value)}
         onBlur={() => {

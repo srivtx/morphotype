@@ -1,13 +1,14 @@
 // When everything moves, as a text chart: one row per moving layer (the
 // timeline dock's rows, top first) with entrances and exits as bars on the
-// clock, loops and keyframes as their cycles, and a few notes on rhythm: many
+// clock, loops and keyframes as their cycles, keys as ◆, and a few notes on rhythm: many
 // things starting at once, or long stretches where nothing happens.
 import { timelineOf } from '../state/clock';
-import { feelOf, HOLD_GO, HOLD_IN, HOLD_OUT } from '../state/motion';
+import { easeName } from '../state/keys';
+import { feelOf, HOLD_GO, HOLD_IN, HOLD_OUT, type Key } from '../state/motion';
 import type { Project } from '../state/model';
 import { nodeLabel } from '../state/model';
 import { rowsOf, type Track } from '../state/tracks';
-import { num } from './describe';
+import { num, val } from './describe';
 
 const COLS = 48;
 
@@ -34,6 +35,18 @@ function holds(period: number, phase: number, D: number): string {
   }).join('');
 }
 
+/** Keys across the clock: ◆ at each, ─ between the first and the last. */
+function diamonds(keys: Key[], D: number): string {
+  const cell = (t: number) => Math.max(0, Math.min(COLS - 1, Math.floor((t / D) * COLS)));
+  const out = Array<string>(COLS).fill('·');
+  for (let i = cell(keys[0].t); i <= cell(keys[keys.length - 1].t); i++) out[i] = '─';
+  for (const k of keys) if (k.t <= D) out[cell(k.t)] = '◆';
+  return out.join('');
+}
+
+/** "0s 0 → 1s 45 linear → 2.5s 30": each key's time and value, and its curve when it isn't the default. */
+export const keysText = (keys: Key[]) => keys.map((k, i) => `${num(k.t)}s ${val(k.v)}${i && k.ease ? ` ${easeName(k.ease)}` : ''}`).join(' → ');
+
 function trackLine(t: Track, D: number): [string, string, string] {
   switch (t.kind) {
     case 'enter':
@@ -48,6 +61,8 @@ function trackLine(t: Track, D: number): [string, string, string] {
       return [t.label.toLowerCase(), t.anim.mode === 'hold' ? holds(t.period, t.anim.phase, D) : cycles(t.period, D, t.anim.mode === 'ramp' ? '/' : t.anim.mode === 'flicker' ? ':' : '∿'), `${t.anim.mode} ${String(t.from)}→${String(t.anim.to)} every ${num(t.period)}s`];
     case 'flow':
       return [t.title.toLowerCase(), '═'.repeat(COLS), t.label];
+    case 'keys':
+      return [`${t.label} keys`.toLowerCase(), diamonds(t.keys, D), keysText(t.keys)];
   }
 }
 
@@ -66,7 +81,7 @@ export function timing(p: Project): string {
     const at = Math.min(COLS - label.length, Math.round((t / D) * COLS));
     for (let i = 0; i < label.length; i++) ruler[at + i] = label[i];
   }
-  const out = [`"${p.name}" clock ${num(D)}s${tl.loop ? ' loop' : ''} · █ in/out, | cycle starts, ∿ swing, / ramp, : flicker, hold _/‾\\ (rest, go, at To, back)`, `${' '.repeat(24 + 24)}${ruler.join('')}`];
+  const out = [`"${p.name}" clock ${num(D)}s${tl.loop ? ' loop' : ''} · █ in/out, ◆ keys, | cycle starts, ∿ swing, / ramp, : flicker, hold _/‾\\ (rest, go, at To, back)`, `${' '.repeat(24 + 24)}${ruler.join('')}`];
   for (const r of rows) {
     const name = `${'  '.repeat(r.depth)}${nodeLabel(r.node)}`;
     if (!r.tracks.length) out.push(pad(name, 24));
@@ -90,9 +105,10 @@ export function rhythm(tracks: Track[], D: number, loop: boolean): string[] {
     if (j - i + 1 >= 3) notes.push(`· ${j - i + 1} entrances start together at ${num(starts[i])}s: a stagger gives them rhythm`);
     i = j + 1;
   }
+  const keyed = tracks.filter((t): t is Extract<Track, { kind: 'keys' }> => t.kind === 'keys');
   const always = tracks.some((t) => t.kind === 'loop' || t.kind === 'param' || t.kind === 'flow');
-  if (clips.length && !always) {
-    const spans = clips.map((c) => [c.start, c.end] as const).sort((a, b) => a[0] - b[0]);
+  if ((clips.length || keyed.length) && !always) {
+    const spans = [...clips.map((c) => [c.start, c.end] as const), ...keyed.map((k) => [k.keys[0].t, k.keys[k.keys.length - 1].t] as const)].sort((a, b) => a[0] - b[0]);
     let edge = 0;
     const gaps: [number, number][] = [];
     for (const [a, b] of spans) {
@@ -104,5 +120,11 @@ export function rhythm(tracks: Track[], D: number, loop: boolean): string[] {
   }
   const late = clips.filter((c) => c.end > D + 1e-3);
   for (const c of late) notes.push(`! a move ends at ${num(c.end)}s, after the ${num(D)}s clock: it gets cut off`);
+  for (const k of keyed) {
+    const last = k.keys[k.keys.length - 1].t;
+    if (last > D + 1e-3) notes.push(`! a ${k.label.toLowerCase()} key at ${num(last)}s is after the ${num(D)}s clock: it never plays`);
+    const [v0, v1] = [k.keys[0].v, k.keys[k.keys.length - 1].v];
+    if (loop && String(v0).toLowerCase() !== String(v1).toLowerCase()) notes.push(`· ${k.label.toLowerCase()} jumps from ${val(v1)} back to ${val(v0)} at the loop seam: end on a key equal to the first to loop smoothly`);
+  }
   return notes;
 }

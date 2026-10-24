@@ -11,8 +11,10 @@ import { ENTER_OPTIONS, ENTER_UI, EASES, FEELS, LEAVE_OPTIONS, LEAVE_UI, LOOP_OP
 import { CANVAS_PRESETS, isChoice, MODIFIER_DEFAULTS, MODIFIER_UI, SYMBOL_DEFAULTS, SYMBOL_UI, type Field } from '../state/model';
 import type { ModifierKind, SymbolKind } from '../engine/types';
 import type { Template } from '../state/templates';
+import { KITS, kitsText, kitText } from './kits';
+import { recipesText } from './moves';
 
-export const SECTIONS = ['materials', 'presets', 'modifiers', 'recipes', 'shapes', 'motion', 'keyframes', 'layers', 'fonts', 'backgrounds', 'canvas', 'templates'] as const;
+export const SECTIONS = ['kits', 'materials', 'presets', 'modifiers', 'recipes', 'shapes', 'motion', 'keyframes', 'layers', 'fonts', 'backgrounds', 'canvas', 'templates'] as const;
 export type Section = (typeof SECTIONS)[number];
 
 const fmt = (v: unknown) => (typeof v === 'number' ? String(+v.toFixed(4)) : typeof v === 'string' ? v : JSON.stringify(v));
@@ -91,6 +93,7 @@ const MOTION = (): string =>
     '  stagger: s between children (groups) or letters · order: ' + STAGGER_ORDERS.map((o) => o.value).join('|'),
     '  letters: letters|words (text: each moves in turn) · slide: dir right|left|up|down, oneWay, easePass',
     'scene clock: project.timeline = { duration: s, loop: bool } (default 6 s, looping)',
+    recipesText(),
   ].join('\n');
 
 const KEYFRAMES = (): string =>
@@ -104,6 +107,15 @@ const KEYFRAMES = (): string =>
     '  animate["sym:<field>"]       a library shape field',
     '  animate["morph:t"]           a font morph blend, or a morph layer',
     '  animate["line:start|end|offset"] how much of a pen line is drawn (draw-on: end 0 → 1)',
+    'keys: any number per property, each at its own time with its own value and curve (free keyframes)',
+    "  set them: Star.keys.rotation=[[0,0],[1,45],[2.5,30]] · Star.keys.x=[[0,-200],[1.5,200,\"back out\"]] · Star.keys.fill=[[0,\"#ffffff\"],[2,\"#ff3366\"]]",
+    '  each key: [t (s), value, curve into it?] or { t, v, ease }; null removes them',
+    '  curves: ' + [...EASES.map((e) => e.label), ...FEELS.map((f) => f.label)].map((x) => x.toLowerCase()).join(', ') + ' (default ease in out), 4 Bézier numbers, or a transition',
+    '  keys.x | y | rotation | scale | opacity   a layer\'s own values (a group\'s: offsets from rest); they ride on top of motion',
+    '  keys[<param>]                             a material setting (lands in style.keys), numbers or colours',
+    '  keys["mod:<uid>:<field>"], ["sym:<field>"], ["morph:t"], ["line:end"]…  geometry, as for animate',
+    '  before its first key a property holds that value, after its last it holds that one (a looping clock jumps back at the seam)',
+    '  a setting with keys ignores its cycle and its plain value; keys past the timeline\'s end never play (set lengthens it to fit)',
   ].join('\n');
 
 const LAYERS = (): string =>
@@ -111,7 +123,7 @@ const LAYERS = (): string =>
     'project: { version: 2, name, canvas: { width, height }, background, layers: [bottom … top], fonts: [], timeline? }',
     'layer: { id, name?, visible, op: add|subtract|intersect, x, y (px from the canvas centre, y down), rotation (°), scale, sx, sy,',
     '         modifiers: [], content, style: { effect, params, stroke?, opacity?, blend?: normal|multiply|screen, depth?, soften?, animate? },',
-    '         motion?, animate?, guide? (shown while designing, left out of exports), locked? }',
+    '         motion?, animate?, keys? (see `keyframes`), guide? (shown while designing, left out of exports), locked? }',
     'content:',
     "  { type: 'text', text, font, size (px), tracking, lineHeight, align: left|center|right, axes: {}, morph: null|{ font, axes, t }, ligatures }",
     "  { type: 'symbol', symbol: { kind, … }, size }   (see `shapes`)",
@@ -143,6 +155,8 @@ function templatesText(list: Template[] | null): string {
 
 function section(s: Section, templates: Template[] | null): string {
   switch (s) {
+    case 'kits':
+      return kitsText();
     case 'materials':
       return EFFECTS.map((e) => `${e.id} — ${e.name}: ${first(e.description)}`).join('\n') + '\n(details: catalog <id>)';
     case 'presets':
@@ -174,6 +188,7 @@ function index(templates: Template[] | null): string {
   const names = (xs: string[]) => xs.join(', ');
   return [
     'Morphotype catalog. Ask for a section or any name below for details.',
+    `kits (${KITS.length}): ${names(KITS.map((k) => k.name))} (background, palette, fonts and looks in one word)`,
     `materials (${EFFECTS.length}): ${names(EFFECTS.map((e) => e.id))}`,
     `presets (${PRESETS.length}): material looks by name`,
     `modifiers (${Object.keys(MODIFIER_UI).length}): ${names(Object.keys(MODIFIER_UI))}`,
@@ -208,6 +223,8 @@ export function catalog(query = '', templates: Template[] | null = null): string
   if (pre) out.push(`preset ${pre.name}: material ${pre.effect}, background ${pre.bg}\n  params: ${JSON.stringify(pre.params)}\n  (other params keep the material's defaults: catalog ${pre.effect})`);
   const rec = SHAPE_RECIPES.find((r) => norm(r.name) === k);
   if (rec) out.push(`recipe ${rec.name}: ${rec.mods.map((m) => JSON.stringify(m)).join(' + ')}`);
+  const kit = KITS.find((x) => norm(x.name) === k);
+  if (kit) out.push(`kit ${kitText(kit)}`);
   const tpl = templates?.find((t) => norm(t.name) === k);
   if (tpl) out.push(`template ${tpl.name} (${tpl.category}) — ${tpl.hint}\n  (see it as layers: describe "${tpl.name}")`);
   if (out.length) return out.join('\n\n');
@@ -224,6 +241,7 @@ function search(k: string, templates: Template[] | null): string {
   for (const r of SHAPE_RECIPES) if (has(r.name, r.tags)) hits.push(`recipe ${r.name}`);
   for (const [s, ui] of Object.entries(SYMBOL_UI)) if (has(s, ui.label)) hits.push(`shape ${s} — ${ui.label}`);
   for (const t of templates ?? []) if (has(t.name, t.hint)) hits.push(`template ${t.name}`);
+  for (const x of KITS) if (has(x.name, x.blurb)) hits.push(`kit ${x.name}`);
   if (!hits.length) return `Nothing matches "${k}". Sections: ${SECTIONS.join(', ')}.`;
   const more = hits.length > 40 ? `\n… and ${hits.length - 40} more` : '';
   return hits.slice(0, 40).join('\n') + more;

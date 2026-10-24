@@ -24,3 +24,10 @@ export function findNode(p: Project, target: string): Node {
   const names = all.map((n) => (n.name ? `"${n.name}"` : `#${n.id}`));
   throw new EditError(`No layer "${target}". Layers: ${names.join(', ')}`);
 }
+
+/** How a command should name a node: its name when it's unique and safe to quote, else its id. */
+export function handle(p: Project, n: Node): string {
+  const name = n.name;
+  if (!name || /["'\\]/.test(name)) return '#' + n.id;
+  return allNodes(p.layers).filter((m) => m.name?.toLowerCase() === name.toLowerCase()).length === 1 ? name : '#' + n.id;
+}

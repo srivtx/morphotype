@@ -6,12 +6,14 @@
 //   Title.wave.amplitude=0.08   the layer's first modifier of that kind
 //   Title.motion.loop=float     motion is created when missing
 //   Title.animate.speed={"to":1,"period":4,"phase":0,"mode":"ramp"}
+//   Star.keys.rotation=[[0,0],[1,45],[2.5,30,"linear"]]   free keys: [t, value, curve?]
 //   canvas.width=1080 · background.fill.colors=["#000"] · timeline.duration=4
 //
 // Values are JSON when they parse as JSON, else plain text; null removes a
 // key. Numbers are checked against the setting's range, and unknown layers
 // or settings fail with the names that would have worked.
 import { defaultParams, EFFECTS, effectById } from '../render/effects';
+import { isTransformProp, parseKeys, updateKeys } from '../state/keys';
 import { ENTER_UI, LEAVE_UI, LOOP_UI, newMotion } from '../state/motion';
 import { isChoice, isGroup, MODIFIER_UI, SYMBOL_UI, type Field, type Node, type Project } from '../state/model';
 import type { ModifierKind } from '../engine/types';
@@ -86,6 +88,8 @@ function resolve(n: Node, path: string[]): { path: string[]; check?: (v: unknown
   if (head === 'params' && rest.length === 1) return { path: ['style', 'params', rest[0]], check: (v) => checkParam(n.style.effect, rest[0], v) };
   // Material settings animate on the style; modifier, shape and line keys (mod:…, sym:…, line:…) on the layer.
   if (head === 'animate' && rest.length === 1) return { path: rest[0] in n.style.params ? ['style', 'animate', rest[0]] : ['animate', rest[0]] };
+  // Free keys likewise (see keyEdit).
+  if (head === 'keys' && rest.length === 1) return { path: rest[0] in n.style.params ? ['style', 'keys', rest[0]] : ['keys', rest[0]] };
   if (head === 'motion') return { path };
   if (head in o) {
     if (head === 'style' && rest[0] === 'params' && rest.length === 2) return { path, check: (v) => checkParam(n.style.effect, rest[1], v) };
@@ -155,6 +159,7 @@ export function applyEdit(p: Project, assignment: string): Edit {
   const n = findNode(project, target);
   const r = resolve(n, path);
   r.check?.(value);
+  if (r.path[r.path.length - 2] === 'keys') return keyEdit(project, n, r.path, value);
   if (r.path[0] === 'motion') n.motion ??= newMotion();
   if (r.path[0] === 'animate') n.animate ??= {};
   if (r.path[0] === 'style' && r.path[1] === 'animate') n.style.animate ??= {};
@@ -179,6 +184,27 @@ export function applyEdit(p: Project, assignment: string): Edit {
 }
 
 const fmtv = (v: unknown) => (v === undefined ? '(unset)' : JSON.stringify(v));
+
+/** Free keys on a layer (null removes them): checked like the setting they key; the timeline grows to hold the last one. */
+function keyEdit(project: Project, n: Node, path: string[], value: unknown): Edit {
+  const style = path[0] === 'style';
+  const key = path[path.length - 1];
+  const who = n.name ?? '#' + n.id;
+  if (!style && !isTransformProp(key) && !/^(mod:[^:]+:.+|sym:.+|morph:t|line:(start|end|offset))$/.test(key)) throw new EditError(`${who} can't key "${key}": use x, y, rotation, scale, opacity, a material setting (${Object.keys(n.style.params).join(', ')}), or mod:<uid>:<field>, sym:<field>, morph:t, line:end`);
+  let keys: ReturnType<typeof parseKeys> = [];
+  try {
+    if (value !== null) keys = parseKeys(value);
+  } catch (e) {
+    throw new EditError(`${who}.keys.${key}: ${(e as Error).message}`);
+  }
+  if (style) for (const k of keys) checkParam(n.style.effect, key, k.v);
+  const before = (style ? n.style.keys : n.keys)?.[key];
+  updateKeys(n, style ? 'style' : 'node', key, () => keys);
+  const last = keys.at(-1)?.t ?? 0;
+  const tl = project.timeline ?? { duration: 6, loop: true };
+  if (last > tl.duration) project.timeline = { ...tl, duration: Math.ceil(last * 10) / 10 };
+  return { project, change: `${n.name ? `"${n.name}"` : '#' + n.id} ${path.join('.')}: ${fmtv(before)} → ${fmtv(keys.length ? keys : undefined)}` };
+}
 
 /** Apply several assignments in order. */
 export function applyEdits(p: Project, assignments: string[]): { project: Project; changes: string[] } {

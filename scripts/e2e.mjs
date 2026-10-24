@@ -712,6 +712,113 @@ try {
     );
   }
 
+  // ---- free keys: a star turns through four keys, set in the Inspector, edited in the timeline, honoured in video ----
+  {
+    const starId = await page.evaluate(() => {
+      const m = window.morphotype;
+      const p = m.store.get().project;
+      const star = { id: `lkeys${Date.now().toString(36)}`, name: 'Spinner', visible: true, op: 'add', x: 0, y: 0, rotation: 0, scale: 1, sx: 1, sy: 1, modifiers: [], content: { type: 'symbol', symbol: { kind: 'star', points: 5, inner: 0.45, rounding: 0.1 }, size: 400 }, style: { effect: 'flat', params: { fill: '#ff3366' } } };
+      m.clock.pause({ duration: 4, loop: true });
+      m.clock.seek(0);
+      m.store.set({ project: { ...p, layers: [star], timeline: { duration: 4, loop: true } }, selection: [star.id], tab: 'design', dialog: null, screen: 'editor', mode: 'design', past: [], future: [] });
+      return star.id;
+    });
+    await settle(900);
+    const starOf = (st) => layersOf(st).find((l) => l.id === starId);
+    const keysOf = (st, k = 'rotation') => (starOf(st).keys?.[k] ?? []).map((x) => [Math.round(x.t * 100) / 100, Math.round(x.v * 10) / 10]);
+    // ◆ starts keys at the playhead; typing a value elsewhere on the clock adds a key there.
+    await page.getByRole('button', { name: 'Key Rotation' }).click();
+    const rot = page.locator('.keyed-box', { has: page.getByRole('button', { name: 'Key Rotation' }) }).locator('input');
+    // Typed as a person would: click the box (it selects its text a frame later), select all, type, Enter.
+    const twoFrames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    let typedIn = '';
+    const typeInto = async (box, v) => {
+      await box.click();
+      await twoFrames();
+      typedIn = await page.evaluate(() => `${document.activeElement?.tagName} "${document.activeElement?.value ?? ''}"`);
+      await page.keyboard.press(`${mod}+a`);
+      await page.keyboard.type(String(v));
+      await page.keyboard.press('Enter');
+      await twoFrames();
+    };
+    for (const [t, v] of [[1, 45], [2.5, 30], [3.5, -90]]) {
+      await page.evaluate((t) => window.morphotype.clock.seek(t), t);
+      await settle(150);
+      await typeInto(rot, v);
+      await until((st) => keysOf(st).some(([kt, kv]) => kt === t && kv === v), 5000);
+    }
+    let st = await state();
+    check(JSON.stringify(keysOf(st)) === '[[0,0],[1,45],[2.5,30],[3.5,-90]]', `◆ and the rotation field key the star at four times (${JSON.stringify(keysOf(st))})`);
+    const angleAt = (t) =>
+      page.evaluate(
+        ({ id, t }) => {
+          const m = window.morphotype;
+          m.clock.seek(t);
+          const o = m.renderer.objs.find((x) => x.item.id === id);
+          const pl = m.renderer.placed(o);
+          return pl ? Math.round((Math.atan2(pl.m[1], pl.m[0]) * 180) / Math.PI) : null;
+        },
+        { id: starId, t },
+      );
+    // Its own rotation sits at the last key typed; the keys turn it from there.
+    const own = starOf(st).rotation;
+    const angles = [await angleAt(0), await angleAt(1), await angleAt(1.75), await angleAt(3.5)].map((a) => Math.round(a + own));
+    check(angles.join() === '0,45,38,-90', `the canvas follows the keys (${angles.join('° → ')}°)`);
+    // The timeline: a row of diamonds to drag, click and delete.
+    if (await page.getByRole('button', { name: 'Open the timeline' }).count()) await page.getByRole('button', { name: 'Open the timeline' }).click();
+    await page.locator('.tl-key').first().waitFor({ timeout: 5000 });
+    check((await page.locator('.tl-key').count()) === 4 && (await page.locator('.tl-sub .tl-name', { hasText: 'Rotation' }).count()) === 1, 'the timeline shows a Rotation row with four diamonds');
+    const [k2, k3] = [await page.locator('.tl-key').nth(2).boundingBox(), await page.locator('.tl-key').nth(3).boundingBox()];
+    const perS = (k3.x - k2.x) / 1;
+    await page.mouse.move(k2.x + k2.width / 2, k2.y + k2.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(k2.x + k2.width / 2 + perS * 0.25, k2.y + k2.height / 2, { steps: 4 });
+    await page.mouse.move(k2.x + k2.width / 2 + perS * 0.5, k2.y + k2.height / 2, { steps: 4 });
+    await page.mouse.up();
+    st = await state();
+    check(JSON.stringify(keysOf(st)) === '[[0,0],[1,45],[3,30],[3.5,-90]]', `dragging a diamond retimes its key, on a frame (${JSON.stringify(keysOf(st))})`);
+    await page.locator('.tl-key').nth(1).click();
+    await page.locator('.tl-edit', { hasText: 'key 2 of 4' }).waitFor({ timeout: 5000 });
+    check(await page.evaluate(() => Math.abs(window.morphotype.clock.time({ duration: 4, loop: true }) - 1) < 1e-6), 'clicking a diamond opens its key and puts the playhead on it');
+    await page.keyboard.press('Escape');
+    await page.locator('.tl-key').nth(2).click();
+    await page.keyboard.press('Escape');
+    await page.locator('.tl-key').nth(2).focus();
+    await page.keyboard.press('Backspace');
+    st = await state();
+    check(JSON.stringify(keysOf(st)) === '[[0,0],[1,45],[3.5,-90]]' && !!starOf(st), `⌫ deletes the picked key, not the layer (${JSON.stringify(keysOf(st))})`);
+    await page.keyboard.press(`${mod}+z`);
+    st = await state();
+    check(keysOf(st).length === 4, 'undo brings the key back');
+    // Autokey: with record on, moving the star keys its position at the playhead.
+    await page.getByRole('button', { name: 'Autokey' }).click();
+    await page.evaluate(() => window.morphotype.clock.seek(2));
+    await settle(150);
+    const xBox = page.locator('.keyed-box', { has: page.getByRole('button', { name: 'Key X' }) }).locator('input');
+    await typeInto(xBox, 120);
+    await until((st) => keysOf(st, 'x').length === 2, 5000);
+    await page.getByRole('button', { name: 'Autokey' }).click();
+    st = await state();
+    check(JSON.stringify(keysOf(st, 'x')) === '[[0,0],[2,120]]' && (await page.locator('.tl-sub .tl-name', { hasText: 'Position X' }).count()) === 1, `autokey keys a change at the playhead, from where it was (${JSON.stringify(keysOf(st, 'x'))}; x ${starOf(st).x}; typed into ${typedIn})`);
+    await page.screenshot({ path: path.join(out, 'new-01d-keys.png') });
+    // Video: every frame is drawn at its own time on the keys.
+    await page.evaluate((id) => {
+      const r = window.morphotype.renderer;
+      window.__starFrames = [];
+      const placed = r.placed.bind(r);
+      r.placed = (o) => {
+        const pl = placed(o);
+        if (r.exporting && o.item.id === id && pl) window.__starFrames.push([r.pinned?.t, Math.round((Math.atan2(pl.m[1], pl.m[0]) * 180) / Math.PI)]);
+        return pl;
+      };
+    }, starId);
+    await download(async () => {}, () => page.getByRole('button', { name: 'Export video' }).first().click());
+    const frames = await page.evaluate(() => window.__starFrames);
+    const own2 = starOf(await state()).rotation;
+    const turn = (t) => Math.round((frames.find((f) => Math.abs(f[0] - t) < 1 / 60)?.[1] ?? NaN) + own2);
+    check(frames.length >= 120 && turn(1) === 45 && turn(3) === 30 && turn(3.5) === -90, `exported video turns the star through its keys (${frames.length} frames: ${[0, 1, 3, 3.5].map(turn).join('° → ')}°)`);
+  }
+
   // ---- depth, glass and the icon grid ----
   await openTemplate('Frosted 404');
   await page.locator('.row', { hasText: 'Caption' }).click();
@@ -907,7 +1014,15 @@ try {
       const layout = await a.layout();
       const video = await a.frameBatch({ fps: 10, from: 0, count: 3, size: 120 });
       const aligned = await a.align(['Caption'], 'canvas', ['centre']);
-      return { changes, still: [still.width, still.height], strip: [strip.width, strip.height], grid: [grid.width, grid.height], report, text: a.describe(), layout, video: [video.frames.length, video.total], aligned: aligned.change };
+      const text = a.describe();
+      // A whole design from a spec: kit, layout in words, a motion recipe, checked, one picture.
+      const made = await a.make({ canvas: '1080x1350', kit: 'chrome-night', duration: 3, layers: [{ text: 'HELLO', name: 'Title', fitWidth: 70, place: 'top third' }, { text: 'small print', name: 'Info', place: 'bottom', margin: 90 }], motion: { recipe: 'cascade' } }, { size: 200 });
+      const title = made.project.layers.find((l) => l.name === 'Title');
+      const box = window.morphotype.store.get().build.layers.find((l) => l.id === title.id).bbox;
+      // A design with text cut off and an entrance that replays: --fix mends both.
+      await a.load({ ...made.project, layers: made.project.layers.map((l) => (l.name === 'Title' ? { ...l, x: l.x + 600, motion: { ...l.motion, leave: 'none' } } : l)) });
+      const fixed = await a.checkFix({ size: 200, layers: 2 });
+      return { changes, still: [still.width, still.height], strip: [strip.width, strip.height], grid: [grid.width, grid.height], report, text, layout, video: [video.frames.length, video.total], aligned: aligned.change, made: { text: made.text, width: made.width, box }, fixed: fixed.text };
     });
   });
   check(agent.changes.length === 2 && agent.text.includes('flat {fill #ff2d55}'), `agent edits the design (${agent.changes[0]})`);
@@ -916,6 +1031,9 @@ try {
   check(/margins L .* R /.test(agent.layout) && /palette: /.test(agent.report), 'agent layout lists boxes and margins, and check reads the palette');
   check(agent.video[0] === 3 && agent.video[1] === 40, `agent draws video frames in batches (${agent.video.join(' of ')})`);
   check(/Caption" x:|already aligned/.test(agent.aligned), `agent aligns by what's drawn (${agent.aligned})`);
+  check(/kit chrome-night/.test(agent.made.text) && /no problems/.test(agent.made.text) && agent.made.width > 0, `agent makes a design from a spec: ${agent.made.text.split('\n').find((l) => l.includes('no problems') || l.includes('problem')) ?? agent.made.text.split('\n')[0]}`);
+  check(Math.abs((agent.made.box[2] - agent.made.box[0]) / 1080 - 0.7) < 0.01 && Math.abs((agent.made.box[1] + agent.made.box[3]) / 2 + 225) < 2, `agent layout fits the title to 70% of the width on the top third line (box ${agent.made.box.map(Math.round).join(', ')})`);
+  check(/fixed \d+:/.test(agent.fixed) && /cut off → shrunk to fit/.test(agent.fixed) && /loop starts over from nothing/.test(agent.fixed), `agent check --fix mends cut-off text and the loop seam: ${agent.fixed.split('\n')[0]}`);
 } catch (e) {
   errors.push(`crashed: ${e.message.split('\n').slice(0, 12).join(' / ')}`);
   const pages = browser.contexts().flatMap((c) => c.pages());

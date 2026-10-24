@@ -190,7 +190,7 @@ group('check', () => {
     const px = (rgb: number[], n = 4) => ({ data: new Uint8ClampedArray(Array.from({ length: n }, () => [...rgb, 255]).flat()), width: n, height: 1 });
     expect(diff(px([0, 0, 0]), px([30, 30, 30]))).toBe(30);
     expect(contrast(luminance(255, 255, 255), luminance(0, 0, 0))).toBeCloseTo(21);
-    expect(presence(px([255, 255, 255]), px([0, 0, 0]))).toEqual({ px: 4, contrast: 21 });
+    expect(presence(px([255, 255, 255]), px([0, 0, 0]))).toEqual({ px: 4, contrast: 21, behind: 0 });
     expect(presence(px([10, 10, 10]), px([10, 10, 10])).px).toBe(0);
   });
 

@@ -4,7 +4,6 @@
 // and check it. Everything returns text or one PNG, so a caller spends one
 // image on what would otherwise be a dozen screenshots.
 import { engine } from '../engine/client';
-import type { Box } from '../engine/types';
 import { fontId, fromBase64 } from '../fonts/library';
 import { effectById } from '../render/effects';
 import { getRenderer, loadProjectFonts, placeReference } from '../app/actions';
@@ -13,6 +12,7 @@ import { geometryFrames, holdLiveGeometry } from '../app/geoMotion';
 import { addImage, encodeImage, imageElement, packImages, unpackImages } from '../state/assets';
 import { clock, timelineOf } from '../state/clock';
 import { anyGeoAnim } from '../state/geoMotion';
+import { hasKeys } from '../state/keys';
 import { migrate } from '../state/migrate';
 import { isGroup, style, symbolLayer, type Node, type Project, type ShapeLayer } from '../state/model';
 import { isStill } from '../state/motion';
@@ -20,10 +20,14 @@ import { replaceProject, store } from '../state/store';
 import { loadedTemplates, loadTemplates } from '../state/templateCatalog';
 import { buildScene } from '../state/tree';
 import { catalog, findTemplate } from './catalog';
-import { label, motionFindings, outside, presence, report, spread, structural, type Finding, type Pixels, diff } from './check';
+import { forStyle, label, motionFindings, outside, presence, report, spread, structural, type Finding, type Pixels, diff } from './check';
 import { describe, num } from './describe';
 import { applyEdits, findNode } from './edit';
+import { handle } from './find';
+import { contrastHint, diffFindings, fixPlan, seamFix, todoText } from './fix';
 import { boxTable, itemsOf, layoutFindings, lookFindings } from './layout';
+import { fromSpec, type Spec } from './make';
+import { alignEdits, boxesOf, fitEdits, layoutText, placeEdits, type LayoutOp } from './place';
 
 /** Geometry quality for output (the preview builds at 120), as exports use. */
 const OUTPUT_QUALITY = 360;
@@ -236,7 +240,7 @@ function moves(p: Project): boolean {
   let any = anyGeoAnim(p.layers);
   const walk = (ns: Node[]) =>
     ns.forEach((n) => {
-      if (!isStill(n.motion) || Object.keys(n.style.animate ?? {}).length || effectById(n.style.effect).animated?.(n.style.params)) any = true;
+      if (!isStill(n.motion) || Object.keys(n.style.animate ?? {}).length || hasKeys(n) || effectById(n.style.effect).animated?.(n.style.params)) any = true;
       if (isGroup(n)) walk(n.children);
     });
   walk(p.layers);
@@ -264,28 +268,64 @@ function hide(p: Project, id: string): Project {
   return q;
 }
 
-/** Every check, as a short report. `layers` caps how many layers get the (slower) visibility check. */
-async function check(o: { size?: number; layers?: number } = {}): Promise<string> {
-  return draft(() => checkAll(o));
+interface CheckOpts {
+  size?: number;
+  layers?: number;
+  /** poster | logo | abstract (default: the design's own, else poster). */
+  style?: string;
 }
 
-async function checkAll(o: { size?: number; layers?: number }): Promise<string> {
+/** Every check, as a short report. `layers` caps how many layers get the (slower) visibility check. */
+async function check(o: CheckOpts = {}): Promise<string> {
+  const r = await findings(o);
+  return report(r.title, r.findings);
+}
+
+/** Findings as data for the CLI (what a fix would work out again isn't data). */
+const plain = (fs: Finding[]): Finding[] => fs.map((f) => (f.fix?.redo ? { ...f, fix: { ...f.fix, redo: undefined } } : f));
+
+/** check for the CLI: the report, what --fix would do, the rest as commands, and the findings themselves. */
+async function checkFull(o: CheckOpts & { file?: string } = {}) {
+  const r = await findings(o);
+  const plan = fixPlan(r.findings);
+  const lines = [report(r.title, r.findings)];
+  if (plan.done.length) lines.push(`${plan.done.length} can be fixed automatically ([--fix]): morpho check ${o.file ?? '<file>'} --fix`);
+  const cmds = todoText(plan.todo, o.file ?? '<file>').filter((l) => l.startsWith('morpho'));
+  if (cmds.length) lines.push('to do:', ...cmds.map((l) => `  ${l}`));
+  return { text: lines.join('\n'), findings: plain(r.findings), moving: moves(store.get().project) };
+}
+
+/** Every check, as findings (with what --fix would do), for the current design's style. */
+async function findings(o: CheckOpts = {}): Promise<{ title: string; findings: Finding[] }> {
+  const r = await draft(() => checkAll(o));
+  return { title: r.title, findings: forStyle(r.findings, o.style ?? store.get().project.agent?.style) };
+}
+
+async function checkAll(o: CheckOpts): Promise<{ title: string; findings: Finding[] }> {
   const p = structuredClone(store.get().project);
   const findings: Finding[] = structural(p, store.get().build);
   const scale = fit(p, o.size ?? 360);
   const tl = timelineOf(p);
   try {
-    // Motion: runs of three frames one video frame apart, across the clock and around the seam.
+    // Motion: runs of four frames one video frame apart, across the clock and around the seam.
     if (moves(p)) {
       const dt = 1 / 30, n = 12, D = tl.duration;
-      const starts = Array.from({ length: n }, (_, i) => ((i + 0.5) * D) / n).filter((t) => t + 2 * dt <= D);
-      const at = starts.flatMap((t) => [t, t + dt, t + 2 * dt]);
+      const starts = Array.from({ length: n }, (_, i) => ((i + 0.5) * D) / n).filter((t) => t + 3 * dt <= D);
+      const at = starts.flatMap((t) => [t, t + dt, t + 2 * dt, t + 3 * dt]);
       if (tl.loop) at.push(D - 2 * dt, D - dt, 0, dt);
       const imgs = await frames(at, scale);
-      const runs = starts.map((t, i) => ({ t: t + dt, a: diff(imgs[3 * i], imgs[3 * i + 1]), b: diff(imgs[3 * i + 1], imgs[3 * i + 2]) }));
-      const k = starts.length * 3;
+      const runs = starts.map((t, i) => ({ t: +(t + 1.5 * dt).toFixed(3), a: diff(imgs[4 * i], imgs[4 * i + 1]), b: diff(imgs[4 * i + 1], imgs[4 * i + 2]), c: diff(imgs[4 * i + 2], imgs[4 * i + 3]) }));
+      const k = starts.length * 4;
       const seam = tl.loop ? { a: diff(imgs[k], imgs[k + 1]), b: diff(imgs[k + 1], imgs[k + 2]), c: diff(imgs[k + 2], imgs[k + 3]) } : null;
-      findings.push(...motionFindings(runs, seam, true));
+      findings.push(
+        ...motionFindings(runs, seam, true).map((f) => {
+          if (f.text.startsWith('the loop jumps')) {
+            const fix = seamFix(p);
+            return fix ? { ...f, fix } : { ...f, hint: 'timing {file}' };
+          }
+          return f.text.startsWith('pop at') ? { ...f, hint: 'timing {file}' } : f;
+        }),
+      );
     } else findings.push({ level: 'info', text: 'still design: nothing moves' });
     // What shows: the design against itself with each layer hidden, at the same quality.
     await load(p, PREVIEW_QUALITY);
@@ -307,14 +347,116 @@ async function checkAll(o: { size?: number; layers?: number }): Promise<string> 
       const s = presence(still, without);
       // Unseen: next to nothing changes, for its size (tiny marks and hairlines count too).
       const area = b ? Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]) * scale * scale : 0;
-      if (s.px < Math.max(1, Math.min(area * 0.02, 40))) findings.push({ level: 'warn', text: `${label(n)}: can't be seen at rest (covered, transparent, off the canvas or still to enter)` });
-      else if (!isGroup(n) && n.content.type === 'text' && s.contrast < 2) findings.push({ level: 'warn', text: `${label(n)}: low contrast, ${num(s.contrast)}:1 against what's behind it` });
+      if (s.px < Math.max(1, Math.min(area * 0.02, 40))) findings.push({ level: 'warn', text: `${label(n)}: can't be seen at rest (covered, transparent, off the canvas or still to enter)`, hint: `arrange {file} ${JSON.stringify(handle(p, n))} top` });
+      else if (!isGroup(n) && n.content.type === 'text' && s.contrast < 2) findings.push({ level: 'warn', text: `${label(n)}: low contrast, ${num(s.contrast)}:1 against what's behind it`, hint: contrastHint(p, n, s.behind) });
     }
     findings.push({ level: 'info', text: `looked at ${picked.length} of ${all.length} layers${picked.length < all.length ? ' (raise --layers to see the rest)' : ''}` });
   } finally {
     await load(p);
   }
-  return report(`"${p.name}" ${p.canvas.width}×${p.canvas.height}${moves(p) ? `, ${num(tl.duration)}s${tl.loop ? ' loop' : ''}` : ''}`, findings);
+  return { title: `"${p.name}" ${p.canvas.width}×${p.canvas.height}${moves(p) ? `, ${num(tl.duration)}s${tl.loop ? ' loop' : ''}` : ''}${p.agent?.style ? ` (${p.agent.style})` : ''}`, findings };
+}
+
+/**
+ * Layout instructions against the real build: fits first (sizes change the
+ * boxes, so measure again, twice for strokes and effects that don't scale),
+ * then places and stacks in one pass (moves are exact). Returns the edits.
+ */
+async function resolveLayout(ops: LayoutOp[]): Promise<string[]> {
+  const all: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const edits = fitEdits(store.get().project, boxesOf(store.get().build), ops);
+    if (!edits.length) break;
+    all.push(...edits);
+    await load(applyEdits(store.get().project, edits).project);
+  }
+  const edits = placeEdits(store.get().project, boxesOf(store.get().build), ops);
+  if (edits.length) {
+    all.push(...edits);
+    await load(applyEdits(store.get().project, edits).project);
+  }
+  return all;
+}
+
+/** Apply what --fix can: the edits, then the layout. Returns what was done, and what's left. */
+async function applyFixes(fs: Finding[]): Promise<{ done: string[]; todo: Finding[] }> {
+  const plan = fixPlan(fs, store.get().project);
+  if (plan.edits.length) await load(applyEdits(store.get().project, plan.edits).project);
+  if (plan.layout.length) await resolveLayout(plan.layout);
+  return { done: plan.done, todo: plan.todo };
+}
+
+/** check, then --fix: apply the mechanical fixes, check again, and list what's left as commands. */
+async function checkFix(o: CheckOpts & { file?: string } = {}) {
+  const first = await findings(o);
+  const { done } = await applyFixes(first.findings);
+  const after = done.length ? await findings(o) : first;
+  const todo = fixPlan(after.findings).todo;
+  const text = [
+    done.length ? `fixed ${done.length}:\n${done.map((d) => `  ✓ ${d}`).join('\n')}` : 'nothing to fix automatically',
+    report(after.title, after.findings),
+    ...(todo.length ? ['still to do:', ...todoText(todo, o.file ?? 'design.morpho').map((l) => `  ${l}`)] : []),
+  ].join('\n');
+  return { project: saved(), text, findings: plain(after.findings), fixed: done.length, moving: moves(store.get().project) };
+}
+
+/** Layout instructions on the current design (from set and add), resolved against its build. */
+async function place(ops: LayoutOp[]) {
+  const edits = await resolveLayout(ops);
+  return { project: saved(), change: `${layoutText(ops, store.get().project).join('\n')}${edits.length ? '' : '\n(already there)'}` };
+}
+
+/**
+ * A whole design from a spec (make.ts): build it, resolve its layout against
+ * the engine's boxes, apply the mechanical fixes (unless `fix` is false),
+ * check it, and draw one picture: the design at rest, or a filmstrip when it moves.
+ */
+async function make(spec: Spec, o: CheckOpts & { kit?: string; fix?: boolean; at?: (number | null)[]; file?: string } = {}) {
+  const t0 = performance.now();
+  const made = fromSpec(spec, { kit: o.kit, style: o.style as Spec['style'] });
+  await load(made.project);
+  if (made.layout.length) await resolveLayout(made.layout);
+  let r = await findings(o);
+  let done: string[] = [];
+  if (o.fix !== false && fixPlan(r.findings).done.length) {
+    done = (await applyFixes(r.findings)).done;
+    r = await findings(o);
+  }
+  const p = store.get().project;
+  const tl = timelineOf(p);
+  const spread = (n: number) => Array.from({ length: n }, (_, i) => +((i * tl.duration) / n).toFixed(3));
+  const asked = o.at as unknown as { frames?: number } | (number | null)[] | undefined;
+  const at = Array.isArray(asked) ? asked : asked?.frames ? spread(asked.frames) : moves(p) ? [null, ...[0.2, 0.5, 0.85].map((k) => +(k * tl.duration).toFixed(2))] : [null];
+  const img = await render({ at, size: at.length > 1 ? 300 : 640 });
+  const todo = fixPlan(r.findings).todo;
+  const lines = [
+    `"${p.name}" ${p.canvas.width}×${p.canvas.height}${moves(p) ? `, ${num(tl.duration)}s${tl.loop ? ' loop' : ''}` : ''}${p.agent?.kit ? `, kit ${p.agent.kit}` : ''}: ${made.notes.filter((n) => n.startsWith('added') || n.startsWith('grouped')).length} layers`,
+    ...made.notes.filter((n) => n.startsWith('motion')),
+    ...(made.layout.length ? [`layout: ${layoutText(made.layout, p).join(' · ')}`] : []),
+    boxTable(p, itemsOf(p, store.get().build)),
+    ...(done.length ? [`fixed ${done.length}:`, ...done.map((d) => `  ✓ ${d}`)] : []),
+    report(r.title, r.findings),
+    ...(todo.length ? ['still to do:', ...todoText(todo, o.file ?? 'design.morpho').map((l) => `  ${l}`)] : []),
+  ];
+  return { project: saved(), text: lines.join('\n'), findings: plain(r.findings), moving: moves(p), ...img, ms: Math.round(performance.now() - t0) };
+}
+
+/** The current design's findings, and how they differ from `before` (a previous check's findings, or a design to check). */
+async function checkDiff(before: Finding[] | null, beforeProject: unknown, o: CheckOpts & { file?: string } = {}) {
+  const after = await findings(o);
+  let was = before;
+  if (!was) {
+    const now = structuredClone(store.get().project);
+    await load(beforeProject);
+    was = (await findings(o)).findings;
+    await load(now);
+  }
+  const d = diffFindings(was, after.findings);
+  const counts = (fs: Finding[]) => `${fs.filter((f) => f.level === 'error').length} problems, ${fs.filter((f) => f.level === 'warn').length} warnings`;
+  const plan = fixPlan(after.findings);
+  const cmds = todoText(plan.todo, o.file ?? '<file>').filter((l) => l.startsWith('morpho'));
+  const text = [`check: ${counts(after.findings)} (was ${counts(was)})`, ...(d.length ? d : ['no change in the findings']), ...(plan.done.length ? [`${plan.done.length} can be fixed automatically: morpho check ${o.file ?? '<file>'} --fix`] : []), ...(cmds.length ? ['to do:', ...cmds.map((l) => `  ${l}`)] : [])];
+  return { findings: plain(after.findings), moving: moves(store.get().project), text: text.join('\n') };
 }
 
 /** The current design as a file would save it: imported fonts and pictures packed in. */
@@ -366,15 +508,6 @@ async function importImage(b64: string, name: string, target?: string) {
   return { project: saved(), change };
 }
 
-const EDGES: Record<string, { axis: 0 | 1; at: (b: Box) => number }> = {
-  left: { axis: 0, at: (b) => b[0] },
-  right: { axis: 0, at: (b) => b[2] },
-  centre: { axis: 0, at: (b) => (b[0] + b[2]) / 2 },
-  top: { axis: 1, at: (b) => b[1] },
-  bottom: { axis: 1, at: (b) => b[3] },
-  middle: { axis: 1, at: (b) => (b[1] + b[3]) / 2 },
-};
-
 /**
  * Line layers up by what they draw (not their anchors): each edge of `edges`
  * (left, right, centre, top, bottom, middle) of each target meets the same
@@ -382,27 +515,7 @@ const EDGES: Record<string, { axis: 0 | 1; at: (b: Box) => number }> = {
  */
 async function align(targets: string[], to: string, edges: string[]) {
   const p = store.get().project;
-  const { width: W, height: H } = p.canvas;
-  const boxOf = (id: string) => store.get().build?.layers.find((l) => l.id === id)?.bbox ?? null;
-  const ref = to === 'canvas' ? ([-W / 2, -H / 2, W / 2, H / 2] as Box) : boxOf(findNode(p, to).id);
-  if (!ref) throw new Error(`${to} has no outline to align to`);
-  const edits: string[] = [];
-  for (const t of targets) {
-    const n = findNode(p, t);
-    if (isGroup(n)) throw new Error(`align moves layers; ${n.name ?? n.id} is a group (align its layers)`);
-    const b = boxOf(n.id);
-    if (!b) throw new Error(`${n.name ?? n.id} has no outline to align`);
-    const move = [0, 0];
-    for (const e of edges) {
-      const E = EDGES[e === 'center' ? 'centre' : e];
-      if (!E) throw new Error(`align edges are ${Object.keys(EDGES).join(', ')}; not "${e}"`);
-      move[E.axis] = E.at(ref) - E.at(b);
-    }
-    const id = JSON.stringify('#' + n.id);
-    if (Math.abs(move[0]) > 0.01) edits.push(`${id}.x=${+(n.x + move[0]).toFixed(2)}`);
-    if (Math.abs(move[1]) > 0.01) edits.push(`${id}.y=${+(n.y + move[1]).toFixed(2)}`);
-  }
-  const { project, changes } = applyEdits(p, edits);
+  const { project, changes } = applyEdits(p, alignEdits(p, boxesOf(store.get().build), targets, to, edges));
   await load(project);
   return { project: saved(), change: changes.length ? changes.join('\n') : 'already aligned' };
 }
@@ -508,4 +621,10 @@ export const agent = {
   frameBatch,
   layout,
   align,
+  findings,
+  checkFull,
+  checkFix,
+  checkDiff,
+  place,
+  make,
 };

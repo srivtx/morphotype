@@ -1,6 +1,6 @@
 import type { Content, EngineLayer, GlyphPart, LineCap, ModEntry, Modifier, ModifierKind, Op, SymbolKind, SymbolSpec, TextMorph } from '../engine/types';
 import { defaultParams, effectById, type ParamValues } from '../render/effects';
-import type { Motion, ParamAnim } from './motion';
+import type { Key, Motion, ParamAnim } from './motion';
 import type { Timeline } from './clock';
 
 export interface ProjectFont {
@@ -52,6 +52,8 @@ export interface Style {
   soften?: number;
   /** Settings that change over time on the scene clock, by param key. */
   animate?: Record<string, ParamAnim>;
+  /** Settings keyed on the scene clock, by param key (see keys.ts; keys win over `animate`). */
+  keys?: Record<string, Key[]>;
 }
 
 export function stroke(width = 6, color = '#0a0a0a', align: StrokeAlign = 'outside'): Stroke {
@@ -69,6 +71,8 @@ export interface ShapeLayer extends EngineLayer {
   motion?: Motion;
   /** Shape and modifier settings that change over time, rebuilt on the scene clock (see geoMotion.ts). */
   animate?: Record<string, ParamAnim>;
+  /** Keys on the scene clock: x, y, rotation, scale, opacity and geometry settings (see keys.ts). */
+  keys?: Record<string, Key[]>;
 }
 
 /**
@@ -95,6 +99,8 @@ export interface Group {
   motion?: Motion;
   /** Merged groups: modifier settings that change over time (see geoMotion.ts). */
   animate?: Record<string, ParamAnim>;
+  /** Keys on the scene clock: offsets from rest (x, y, rotation, scale), a fade, and merged groups' geometry (see keys.ts). */
+  keys?: Record<string, Key[]>;
 }
 
 export type Node = ShapeLayer | Group;
@@ -224,6 +230,8 @@ export interface Project {
   type?: TypeProject;
   /** Length and looping of the scene clock (animated materials and motion). */
   timeline?: Timeline;
+  /** What the morpho CLI keeps with a design: its style kit, and what kind of design it is (abstract turns style rules into notes). */
+  agent?: { kit?: string; style?: 'poster' | 'logo' | 'abstract' };
 }
 
 let counter = 0;

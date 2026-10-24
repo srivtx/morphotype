@@ -3,7 +3,8 @@
 // agent can read a whole design without its source or a screenshot. Names and
 // ids in the output are what `set` (edit.ts) takes to address a layer.
 import { defaultParams, effectById } from '../render/effects';
-import { feelOf, type Motion, type ParamAnim, type Transition } from '../state/motion';
+import { easeName } from '../state/keys';
+import { feelOf, type Key, type Motion, type ParamAnim, type Transition } from '../state/motion';
 import { isGroup, MODIFIER_DEFAULTS, SYMBOL_DEFAULTS, type Background, type Node, type Project, type Style } from '../state/model';
 import type { ModEntry } from '../engine/types';
 
@@ -20,6 +21,12 @@ function changed(o: Record<string, unknown>, d: Record<string, unknown> | undefi
 
 function anim(k: string, a: ParamAnim): string {
   return `${k}→${val(a.to)} ${a.mode} ${num(a.period)}s${a.phase ? ` @${num(a.phase)}` : ''}`;
+}
+
+/** "keys rotation 0s 0 → 1s 45 linear → 2.5s 30": each keyed property's keys, with curves that aren't the default. */
+function keysLine(bag: Record<string, Key[]>): string {
+  const each = Object.entries(bag).filter(([, k]) => k.length);
+  return each.length ? `keys ${each.map(([k, keys]) => `${k} ${keys.map((x, i) => `${num(x.t)}s ${val(x.v)}${i && x.ease ? ` ${easeName(x.ease)}` : ''}`).join(' → ')}`).join('; ')}` : '';
 }
 
 function transition(t: Transition): string {
@@ -51,6 +58,7 @@ export function styleText(s: Style): string {
   if (s.soften) out.push(`soften ${num(s.soften)}`);
   const a = Object.entries(s.animate ?? {});
   if (a.length) out.push(`animate ${a.map(([k, v]) => anim(k, v)).join('; ')}`);
+  if (s.keys) out.push(keysLine(s.keys));
   return out.join(' · ');
 }
 
@@ -120,6 +128,7 @@ function nodeLines(n: Node, depth: number, out: string[]) {
   if (m) parts.push(`motion ${m}`);
   const a = Object.entries(n.animate ?? {});
   if (a.length) parts.push(`animate ${a.map(([k, v]) => anim(k, v)).join('; ')}`);
+  if (n.keys) parts.push(keysLine(n.keys));
   out.push(`${head} ${parts.filter(Boolean).join(' · ')}`);
   if (isGroup(n)) for (const c of [...n.children].reverse()) nodeLines(c, depth + 1, out);
 }
