@@ -729,17 +729,23 @@ try {
     // ◆ starts keys at the playhead; typing a value elsewhere on the clock adds a key there.
     await page.getByRole('button', { name: 'Key Rotation' }).click();
     const rot = page.locator('.keyed-box', { has: page.getByRole('button', { name: 'Key Rotation' }) }).locator('input');
-    // Typed as a person would: the box selects its text when it takes focus.
+    // Typed as a person would: click the box (it selects its text a frame later), select all, type, Enter.
+    const twoFrames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    let typedIn = '';
     const typeInto = async (box, v) => {
       await box.click();
+      await twoFrames();
+      typedIn = await page.evaluate(() => `${document.activeElement?.tagName} "${document.activeElement?.value ?? ''}"`);
       await page.keyboard.press(`${mod}+a`);
       await page.keyboard.type(String(v));
       await page.keyboard.press('Enter');
+      await twoFrames();
     };
     for (const [t, v] of [[1, 45], [2.5, 30], [3.5, -90]]) {
       await page.evaluate((t) => window.morphotype.clock.seek(t), t);
       await settle(150);
       await typeInto(rot, v);
+      await until((st) => keysOf(st).some(([kt, kv]) => kt === t && kv === v), 5000);
     }
     let st = await state();
     check(JSON.stringify(keysOf(st)) === '[[0,0],[1,45],[2.5,30],[3.5,-90]]', `◆ and the rotation field key the star at four times (${JSON.stringify(keysOf(st))})`);
@@ -790,9 +796,10 @@ try {
     await settle(150);
     const xBox = page.locator('.keyed-box', { has: page.getByRole('button', { name: 'Key X' }) }).locator('input');
     await typeInto(xBox, 120);
+    await until((st) => keysOf(st, 'x').length === 2, 5000);
     await page.getByRole('button', { name: 'Autokey' }).click();
     st = await state();
-    check(JSON.stringify(keysOf(st, 'x')) === '[[0,0],[2,120]]' && (await page.locator('.tl-sub .tl-name', { hasText: 'Position X' }).count()) === 1, `autokey keys a change at the playhead, from where it was (${JSON.stringify(keysOf(st, 'x'))})`);
+    check(JSON.stringify(keysOf(st, 'x')) === '[[0,0],[2,120]]' && (await page.locator('.tl-sub .tl-name', { hasText: 'Position X' }).count()) === 1, `autokey keys a change at the playhead, from where it was (${JSON.stringify(keysOf(st, 'x'))}; x ${starOf(st).x}; typed into ${typedIn})`);
     await page.screenshot({ path: path.join(out, 'new-01d-keys.png') });
     // Video: every frame is drawn at its own time on the keys.
     await page.evaluate((id) => {
