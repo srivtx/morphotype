@@ -14,7 +14,7 @@ import { effectById } from '../../render/effects';
 import { clock, DEFAULT_TIMELINE, timelineOf, type Timeline } from '../../state/clock';
 import { autokey, easeName, easeNamed, hasKeys, KEY_SNAP, lastKeyTime, onFrame, updateKeys } from '../../state/keys';
 import { addStop, animatedValue, animMix, ENTER_UI, isStill, KEY_EASE, keyedValue, lastSlot, legsOf, LOOP_UI, motionEnd, newMotion, poseAt, progressAt, seedOf, settleTime, staggerSlot, thenTransition, type Key, type LoopKind, type Motion, type ParamAnim, type Transition } from '../../state/motion';
-import { isGroup, type Node, type Project } from '../../state/model';
+import { isGroup, nodeLabel, type Node, type Project } from '../../state/model';
 import { beginGesture, commitEdit, edit, select, store, useStore } from '../../state/store';
 import { frameAt, loopLengthOf, rowsOf, snapTime, type Clip, type Row, type Track } from '../../state/tracks';
 import { findNode } from '../../state/tree';
@@ -397,7 +397,7 @@ const Rows = memo(function Rows({ rows, tl, laneW, selection, folded, onFold, on
         return (
           <div key={r.node.id} className={`tl-layer ${sel ? 'selected' : ''}`} data-row={r.node.id}>
             <div className="tl-row">
-              <div className="tl-label" style={{ paddingLeft: 6 + r.depth * 12 }} onClick={pick} data-tip={r.node.name}>
+              <div className="tl-label" style={{ paddingLeft: 6 + r.depth * 12 }} onClick={pick} data-tip={nodeLabel(r.node)}>
                 {r.parent || subs.length ? (
                   <button
                     className={`tl-disclose ${folded.has(r.node.id) ? 'folded' : ''}`}
@@ -412,7 +412,7 @@ const Rows = memo(function Rows({ rows, tl, laneW, selection, folded, onFold, on
                 ) : (
                   <i className="tl-disclose-gap" />
                 )}
-                <span className="tl-name">{r.node.name}</span>
+                <span className="tl-name">{nodeLabel(r.node)}</span>
                 {sel && <AddMenu node={r.node} />}
               </div>
               <div className="tl-lane">
@@ -1105,7 +1105,7 @@ function KeyEditor({ row, k, index, onDone }: { row: Node; k: KeyTrack; index: n
         label="At"
         min={0}
         max={tl.duration}
-        step={1 / FPS}
+        step={0.01}
         suffix="s"
         value={key.t}
         onChange={(v) => {

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { clock, timelineOf } from '../state/clock';
-import { keyAt, nextKey, prevKey, setKey } from '../state/keys';
+import { KEY_SNAP, keyAt, nextKey, onFrame, prevKey, setKey } from '../state/keys';
 import { keyedValue, type Key, type ParamAnim } from '../state/motion';
 import { store, useStore } from '../state/store';
 import { ColorField } from './ColorPicker';
@@ -42,12 +42,14 @@ export function KeyButtons({ label, keys, value, set }: { label: string; keys: K
   const t = usePlayhead();
   const keyed = !!keys?.length;
   const on = keyAt(keys, t) >= 0;
-  const [prev, next] = [prevKey(keys, t), nextKey(keys, t)];
+  // While playing, the playhead has moved on since this rendered: look at click time.
+  const now = () => clock.time(timelineOf(store.get().project));
+  const [prev, next] = clock.playing ? [true, true] : [prevKey(keys, t), nextKey(keys, t)];
   const tip = on ? `${label} has a key here: click to set it, ⌥-click to remove it` : keyed ? `Add a ${label} key at the playhead` : `Key ${label}: start keys at the playhead`;
   return (
     <span className="key-buttons">
       {keyed && (
-        <button className="keyframe step" disabled={!prev} aria-label={`Previous ${label} key`} data-tip="Previous key" onClick={() => prev && pauseAt(prev.t)}>
+        <button className="keyframe step" disabled={!prev} aria-label={`Previous ${label} key`} data-tip="Previous key" onClick={() => pauseAt((prevKey(keys, now()) ?? keys![0]).t)}>
           <Icon name="chevronLeft" size={10} />
         </button>
       )}
@@ -57,15 +59,18 @@ export function KeyButtons({ label, keys, value, set }: { label: string; keys: K
         aria-label={`Key ${label}`}
         data-tip={tip}
         onClick={(e) => {
-          clock.pause(timelineOf(store.get().project));
-          if (e.altKey && on) set((ks) => ks.filter((k) => Math.abs(k.t - t) >= 1 / 60));
-          else set((ks) => setKey(ks, t, value));
+          // Stop on the frame the key goes on, so it's the one shown.
+          const at = onFrame(now());
+          pauseAt(at);
+          if (e.altKey && on) set((ks) => ks.filter((k) => Math.abs(k.t - at) >= KEY_SNAP));
+          // Keyed, its value there (the one shown may be from a moment ago, while playing).
+          else set((ks) => setKey(ks, at, keys?.length ? keyedValue(keys, at) : value));
         }}
       >
         <Icon name="keyframe" size={11} />
       </button>
       {keyed && (
-        <button className="keyframe step" disabled={!next} aria-label={`Next ${label} key`} data-tip="Next key" onClick={() => next && pauseAt(next.t)}>
+        <button className="keyframe step" disabled={!next} aria-label={`Next ${label} key`} data-tip="Next key" onClick={() => pauseAt((nextKey(keys, now()) ?? keys![keys!.length - 1]).t)}>
           <Icon name="chevronRight" size={10} />
         </button>
       )}

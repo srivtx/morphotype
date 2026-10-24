@@ -123,6 +123,8 @@ export function rhythm(tracks: Track[], D: number, loop: boolean): string[] {
   for (const k of keyed) {
     const last = k.keys[k.keys.length - 1].t;
     if (last > D + 1e-3) notes.push(`! a ${k.label.toLowerCase()} key at ${num(last)}s is after the ${num(D)}s clock: it never plays`);
+    const [v0, v1] = [k.keys[0].v, k.keys[k.keys.length - 1].v];
+    if (loop && String(v0).toLowerCase() !== String(v1).toLowerCase()) notes.push(`· ${k.label.toLowerCase()} jumps from ${val(v1)} back to ${val(v0)} at the loop seam: end on a key equal to the first to loop smoothly`);
   }
   return notes;
 }

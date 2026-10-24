@@ -153,7 +153,7 @@ describe('editing keyed properties', () => {
     const before = keyed();
     const after = structuredClone(before);
     star(after).x += 30;
-    keyEdits(before, after, 1, false);
+    keyEdits(before, after, 1, false, false);
     // At 1 s the keys put it at 100; dragged 30 further.
     expect(star(after).keys!.x).toEqual([
       { t: 0, v: 0 },
@@ -168,6 +168,8 @@ describe('editing keyed properties', () => {
     star(after).x = -50;
     keyEdits(before, after, 2, false);
     expect(star(after).keys!.x.map((k) => k.v)).toEqual([0, 150]);
+    // Not mid-drag: its own x follows, so its outline is where it's drawn.
+    expect(star(after).x).toBe(150);
   });
 
   it('leaves unkeyed properties alone unless autokey is on', () => {

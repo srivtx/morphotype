@@ -16,7 +16,7 @@ import { applyIconTarget, ICON_TARGETS, iconTarget, type IconTarget } from '../s
 import { allLayers, findNode } from '../state/tree';
 import { lineAnimKey, modAnimKey, MORPH_KEY, pruneGeoAnims, symAnimKey, TRIM_DEFAULT } from '../state/geoMotion';
 import { updateKeys, type KeyTracks } from '../state/keys';
-import { keyedNumber, type ParamAnim } from '../state/motion';
+import { keyedNumber, keyedValue, type ParamAnim } from '../state/motion';
 import { ColorChip, ColorField } from './ColorPicker';
 import { FontPicker } from './FontPicker';
 import { MotionSection } from './MotionPanel';
@@ -216,7 +216,7 @@ function Appearance({ nodes }: { nodes: Node[] }) {
         </button>
         <div className="appearance-colors">
           {colors.map((c) => (
-            <ColorChip key={c.key} label={c.label} value={String(st.params[c.key] ?? c.default)} onChange={(v) => setParam(c.key, v)} />
+            <ColorChip key={c.key} label={c.label} value={String(st.keys?.[c.key]?.length ? keyedValue(st.keys[c.key], t) : (st.params[c.key] ?? c.default))} onChange={(v) => setParam(c.key, v)} />
           ))}
         </div>
       </div>

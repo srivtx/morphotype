@@ -40,6 +40,7 @@ group('free keys from the command line', () => {
     expect(t).toMatch(/rotation keys\s+◆─+◆─+◆/);
     expect(t).toContain('0s 0 → 1s 45 → 2.5s 30 linear');
     expect(catalog('keyframes', [])).toContain('Star.keys.rotation=[[0,0],[1,45],[2.5,30]]');
+    expect(t).toContain('· rotation jumps from 30 back to 0 at the loop seam');
   });
 
   it('warns about keys after the end of the clock', () => {

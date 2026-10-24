@@ -197,8 +197,11 @@ function nodesById(nodes: Node[], out = new Map<string, Node>()) {
  * position or angle by as much as it moved the layer, and a scale by the same
  * ratio, so the object follows the pointer wherever the keys had put it;
  * everything else takes the new value. Settings that cycle aren't autokeyed.
+ * Outside a drag (`settle`), the layer's own position, angle and scale
+ * become the key's too, so its outline (and stills) sit where it's drawn;
+ * mid-drag they keep counting from where the drag began.
  */
-export function keyEdits(before: Project, after: Project, t: number, autokey: boolean) {
+export function keyEdits(before: Project, after: Project, t: number, autokey: boolean, settle = true) {
   if (!autokey && !anyKeys(after.layers)) return;
   const old = nodesById(before.layers);
   const at = onFrame(t);
@@ -219,6 +222,7 @@ export function keyEdits(before: Project, after: Project, t: number, autokey: bo
             else if (p.rel === 'mul') v = Math.abs(was) > 1e-9 ? cur * (now / was) : now;
           }
           setKey(keys, at, typeof v === 'number' && p.integer ? Math.round(v) : v);
+          if (settle && p.rel && typeof v === 'number') rec(n)[p.key] = v;
         } else if (autokey && !(p.scope === 'style' ? n.style.animate : n.animate)?.[p.key]) {
           updateKeys(n, p.scope, p.key, () => (at > KEY_SNAP ? [{ t: 0, v: was }, { t: at, v: now }] : [{ t: 0, v: now }]));
         }

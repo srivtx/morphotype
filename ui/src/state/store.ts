@@ -137,7 +137,7 @@ export function edit(fn: (draft: Project) => void, key = '') {
   const before = state.project;
   const draft = structuredClone(before);
   fn(draft);
-  keyEdits(before, draft, clock.time(timelineOf(draft)), autokey.on);
+  keyEdits(before, draft, clock.time(timelineOf(draft)), autokey.on, !gesture);
   const now = performance.now();
   const coalesce = key !== '' && key === lastKey && (gesture || now - lastTime < COALESCE_MS);
   lastKey = key;
