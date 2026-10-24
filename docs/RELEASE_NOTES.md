@@ -1,22 +1,54 @@
-## Morphotype 0.9.1
+## Morphotype 0.9.2
 
-A motion editor with a timeline, text that moves letter by letter, a kerning editor, smoother morphed fonts, and a faster start.
+Free keyframes, tools for Y2K and pixel-glitch posters, animated font morphs, a proper font style picker, and a command line for designing with AI agents.
 
 ### Install on a Mac
 
-1. Download `Morphotype_0.9.1_universal.dmg` below (it runs on Apple silicon and Intel).
+1. Download `Morphotype_0.9.2_universal.dmg` below (it runs on Apple silicon and Intel).
 2. Open it and drag **Morphotype** into **Applications**.
 3. The app isn't notarised yet, so macOS blocks it the first time. Either go to **System Settings → Privacy & Security** and click **Open Anyway** next to Morphotype, or run this once in Terminal (it also fixes a "damaged" message):
    `xattr -dr com.apple.quarantine /Applications/Morphotype.app && open /Applications/Morphotype.app`
 
 ### Install on Windows
 
-1. Download `Morphotype_0.9.1_x64-setup.exe` below and run it.
+1. Download `Morphotype_0.9.2_x64-setup.exe` below and run it.
 2. The installer isn't signed yet, so SmartScreen may warn. Click **More info** → **Run anyway**.
 
 Fonts you install are registered under your user account and broadcast straight away, so they show up in other apps without a restart.
 
 `Morphotype-web.zip` is the same app as a static website: unzip it and serve the folder from any web host.
+
+### What's new in 0.9.2
+
+**Free keyframes**
+- Any number of keys per property, each at its own time, with its own value and curve. Press ◆ next to position, rotation, scale, opacity or any animatable setting to key it at the playhead; the arrows jump between keys.
+- In the timeline each keyed property gets its own row of diamonds: drag one to retime it, click it to edit its value and curve, ⌫ to delete it.
+- **Autokey**: with the record switch on, any change on the canvas or in the Inspector is keyed at the playhead.
+- Keys and the existing loops and entrances work together, and exported video follows them exactly.
+- Fix: a number typed straight after clicking into a field no longer loses its first digit.
+
+**Animate a font morph**
+- The Blend of *Morph to another font* (and of a morph layer) now has a keyframe button, so a word can melt from one typeface into another and back.
+
+**Tools for Y2K and pixel-glitch posters**
+- **Line › Start / End / Slide**: draw only part of a pen line, and keyframe it to draw a line on.
+- **Glitch** modifier: pixel debris breaking off a shape, bites out of its edges and torn scan lines.
+- **Puffy › Surface**: contour lines or speckles that wrap round the puff.
+- **Inflatable vinyl**: blow-up plastic with pinched rings, wrinkles, seams and a clear mode.
+- **Flat › Glow**, **Folded paper**, **Photo › Print screen**, and **Form › Tube** on Liquid chrome and Puffy.
+- **Hold** keyframes: wait at a value, make a move, come back.
+
+**New animated templates (Templates › Learn)**
+- Shape shifter, Glass lens, Crystal, Frosted 404, Thermal wings, Puffy, Aura, Glow glass and Holo J.
+- Y2K set, Inflatable, Global trend, Pixel badge and Tube burst, made with the new tools.
+- Pixel office is rebuilt to match its reference.
+
+**Fonts**
+- A **style picker** in Type mode: Thin 100 to Black 900, upright and italic, or a custom name. The style now sets the exported font's weight class and italic flags, so a font named Bold is marked bold.
+- One change for older projects: a font named Regular whose look adds weight now exports as weight 400 to match its name, rather than 700.
+
+**`morpho`, a command line for AI agents**
+- `npm run morpho` lets an agent or a script read, make, edit, check and render designs without the UI: `make` builds a whole design from one JSON spec, `check --fix` finds and fixes layout and motion problems, and `render`, `vary` and `video` draw it. See `docs/AGENT-TOOLS.md`.
 
 ### What's new in 0.9.1
 
