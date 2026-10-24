@@ -907,7 +907,15 @@ try {
       const layout = await a.layout();
       const video = await a.frameBatch({ fps: 10, from: 0, count: 3, size: 120 });
       const aligned = await a.align(['Caption'], 'canvas', ['centre']);
-      return { changes, still: [still.width, still.height], strip: [strip.width, strip.height], grid: [grid.width, grid.height], report, text: a.describe(), layout, video: [video.frames.length, video.total], aligned: aligned.change };
+      const text = a.describe();
+      // A whole design from a spec: kit, layout in words, a motion recipe, checked, one picture.
+      const made = await a.make({ canvas: '1080x1350', kit: 'chrome-night', duration: 3, layers: [{ text: 'HELLO', name: 'Title', fitWidth: 70, place: 'top third' }, { text: 'small print', name: 'Info', place: 'bottom', margin: 90 }], motion: { recipe: 'cascade' } }, { size: 200 });
+      const title = made.project.layers.find((l) => l.name === 'Title');
+      const box = window.morphotype.store.get().build.layers.find((l) => l.id === title.id).bbox;
+      // A design with text cut off and an entrance that replays: --fix mends both.
+      await a.load({ ...made.project, layers: made.project.layers.map((l) => (l.name === 'Title' ? { ...l, x: l.x + 600, motion: { ...l.motion, leave: 'none' } } : l)) });
+      const fixed = await a.checkFix({ size: 200, layers: 2 });
+      return { changes, still: [still.width, still.height], strip: [strip.width, strip.height], grid: [grid.width, grid.height], report, text, layout, video: [video.frames.length, video.total], aligned: aligned.change, made: { text: made.text, width: made.width, box }, fixed: fixed.text };
     });
   });
   check(agent.changes.length === 2 && agent.text.includes('flat {fill #ff2d55}'), `agent edits the design (${agent.changes[0]})`);
@@ -916,6 +924,9 @@ try {
   check(/margins L .* R /.test(agent.layout) && /palette: /.test(agent.report), 'agent layout lists boxes and margins, and check reads the palette');
   check(agent.video[0] === 3 && agent.video[1] === 40, `agent draws video frames in batches (${agent.video.join(' of ')})`);
   check(/Caption" x:|already aligned/.test(agent.aligned), `agent aligns by what's drawn (${agent.aligned})`);
+  check(/kit chrome-night/.test(agent.made.text) && /no problems/.test(agent.made.text) && agent.made.width > 0, `agent makes a design from a spec: ${agent.made.text.split('\n').find((l) => l.includes('no problems') || l.includes('problem')) ?? agent.made.text.split('\n')[0]}`);
+  check(Math.abs((agent.made.box[2] - agent.made.box[0]) / 1080 - 0.7) < 0.01 && Math.abs((agent.made.box[1] + agent.made.box[3]) / 2 + 225) < 2, `agent layout fits the title to 70% of the width on the top third line (box ${agent.made.box.map(Math.round).join(', ')})`);
+  check(/fixed \d+:/.test(agent.fixed) && /cut off → shrunk to fit/.test(agent.fixed) && /loop starts over from nothing/.test(agent.fixed), `agent check --fix mends cut-off text and the loop seam: ${agent.fixed.split('\n')[0]}`);
 } catch (e) {
   errors.push(`crashed: ${e.message.split('\n').slice(0, 12).join(' / ')}`);
   const pages = browser.contexts().flatMap((c) => c.pages());
