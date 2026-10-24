@@ -12,6 +12,7 @@ import { geometryFrames, holdLiveGeometry } from '../app/geoMotion';
 import { addImage, encodeImage, imageElement, packImages, unpackImages } from '../state/assets';
 import { clock, timelineOf } from '../state/clock';
 import { anyGeoAnim } from '../state/geoMotion';
+import { hasKeys } from '../state/keys';
 import { migrate } from '../state/migrate';
 import { isGroup, style, symbolLayer, type Node, type Project, type ShapeLayer } from '../state/model';
 import { isStill } from '../state/motion';
@@ -239,7 +240,7 @@ function moves(p: Project): boolean {
   let any = anyGeoAnim(p.layers);
   const walk = (ns: Node[]) =>
     ns.forEach((n) => {
-      if (!isStill(n.motion) || Object.keys(n.style.animate ?? {}).length || effectById(n.style.effect).animated?.(n.style.params)) any = true;
+      if (!isStill(n.motion) || Object.keys(n.style.animate ?? {}).length || hasKeys(n) || effectById(n.style.effect).animated?.(n.style.params)) any = true;
       if (isGroup(n)) walk(n.children);
     });
   walk(p.layers);

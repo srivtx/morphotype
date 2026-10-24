@@ -4,7 +4,7 @@ import { ambientOf, backgroundUniforms, BG_FS } from './background';
 import type { Background, BlendMode, Depth, Stroke, Style } from '../state/model';
 import { imageAsset, imageElement, onImagesReady } from '../state/assets';
 import { clock, DEFAULT_TIMELINE, type Timeline } from '../state/clock';
-import { animatedValue, applyMat, compose, placement, type Mat, type Motion, type ParamAnim } from '../state/motion';
+import { animatedValue, applyMat, compose, keyedNumber, keyedValue, placement, type Key, type KeyedTransform, type Mat, type Motion, type ParamAnim } from '../state/motion';
 import { bindTextures, formats, freeTarget, GLError, hexToRgb, program, setUniforms, target, texture, type Program, type Target, type UniformValue } from './gl';
 
 const EFFECT_FS = (body: string) => /* glsl */ `#version 300 es
@@ -83,10 +83,14 @@ export interface SceneItem {
   guide?: boolean;
   /** A pen line's centre line, for materials that colour along it. */
   spine?: number[] | null;
-  /** Motions moving it at draw time (its own first), each about a rest centre in artboard coordinates. */
-  motion?: { motion: Motion; pivot: [number, number]; offset: number }[];
+  /** Motions moving it at draw time (its own first), each about a rest centre in artboard coordinates, with any transform keys. */
+  motion?: { motion: Motion; pivot: [number, number]; offset: number; keys?: KeyedTransform }[];
   /** Material settings that change over time. */
   anim?: Record<string, ParamAnim>;
+  /** Material settings keyed on the clock (they win over `anim`). */
+  keys?: Record<string, Key[]>;
+  /** Its opacity, keyed on the clock. */
+  opacityKeys?: Key[];
   /** How far (px) motion carries it from rest: a clipped object's field covers that much more, so its frame can stay still. */
   motionReach?: number;
   /** Its outline is rebuilt on the scene clock: the field's area snaps to a coarse grid so its textures are reused from frame to frame. */
@@ -97,7 +101,7 @@ export interface SceneItem {
 
 /** The scene item for one built object and its style. */
 export function sceneItem(id: string, out: { d: string; bbox: Box | null; spine?: number[] }, st: Style, guide?: boolean, clipD?: string | null): SceneItem {
-  return { id, d: out.d, bbox: out.bbox, clipD, spine: out.spine ?? null, effect: effectById(st.effect), params: st.params, anim: st.animate, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, soften: st.soften, guide };
+  return { id, d: out.d, bbox: out.bbox, clipD, spine: out.spine ?? null, effect: effectById(st.effect), params: st.params, anim: st.animate, keys: st.keys, stroke: st.stroke, opacity: st.opacity, blend: st.blend, depth: st.depth, soften: st.soften, guide };
 }
 
 interface Field {
@@ -288,13 +292,19 @@ export class Renderer {
 
   /** Anything that changes with time: animated materials or motion. */
   moving() {
-    return this.objs.some((o) => o.item.motion?.length || (o.item.anim && Object.keys(o.item.anim).length) || o.item.effect.animated?.(o.item.params));
+    return this.objs.some((o) => o.item.motion?.length || (o.item.anim && Object.keys(o.item.anim).length) || (o.item.keys && Object.keys(o.item.keys).length) || o.item.opacityKeys?.length || o.item.effect.animated?.(o.item.params));
   }
 
   /** Seconds on the scene clock for this frame; null holds everything at rest. */
   private now(): number | null {
     if (this.pinned) return this.pinned.t;
     return this.paused ? null : clock.time(this.timeline);
+  }
+
+  /** An object's own opacity now: its style's, or its keys'. */
+  private opacityOf(o: Obj): number {
+    const t = this.now();
+    return t === null ? (o.item.opacity ?? 1) : keyedNumber(o.item.opacityKeys, t, o.item.opacity ?? 1);
   }
 
   /** Where motion puts an object now (artboard map), and its fade. */
@@ -573,7 +583,8 @@ export class Renderer {
     for (const def of o.item.effect.params) {
       const base = o.item.params[def.key] ?? def.default;
       const a = o.item.anim?.[def.key];
-      const v = a && t !== null ? animatedValue(base, a, t, loopLength) : base;
+      const k = o.item.keys?.[def.key];
+      const v = t === null ? base : k?.length ? keyedValue(k, t) : a ? animatedValue(base, a, t, loopLength) : base;
       u[`u_${def.key}`] = def.type === 'color' ? hexToRgb(String(v)) : Number(v);
     }
     const st = o.item.stroke;
@@ -581,7 +592,7 @@ export class Renderer {
     u.u_strokeAlign = st?.align === 'center' ? 1 : st?.align === 'inside' ? 2 : 0;
     u.u_strokeOpacity = st?.opacity ?? 1;
     u.u_strokeColor = hexToRgb(st?.color ?? '#000000');
-    u.u_opacity = Math.max(0, Math.min(1, o.item.opacity ?? 1));
+    u.u_opacity = Math.max(0, Math.min(1, this.opacityOf(o)));
     u.u_soften = Math.max(0, o.item.soften ?? 0);
     const dp = o.item.depth;
     u.u_sideDepth = dp && dp.amount > 0 ? dp.amount : 0;
@@ -685,7 +696,7 @@ export class Renderer {
           u_rect: rectOf(o.region),
           u_xf: xf ? [xf[0], xf[1], xf[2], xf[3]] : [1, 0, 0, 1],
           u_xfT: xf ? [xf[4], xf[5]] : [0, 0],
-          ...(at ? { u_opacity: Math.max(0, Math.min(1, (o.item.opacity ?? 1) * at.opacity)) } : {}),
+          ...(at ? { u_opacity: Math.max(0, Math.min(1, this.opacityOf(o) * at.opacity)) } : {}),
           u_hasClip: o.field.clip ? 1 : 0,
           ...(o.item.effect.photo ? { u_hasPhoto: photo ? 1 : 0, u_imgAspect: meta ? meta.w / meta.h : 1 } : {}),
           ...(o.item.effect.backdrop ? (bdu ?? { u_hasBackdrop: 0 }) : {}),

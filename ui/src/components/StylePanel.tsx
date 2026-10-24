@@ -4,15 +4,16 @@ import { allImages } from '../state/assets';
 import { shortcutOf } from '../app/commands';
 import { engine } from '../engine/client';
 import { defaultParams, EFFECTS, effectById, PRESETS, type EffectDef, type ParamDef, type ParamValues, type Preset } from '../render/effects';
-import type { ParamAnim } from '../state/motion';
+import { updateKeys } from '../state/keys';
+import { keyedValue, type ParamAnim } from '../state/motion';
 import { renderThumb, useThumb } from '../render/thumbs';
 import type { SceneItem } from '../render/renderer';
-import { background, fill, isGroup, pattern, textLayer, type Style } from '../state/model';
+import { background, fill, isGroup, pattern, textLayer, type Node, type Style } from '../state/model';
 import { edit, setSettings, useStore } from '../state/store';
 import { findNode } from '../state/tree';
 import { ColorField } from './ColorPicker';
 import { Icon } from './icons';
-import { Keyframed } from './Keyframed';
+import { Keyframed, usePlayhead, type SetKeysOf } from './Keyframed';
 import { IconButton, Section, Select, Slider, Toggle } from './ui';
 
 // One shared sample outline for every preview card.
@@ -82,6 +83,7 @@ export function StylePanel() {
   const nodes = selection.map((id) => findNode(project.layers, id)).filter((n) => !!n);
   const primary = nodes.at(-1);
   const st = primary ? styleOf(primary) : undefined;
+  const playhead = usePlayhead();
   const presets = useMemo(() => {
     const t = q.trim().toLowerCase();
     return t ? PRESETS.filter((p) => `${p.name} ${p.effect} ${p.tags ?? ''} ${effectById(p.effect).name}`.toLowerCase().includes(t)) : PRESETS;
@@ -120,11 +122,30 @@ export function StylePanel() {
           if (t.style.effect !== st.effect) continue;
           const all = (t.style.animate ??= {});
           if (!fn) delete all[k];
-          else fn((all[k] ??= structuredClone(init ?? st.animate?.[k] ?? { to: 0, period: 2, phase: 0, mode: 'swing' })));
+          else {
+            // A cycle replaces keys on the same setting.
+            if (!all[k]) updateKeys(t, 'style', k, () => null);
+            fn((all[k] ??= structuredClone(init ?? st.animate?.[k] ?? { to: 0, period: 2, phase: 0, mode: 'swing' })));
+          }
           if (!Object.keys(all).length) delete t.style.animate;
         }
       }
     }, fn ? `anim:${selection.join()}:${k}` : '');
+  /** Change a setting's keys on every selected layer with this material (see keys.ts). */
+  const setKeys = (k: string, fn: Parameters<SetKeysOf>[0]) =>
+    edit((p) => {
+      for (const n of selectedNodes()) {
+        const target = findNode(p.layers, n.id);
+        if (!target) continue;
+        const targets = isGroup(target) && !target.merge ? collect(target) : [target];
+        for (const t of targets) if (t.style.effect === st.effect) updateKeys(t, 'style', k, fn);
+      }
+    }, `keys:${selection.join()}:${k}`);
+  /** A setting as it is at the playhead: its keys' value, else its own. */
+  const shown = (k: string, base: number | string) => {
+    const keys = st.keys?.[k];
+    return keys?.length ? keyedValue(keys, playhead) : base;
+  };
   const matches = (p: Preset) => p.effect === st.effect && Object.entries(p.params).every(([k, v]) => st.params[k] === v);
   const visible = showAll || q ? presets : presets.slice(0, 12);
   return (
@@ -195,8 +216,8 @@ export function StylePanel() {
           .filter((p) => advanced || !p.advanced)
           .map((p) =>
             p.type === 'color' ? (
-              <Animatable key={p.key} p={p} st={st} setAnim={setAnim}>
-                <ColorField label={p.label} value={String(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+              <Animatable key={p.key} p={p} st={st} setAnim={setAnim} setKeys={setKeys}>
+                <ColorField label={p.label} value={String(shown(p.key, st.params[p.key] ?? p.default))} onChange={(v) => setParam(p.key, v)} />
               </Animatable>
             ) : p.options ? (
               <div className="field" key={p.key}>
@@ -206,8 +227,8 @@ export function StylePanel() {
             ) : p.min === 0 && p.max === 1 && p.step === 1 ? (
               <Toggle key={p.key} label={p.label} checked={Number(st.params[p.key] ?? p.default) > 0.5} onChange={(v) => setParam(p.key, v ? 1 : 0)} />
             ) : (
-              <Animatable key={p.key} p={p} st={st} setAnim={setAnim}>
-                <Slider label={p.label} min={p.min} max={p.max} step={p.step} reset={p.default} value={Number(st.params[p.key] ?? p.default)} onChange={(v) => setParam(p.key, v)} />
+              <Animatable key={p.key} p={p} st={st} setAnim={setAnim} setKeys={setKeys}>
+                <Slider label={p.label} min={p.min} max={p.max} step={p.step} reset={p.default} value={Number(shown(p.key, st.params[p.key] ?? p.default))} onChange={(v) => setParam(p.key, v)} />
               </Animatable>
             ),
           )}
@@ -221,16 +242,16 @@ export function StylePanel() {
 
 type SetAnim = (k: string, fn: ((a: ParamAnim) => void) | null, init?: ParamAnim) => void;
 
-/** A material setting with a keyframe button (see Keyframed). */
-function Animatable({ p, st, setAnim, children }: { p: ParamDef; st: Style; setAnim: SetAnim; children: React.ReactNode }) {
+/** A material setting with keys and a cycle (see Keyframed). */
+function Animatable({ p, st, setAnim, setKeys, children }: { p: ParamDef; st: Style; setAnim: SetAnim; setKeys: (k: string, fn: Parameters<SetKeysOf>[0]) => void; children: React.ReactNode }) {
   return (
-    <Keyframed label={p.label} anim={st.animate?.[p.key]} from={st.params[p.key] ?? p.default} color={p.type === 'color'} range={p.type === 'color' ? { min: 0, max: 1, step: 0.01 } : { min: p.min, max: p.max, step: p.step }} set={(fn, init) => setAnim(p.key, fn, init)}>
+    <Keyframed label={p.label} anim={st.animate?.[p.key]} from={st.params[p.key] ?? p.default} color={p.type === 'color'} range={p.type === 'color' ? { min: 0, max: 1, step: 0.01 } : { min: p.min, max: p.max, step: p.step }} set={(fn, init) => setAnim(p.key, fn, init)} keys={st.keys?.[p.key]} setKeys={(fn) => setKeys(p.key, fn)}>
       {children}
     </Keyframed>
   );
 }
 
-function collect(g: import('../state/model').Group): { style: Style }[] {
+function collect(g: import('../state/model').Group): Node[] {
   return g.children.flatMap((c) => (isGroup(c) && !c.merge ? collect(c) : [c]));
 }
 

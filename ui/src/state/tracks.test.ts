@@ -80,3 +80,19 @@ describe('snapTime', () => {
     expect(snapTime(0.7, 30, [0.5], 0.05)).toBeCloseTo(0.7);
   });
 });
+
+describe('key rows', () => {
+  it('lists a track per keyed property, and a keyed setting drops its cycle track', () => {
+    const a = square('A');
+    a.keys = { rotation: [{ t: 0, v: 0 }, { t: 1, v: 45 }] };
+    a.style.keys = { fill: [{ t: 0, v: '#ffffff' }, { t: 2, v: '#000000' }] };
+    a.style.animate = { fill: { to: '#00ff00', period: 2, phase: 0, mode: 'swing' } };
+    const rows = rowsOf(project([a]), []);
+    expect(rows[0].tracks.map((k) => [k.kind, 'label' in k ? k.label : ''])).toEqual([
+      ['keys', 'Rotation'],
+      ['keys', 'Fill'],
+    ]);
+    const fill = rows[0].tracks[1];
+    expect(fill.kind === 'keys' && [fill.scope, fill.color]).toEqual(['style', true]);
+  });
+});

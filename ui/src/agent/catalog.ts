@@ -107,6 +107,15 @@ const KEYFRAMES = (): string =>
     '  animate["sym:<field>"]       a library shape field',
     '  animate["morph:t"]           a font morph blend, or a morph layer',
     '  animate["line:start|end|offset"] how much of a pen line is drawn (draw-on: end 0 → 1)',
+    'keys: any number per property, each at its own time with its own value and curve (free keyframes)',
+    "  set them: Star.keys.rotation=[[0,0],[1,45],[2.5,30]] · Star.keys.x=[[0,-200],[1.5,200,\"back out\"]] · Star.keys.fill=[[0,\"#ffffff\"],[2,\"#ff3366\"]]",
+    '  each key: [t (s), value, curve into it?] or { t, v, ease }; null removes them',
+    '  curves: ' + [...EASES.map((e) => e.label), ...FEELS.map((f) => f.label)].map((x) => x.toLowerCase()).join(', ') + ' (default ease in out), 4 Bézier numbers, or a transition',
+    '  keys.x | y | rotation | scale | opacity   a layer\'s own values (a group\'s: offsets from rest); they ride on top of motion',
+    '  keys[<param>]                             a material setting (lands in style.keys), numbers or colours',
+    '  keys["mod:<uid>:<field>"], ["sym:<field>"], ["morph:t"], ["line:end"]…  geometry, as for animate',
+    '  before its first key a property holds that value, after its last it holds that one (a looping clock jumps back at the seam)',
+    '  a setting with keys ignores its cycle and its plain value; keys past the timeline\'s end never play (set lengthens it to fit)',
   ].join('\n');
 
 const LAYERS = (): string =>
@@ -114,7 +123,7 @@ const LAYERS = (): string =>
     'project: { version: 2, name, canvas: { width, height }, background, layers: [bottom … top], fonts: [], timeline? }',
     'layer: { id, name?, visible, op: add|subtract|intersect, x, y (px from the canvas centre, y down), rotation (°), scale, sx, sy,',
     '         modifiers: [], content, style: { effect, params, stroke?, opacity?, blend?: normal|multiply|screen, depth?, soften?, animate? },',
-    '         motion?, animate?, guide? (shown while designing, left out of exports), locked? }',
+    '         motion?, animate?, keys? (see `keyframes`), guide? (shown while designing, left out of exports), locked? }',
     'content:',
     "  { type: 'text', text, font, size (px), tracking, lineHeight, align: left|center|right, axes: {}, morph: null|{ font, axes, t }, ligatures }",
     "  { type: 'symbol', symbol: { kind, … }, size }   (see `shapes`)",
